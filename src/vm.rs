@@ -38,6 +38,16 @@ impl GuestMem {
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.add(addr), data.len()) }
     }
 
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn read(&self, addr: usize, buf: &mut [u8]) {
+        assert!(addr + buf.len() <= self.size, "lecture hors mémoire invitée");
+        // SAFETY: bornes vérifiées ; le vCPU est arrêté pendant les accès hôte.
+        unsafe { ptr::copy_nonoverlapping(self.ptr.add(addr), buf.as_mut_ptr(), buf.len()) }
+    }
+
     pub fn read_u8(&self, addr: usize) -> u8 {
         assert!(addr < self.size, "lecture hors mémoire invitée");
         // SAFETY: bornes vérifiées.

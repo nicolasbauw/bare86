@@ -2,6 +2,7 @@
 //! Étape 0 : exécuter un .COM nativement sous KVM, INT 21h minimal côté hôte.
 
 mod bench;
+mod interp;
 mod throttle;
 mod vm;
 
