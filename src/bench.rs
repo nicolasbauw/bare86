@@ -7,7 +7,7 @@ use kvm_ioctls::{IoEventAddress, VcpuExit};
 
 use crate::throttle::InstrCounter;
 use crate::interp::{Mmio, continue_in_host};
-use crate::vm::{Machine, VGA_WINDOW};
+use crate::vm::{GuestMem, Machine, VGA_WINDOW};
 use crate::{HOST_CALL_PORT, MEM_SIZE, ROM_SEG, install_ivt, load_com};
 
 const OUTER: u16 = 100;
@@ -225,5 +225,152 @@ pub fn run_throttle() -> Result<(), Box<dyn std::error::Error>> {
         println!("{label:>12} {guest:>14.1} {perf:>12.1} {err:>8} {n:>12}");
     }
     println!("\ninvité : compté par le programme lui-même (inc eax) ; perf : compteur matériel.");
+    Ok(())
+}
+
+const REMAP_COUNT: u16 = 10_000;
+
+/// Changement de plan par `out 3C5h` puis `op`, `REMAP_COUNT` fois.
+/// ```text
+///     mov ax, 0A000h ; mov es, ax ; xor di, di ; mov dx, 3C5h ; mov bx, N
+/// l1: inc al ; out dx, al ; <op> ; dec bx ; jnz l1 ; mov ax, 4C00h ; int 21h
+/// ```
+fn remap_program(op: &[u8]) -> Vec<u8> {
+    let k = op.len() as i8;
+    let mut p = vec![0xB8, 0x00, 0xA0, 0x8E, 0xC0, 0x31, 0xFF, 0xBA, 0xC5, 0x03, 0xBB];
+    p.extend(REMAP_COUNT.to_le_bytes());
+    p.extend([0xFE, 0xC0, 0xEE]);
+    p.extend(op);
+    p.extend([0x4B, 0x75, (-(k + 6)) as u8]);
+    p.extend([0xB8, 0x00, 0x4C, 0xCD, 0x21]);
+    p
+}
+
+/// Les 4 plans dans un memfd ; la fenêtre VGA est une vue de 64 Ko dessus,
+/// dont on change le plan visé par `mmap(MAP_FIXED)` sans toucher au slot KVM.
+struct PlaneFile {
+    fd: i32,
+    view: *mut u8,
+}
+
+impl PlaneFile {
+    fn new() -> std::io::Result<Self> {
+        let len = VGA_WINDOW.len();
+        // SAFETY: appels système vérifiés.
+        unsafe {
+            let fd = libc::memfd_create(c"vga-planes".as_ptr(), libc::MFD_CLOEXEC);
+            if fd < 0 || libc::ftruncate(fd, 4 * len as i64) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let view = libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, 0);
+            if view == libc::MAP_FAILED {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self { fd, view: view.cast() })
+        }
+    }
+
+    fn select(&self, plane: usize) -> std::io::Result<()> {
+        let len = VGA_WINDOW.len();
+        // SAFETY: remplace la vue existante, même adresse et même taille.
+        let p = unsafe {
+            libc::mmap(
+                self.view.cast(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED | libc::MAP_FIXED,
+                self.fd,
+                (plane * len) as i64,
+            )
+        };
+        if p == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn first_byte(&self, plane: usize) -> u8 {
+        let mut b = 0u8;
+        // SAFETY: lecture d'un octet dans le fichier.
+        unsafe { libc::pread(self.fd, (&raw mut b).cast(), 1, (plane * VGA_WINDOW.len()) as i64) };
+        b
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Remap {
+    None,
+    /// Suppression puis recréation du slot KVM.
+    Slot,
+    /// Slot fixe, vue hôte remappée (memfd).
+    HostView,
+}
+
+fn remap_case(op: &[u8], remap: Remap) -> Result<f64, Box<dyn std::error::Error>> {
+    let mut m = Machine::new(MEM_SIZE)?;
+    let planes: Vec<GuestMem> = (0..4).map(|_| GuestMem::new(VGA_WINDOW.len())).collect::<Result<_, _>>()?;
+    let file = PlaneFile::new()?;
+    if remap == Remap::HostView {
+        m.map_vga_window_raw(file.view as u64)?;
+    } else {
+        m.map_vga_window(Some(&planes[0]))?;
+    }
+    install_ivt(&m);
+    load_com(&m, &remap_program(op))?;
+    let start = Instant::now();
+    loop {
+        let (port, value) = match m.vcpu.run()? {
+            VcpuExit::IoOut(port, data) => (port, data[0]),
+            other => return Err(format!("sortie inattendue : {other:?}").into()),
+        };
+        if port == 0x3C5 && remap == Remap::Slot {
+            m.map_vga_window(Some(&planes[usize::from(value & 3)]))?;
+        } else if port == 0x3C5 && remap == Remap::HostView {
+            file.select(usize::from(value & 3))?;
+        } else if port == HOST_CALL_PORT && m.vcpu.get_sregs()?.cs.selector == ROM_SEG {
+            break;
+        }
+    }
+    let us = start.elapsed().as_secs_f64() * 1e6 / f64::from(REMAP_COUNT);
+    // Contrôle : chaque plan a bien reçu des écritures (sauf cas sans écriture).
+    let written = match remap {
+        Remap::None => true,
+        Remap::Slot => planes.iter().all(|p| p.read_u8(0) != 0),
+        Remap::HostView => (0..4).all(|i| file.first_byte(i) != 0),
+    };
+    if !op.is_empty() && !written {
+        return Err("un plan n'a reçu aucune écriture".into());
+    }
+    Ok(us)
+}
+
+pub fn run_remap() -> Result<(), Box<dyn std::error::Error>> {
+    // Remappages seuls, sans exécuter l'invité.
+    let m = Machine::new(MEM_SIZE)?;
+    let planes: Vec<GuestMem> = (0..4).map(|_| GuestMem::new(VGA_WINDOW.len())).collect::<Result<_, _>>()?;
+    let start = Instant::now();
+    for i in 0..usize::from(REMAP_COUNT) {
+        m.map_vga_window(Some(&planes[i & 3]))?;
+    }
+    let ioctl_us = start.elapsed().as_secs_f64() * 1e6 / f64::from(REMAP_COUNT);
+
+    const WRITE: &[u8] = &[0x26, 0x88, 0x05]; // mov es:[di], al
+    // mov cx, 16000 ; xor di, di ; rep stosb  (un quart d'écran mode X)
+    const FILL: &[u8] = &[0xB9, 0x80, 0x3E, 0x31, 0xFF, 0xF3, 0xAA];
+    println!("{REMAP_COUNT} changements de plan par cas\n");
+    println!("{:<46} {:>10}", "cas", "µs/changement");
+    println!("{:<46} {ioctl_us:>10.1}", "ioctl seules (supprimer + recréer le slot)");
+    let cases: [(&str, &[u8], Remap); 7] = [
+        ("out 3C5h seul, sans remappage", &[], Remap::None),
+        ("out 3C5h + 16 000 écritures, sans remappage", FILL, Remap::None),
+        ("slot : out 3C5h + remappage", &[], Remap::Slot),
+        ("slot : idem + 1 écriture", WRITE, Remap::Slot),
+        ("slot : idem + 16 000 écritures", FILL, Remap::Slot),
+        ("vue hôte : out 3C5h + remappage + 1 écriture", WRITE, Remap::HostView),
+        ("vue hôte : idem + 16 000 écritures", FILL, Remap::HostView),
+    ];
+    for (name, op, remap) in cases {
+        println!("{name:<46} {:>10.1}", remap_case(op, remap)?);
+    }
     Ok(())
 }

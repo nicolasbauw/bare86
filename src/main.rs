@@ -122,6 +122,7 @@ fn main() -> ExitCode {
     let bench = match std::env::args().nth(1).as_deref() {
         Some("--bench") => Some(bench::run as fn() -> _),
         Some("--throttle") => Some(bench::run_throttle as fn() -> _),
+        Some("--remap") => Some(bench::run_remap as fn() -> _),
         _ => None,
     };
     if let Some(bench) = bench {

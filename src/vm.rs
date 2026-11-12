@@ -14,7 +14,7 @@ pub struct GuestMem {
 }
 
 impl GuestMem {
-    fn new(size: usize) -> std::io::Result<Self> {
+    pub fn new(size: usize) -> std::io::Result<Self> {
         // SAFETY: mappage anonyme privé, vérifié ci-dessous.
         let ptr = unsafe {
             libc::mmap(
@@ -36,6 +36,10 @@ impl GuestMem {
         assert!(addr + data.len() <= self.size, "écriture hors mémoire invitée");
         // SAFETY: bornes vérifiées ; le vCPU est arrêté pendant les accès hôte.
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.add(addr), data.len()) }
+    }
+
+    pub fn host_addr(&self) -> u64 {
+        self.ptr as u64
     }
 
     pub fn size(&self) -> usize {
@@ -69,11 +73,15 @@ impl Drop for GuestMem {
 /// Fenêtre graphique VGA (A0000–AFFFF), émulée par sorties MMIO.
 pub const VGA_WINDOW: std::ops::Range<usize> = 0xA_0000..0xB_0000;
 
+/// Slot KVM réservé à la fenêtre VGA quand elle est mappée.
+const VGA_SLOT: u32 = 2;
+
 pub struct Machine {
     _kvm: Kvm,
     pub vm: VmFd,
     pub vcpu: VcpuFd,
     pub mem: GuestMem,
+    vga_mapped: std::cell::Cell<bool>,
 }
 
 impl Machine {
@@ -97,7 +105,48 @@ impl Machine {
             unsafe { vm.set_user_memory_region(region)? };
         }
         let vcpu = vm.create_vcpu(0)?;
-        Ok(Self { _kvm: kvm, vm, vcpu, mem })
+        Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into() })
+    }
+
+    /// Mappe `plane` (64 Ko) sur la fenêtre VGA, ou la démappe (`None`).
+    /// KVM interdit de changer l'adresse hôte d'un slot : suppression puis création.
+    pub fn map_vga_window(&self, plane: Option<&GuestMem>) -> Result<(), kvm_ioctls::Error> {
+        let mut region = kvm_userspace_memory_region {
+            slot: VGA_SLOT,
+            flags: 0,
+            guest_phys_addr: VGA_WINDOW.start as u64,
+            memory_size: 0,
+            userspace_addr: 0,
+        };
+        if self.vga_mapped.get() {
+            // SAFETY: taille 0 = suppression du slot.
+            unsafe { self.vm.set_user_memory_region(region)? };
+            self.vga_mapped.set(false);
+        }
+        if let Some(p) = plane {
+            assert!(p.size() >= VGA_WINDOW.len());
+            region.memory_size = VGA_WINDOW.len() as u64;
+            region.userspace_addr = p.host_addr();
+            // SAFETY: le plan doit rester vivant tant qu'il est mappé (à la charge de l'appelant).
+            unsafe { self.vm.set_user_memory_region(region)? };
+            self.vga_mapped.set(true);
+        }
+        Ok(())
+    }
+
+    /// Mappe 64 Ko de mémoire hôte à `host_addr` sur la fenêtre VGA.
+    pub fn map_vga_window_raw(&self, host_addr: u64) -> Result<(), kvm_ioctls::Error> {
+        let region = kvm_userspace_memory_region {
+            slot: VGA_SLOT,
+            flags: 0,
+            guest_phys_addr: VGA_WINDOW.start as u64,
+            memory_size: VGA_WINDOW.len() as u64,
+            userspace_addr: host_addr,
+        };
+        // SAFETY: la mémoire doit rester mappée tant que la VM vit (à la charge de l'appelant).
+        unsafe { self.vm.set_user_memory_region(region)? };
+        self.vga_mapped.set(true);
+        Ok(())
     }
 
     /// Place le vCPU en mode réel : tous les segments à `seg`, IP et SP donnés.
