@@ -56,9 +56,12 @@ impl Drop for GuestMem {
     }
 }
 
+/// Fenêtre graphique VGA (A0000–AFFFF), émulée par sorties MMIO.
+pub const VGA_WINDOW: std::ops::Range<usize> = 0xA_0000..0xB_0000;
+
 pub struct Machine {
     _kvm: Kvm,
-    _vm: VmFd,
+    pub vm: VmFd,
     pub vcpu: VcpuFd,
     pub mem: GuestMem,
 }
@@ -69,17 +72,22 @@ impl Machine {
         let kvm = Kvm::new().map_err(|e| format!("ouverture de /dev/kvm impossible : {e}"))?;
         let vm = kvm.create_vm()?;
         let mem = GuestMem::new(mem_size)?;
-        let region = kvm_userspace_memory_region {
-            slot: 0,
-            flags: 0,
-            guest_phys_addr: 0,
-            memory_size: mem_size as u64,
-            userspace_addr: mem.ptr as u64,
-        };
-        // SAFETY: la région reste mappée tant que `Machine` vit.
-        unsafe { vm.set_user_memory_region(region)? };
+        // Fenêtre graphique VGA laissée non mappée : chaque accès sort de la VM.
+        let ranges = [(0, VGA_WINDOW.start), (VGA_WINDOW.end, mem_size)];
+        for (slot, (start, end)) in ranges.into_iter().enumerate() {
+            let region = kvm_userspace_memory_region {
+                slot: slot as u32,
+                flags: 0,
+                guest_phys_addr: start as u64,
+                memory_size: (end - start) as u64,
+                // SAFETY: start < mem_size, dans notre mappage.
+                userspace_addr: unsafe { mem.ptr.add(start) } as u64,
+            };
+            // SAFETY: la région reste mappée tant que `Machine` vit.
+            unsafe { vm.set_user_memory_region(region)? };
+        }
         let vcpu = vm.create_vcpu(0)?;
-        Ok(Self { _kvm: kvm, _vm: vm, vcpu, mem })
+        Ok(Self { _kvm: kvm, vm, vcpu, mem })
     }
 
     /// Place le vCPU en mode réel : tous les segments à `seg`, IP et SP donnés.

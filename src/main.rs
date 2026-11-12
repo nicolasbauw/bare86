@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Étape 0 : exécuter un .COM nativement sous KVM, INT 21h minimal côté hôte.
 
+mod bench;
 mod vm;
 
 use std::io::Write;
@@ -10,11 +11,11 @@ use kvm_ioctls::VcpuExit;
 use vm::Machine;
 
 /// 1 Mo + HMA.
-const MEM_SIZE: usize = 0x11_0000;
+pub(crate) const MEM_SIZE: usize = 0x11_0000;
 /// Segment de la ROM des stubs d'interruption.
-const ROM_SEG: u16 = 0xF000;
+pub(crate) const ROM_SEG: u16 = 0xF000;
 /// Port d'appel hôte utilisé par les stubs.
-const HOST_CALL_PORT: u16 = 0xE0;
+pub(crate) const HOST_CALL_PORT: u16 = 0xE0;
 /// Segment du PSP du programme chargé.
 const PSP_SEG: u16 = 0x1000;
 
@@ -31,7 +32,7 @@ fn lin(seg: u64, off: u64) -> usize {
 
 /// IVT : le vecteur n pointe sur F000:n*16, où se trouve `out 0xE0, al ; iret`.
 /// L'hôte retrouve le vecteur à partir de l'IP du stub.
-fn install_ivt(m: &Machine) {
+pub(crate) fn install_ivt(m: &Machine) {
     for n in 0..256u16 {
         m.mem.write_u16(n as usize * 4, n * 16);
         m.mem.write_u16(n as usize * 4 + 2, ROM_SEG);
@@ -40,7 +41,7 @@ fn install_ivt(m: &Machine) {
 }
 
 /// PSP minimal : INT 20h en PSP:0, ligne de commande vide.
-fn load_com(m: &Machine, image: &[u8]) -> Result<(), String> {
+pub(crate) fn load_com(m: &Machine, image: &[u8]) -> Result<(), String> {
     if image.len() > 0xFF00 - 2 {
         return Err("fichier .COM trop gros".into());
     }
@@ -116,6 +117,15 @@ fn run(m: &mut Machine) -> Result<u8, Box<dyn std::error::Error>> {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--bench") {
+        return match bench::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("erreur : {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     let image = match std::env::args_os().nth(1) {
         Some(path) => match std::fs::read(&path) {
             Ok(d) => d,
