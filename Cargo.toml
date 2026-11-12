@@ -5,7 +5,7 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 
 [dependencies]
-iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder", "instr_info"] }
+iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder", "instr_info", "intel"] }
 kvm-bindings = "0.14.2"
 kvm-ioctls = "0.25.1"
 libc = "0.2.191"

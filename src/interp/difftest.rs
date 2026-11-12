@@ -14,13 +14,17 @@ use kvm_ioctls::VcpuExit;
 
 use super::alu::*;
 use super::{Cpu, Mmio, Seg, step_once};
-use crate::vm::{GuestMem, Machine};
-use crate::{HOST_CALL_PORT, MEM_SIZE, ROM_SEG};
+use crate::kvm::KvmVm;
+use crate::machine::{HOST_CALL_PORT, ROM_SEG};
+use crate::mem::GuestMem;
+
+/// 1 Mo + HMA.
+const MEM_SIZE: usize = 0x11_0000;
 
 struct NoMmio;
 
 impl Mmio for NoMmio {
-    fn claims(&self, _: u32) -> bool {
+    fn claims(&self, _: u32, _: bool) -> bool {
         false
     }
     fn read8(&mut self, _: u32) -> u8 {
@@ -140,7 +144,7 @@ fn undefined_flags(ins: &Instruction, before: &Cpu) -> u32 {
 }
 
 struct Harness {
-    m: Machine,
+    m: KvmVm,
     shadow: GuestMem,
     image: Vec<u8>,
     base_sregs: kvm_bindings::kvm_sregs,
@@ -148,7 +152,7 @@ struct Harness {
 
 impl Harness {
     fn new(rng: &mut Rng) -> Self {
-        let m = Machine::new_flat(MEM_SIZE).expect("VM");
+        let m = KvmVm::new_flat(MEM_SIZE).expect("VM");
         let shadow = GuestMem::new(MEM_SIZE).expect("mémoire");
         let mut image: Vec<u8> = (0..MEM_SIZE).map(|_| rng.next() as u8).collect();
         // IVT vers les stubs `out 0xE0, al ; iret` en F000:n*16.
@@ -235,6 +239,7 @@ fn random_cpu(rng: &mut Rng) -> Cpu {
         seg,
         stack32: false,
         idt_base: 0,
+        cr0: 0,
         seg_dirty: false,
     }
 }
@@ -381,6 +386,7 @@ fn int_pushes_and_vectors() {
         seg: [Seg { selector: 0x1000, base: 0x10000, limit: 0xFFFF }; 6],
         stack32: false,
         idt_base: 0,
+        cr0: 0,
         seg_dirty: false,
     };
     mem.write(0x10010, &[0xCD, 0x21]);

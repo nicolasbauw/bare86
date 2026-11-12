@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Assemble le code invité (ROM BIOS, programmes de test) avec GNU as.
+//! Chaque `asm/**/*.S` donne `$OUT_DIR/<nom>.bin` (binaire plat, section .text).
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn run(cmd: &mut Command) {
+    let status = cmd.status().unwrap_or_else(|e| panic!("{cmd:?} : {e}"));
+    assert!(status.success(), "{cmd:?} a échoué");
+}
+
+/// Adresse de chargement : 0 pour la ROM, 100h pour les .COM.
+fn assemble(src: &Path, out: &Path, origin: u32) {
+    let stem = src.file_stem().unwrap().to_str().unwrap();
+    let obj = out.join(format!("{stem}.o"));
+    let elf = out.join(format!("{stem}.elf"));
+    run(Command::new("as").args(["--32", "-o"]).arg(&obj).arg(src));
+    run(Command::new("ld")
+        .args(["-m", "elf_i386", "-e", "0", &format!("-Ttext={origin:#x}"), "-o"])
+        .arg(&elf)
+        .arg(&obj));
+    run(Command::new("objcopy").args(["-O", "binary", "-j", ".text"]).arg(&elf).arg(out.join(format!("{stem}.bin"))));
+}
+
+fn main() {
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    println!("cargo:rerun-if-changed=asm");
+    assemble(Path::new("asm/bios.S"), &out, 0);
+    for entry in std::fs::read_dir("asm/tests").unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "S") {
+            println!("cargo:rerun-if-changed={}", path.display());
+            assemble(&path, &out, 0x100);
+        }
+    }
+}

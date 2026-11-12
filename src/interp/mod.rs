@@ -16,13 +16,15 @@ mod exec;
 use iced_x86::{Decoder, DecoderOptions, Instruction};
 use kvm_bindings::{kvm_regs, kvm_segment, kvm_sregs};
 
-use crate::vm::GuestMem;
+use crate::backend::Backend;
+use crate::mem::GuestMem;
 use exec::{Bail, Exec};
 
 /// Accès à la mémoire non mappée (fenêtre VGA) depuis l'interpréteur.
 pub trait Mmio {
-    /// Vrai si l'adresse linéaire est gérée ici plutôt qu'en RAM.
-    fn claims(&self, addr: u32) -> bool;
+    /// Vrai si cet accès à l'adresse linéaire est géré ici plutôt qu'en RAM
+    /// (fenêtre VGA ; écritures dans la ROM, ignorées).
+    fn claims(&self, addr: u32, write: bool) -> bool;
     fn read8(&mut self, addr: u32) -> u8;
     fn write8(&mut self, addr: u32, v: u8);
 }
@@ -46,7 +48,8 @@ pub struct Cpu {
     /// SS.B : pile 32 bits.
     pub stack32: bool,
     pub idt_base: u32,
-    seg_dirty: bool,
+    pub cr0: u32,
+    pub(crate) seg_dirty: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -77,8 +80,21 @@ impl Cpu {
             seg: [seg(&s.es), seg(&s.cs), seg(&s.ss), seg(&s.ds), seg(&s.fs), seg(&s.gs)],
             stack32: s.ss.db != 0,
             idt_base: s.idt.base as u32,
+            cr0: s.cr0 as u32,
             seg_dirty: false,
         }
+    }
+
+    /// Mode réel, tous les segments à `seg`, IF levé.
+    pub fn real_mode(seg: u16, ip: u16, sp: u16) -> Self {
+        let s = Seg { selector: seg, base: u32::from(seg) << 4, limit: 0xFFFF };
+        let mut gpr = [0; 8];
+        gpr[4] = sp.into();
+        Self { gpr, ip: ip.into(), flags: 0x202, seg: [s; 6], stack32: false, idt_base: 0, cr0: 0, seg_dirty: true }
+    }
+
+    pub fn linear(&self, seg: usize, off: u32) -> u32 {
+        self.seg[seg].base.wrapping_add(off)
     }
 
     /// Recopie l'état ; renvoie vrai si les registres de segment ont changé.
@@ -91,6 +107,7 @@ impl Cpu {
             for (dst, src) in [&mut s.es, &mut s.cs, &mut s.ss, &mut s.ds, &mut s.fs, &mut s.gs].into_iter().zip(self.seg) {
                 dst.selector = src.selector;
                 dst.base = src.base.into();
+                dst.limit = src.limit;
             }
         }
         self.seg_dirty
@@ -165,34 +182,21 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
     Burst { instructions, mmio_accesses, reason }
 }
 
-/// Après une sortie MMIO déjà servie : termine l'instruction en cours dans
-/// KVM sans relancer l'invité (`immediate_exit`), puis exécute une rafale
-/// côté hôte et recopie l'état dans le vCPU.
-pub fn continue_in_host<M: Mmio>(
-    m: &mut crate::vm::Machine,
+/// Après une sortie MMIO déjà servie : termine l'instruction en cours sans
+/// relancer l'invité, puis exécute une rafale côté hôte et recopie l'état.
+pub fn continue_in_host<B: Backend, M: Mmio>(
+    vm: &mut B,
     mmio: &mut M,
     idle_limit: u64,
     budget: u64,
-) -> Result<Burst, kvm_ioctls::Error> {
-    m.vcpu.set_kvm_immediate_exit(1);
-    let completed = m.vcpu.run().map(|_| ());
-    m.vcpu.set_kvm_immediate_exit(0);
-    match completed {
-        Err(e) if e.errno() == libc::EINTR => {}
-        Err(e) => return Err(e),
-        Ok(()) => {}
-    }
-    let mut regs = m.vcpu.get_regs()?;
-    let mut sregs = m.vcpu.get_sregs()?;
+) -> crate::backend::Result<Burst> {
+    vm.complete_pending()?;
+    let mut cpu = vm.state()?;
     // Mode protégé : pas encore géré par l'interpréteur.
-    if sregs.cr0 & 1 != 0 {
+    if cpu.cr0 & 1 != 0 {
         return Ok(Burst { instructions: 0, mmio_accesses: 0, reason: StopReason::Unsupported });
     }
-    let mut cpu = Cpu::from_kvm(&regs, &sregs);
-    let burst = run_burst(&mut cpu, &m.mem, mmio, idle_limit, budget);
-    if cpu.to_kvm(&mut regs, &mut sregs) {
-        m.vcpu.set_sregs(&sregs)?;
-    }
-    m.vcpu.set_regs(&regs)?;
+    let burst = run_burst(&mut cpu, vm.mem(), mmio, idle_limit, budget);
+    vm.set_state(&cpu)?;
     Ok(burst)
 }

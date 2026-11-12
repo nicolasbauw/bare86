@@ -7,8 +7,22 @@ use kvm_ioctls::{IoEventAddress, VcpuExit};
 
 use crate::throttle::InstrCounter;
 use crate::interp::{Mmio, continue_in_host};
-use crate::vm::{GuestMem, Machine, VGA_WINDOW};
-use crate::{HOST_CALL_PORT, MEM_SIZE, ROM_SEG, install_ivt, load_com};
+use crate::backend::Backend;
+use crate::kvm::{KvmVm as Machine, VGA_WINDOW};
+use crate::machine::{HOST_CALL_PORT, ROM_SEG};
+use crate::mem::GuestMem;
+
+/// 1 Mo + HMA.
+const MEM_SIZE: usize = 0x11_0000;
+
+fn install_ivt(m: &Machine) {
+    crate::machine::install_bios(&m.mem);
+}
+
+fn load_com(m: &mut Machine, image: &[u8]) -> crate::backend::Result<()> {
+    let cpu = crate::dos::load_com(&m.mem, image)?;
+    m.set_state(&cpu)
+}
 
 const OUTER: u16 = 100;
 const INNER: u16 = 10_000;
@@ -57,7 +71,7 @@ enum Mode {
 struct FakeVga(Vec<u8>);
 
 impl Mmio for FakeVga {
-    fn claims(&self, addr: u32) -> bool {
+    fn claims(&self, addr: u32, _write: bool) -> bool {
         VGA_WINDOW.contains(&(addr as usize))
     }
     fn read8(&mut self, addr: u32) -> u8 {
@@ -80,7 +94,7 @@ fn run_case(op: &[u8], mode: Mode) -> Result<(Duration, Stats), Box<dyn std::err
         m.vcpu.map_coalesced_mmio_ring()?;
     }
     install_ivt(&m);
-    load_com(&m, &loop_program(op))?;
+    load_com(&mut m, &loop_program(op))?;
     let mut vga = FakeVga(vec![0; VGA_WINDOW.len()]);
     let mut st = Stats::default();
     let start = Instant::now();
@@ -179,7 +193,7 @@ const SPIN_COM: &[u8] = &[0x66, 0x31, 0xC0, 0x66, 0x40, 0xEB, 0xFC];
 fn throttle_case(target: Option<f64>) -> Result<(f64, f64, u64), Box<dyn std::error::Error>> {
     let mut m = Machine::new(MEM_SIZE)?;
     install_ivt(&m);
-    load_com(&m, SPIN_COM)?;
+    load_com(&mut m, SPIN_COM)?;
     let period = match target {
         Some(mips) => (mips * 1e6 * SLICE.as_secs_f64()) as u64,
         None => 10_000_000,
@@ -316,7 +330,7 @@ fn remap_case(op: &[u8], remap: Remap) -> Result<f64, Box<dyn std::error::Error>
         m.map_vga_window(Some(&planes[0]))?;
     }
     install_ivt(&m);
-    load_com(&m, &remap_program(op))?;
+    load_com(&mut m, &remap_program(op))?;
     let start = Instant::now();
     loop {
         let (port, value) = match m.vcpu.run()? {

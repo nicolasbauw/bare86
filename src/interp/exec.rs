@@ -9,7 +9,7 @@ use iced_x86::{Code, ConditionCode, Instruction, Mnemonic as Mn, OpKind, Registe
 
 use super::alu::*;
 use super::{Cpu, Mmio};
-use crate::vm::GuestMem;
+use crate::mem::GuestMem;
 
 /// L'interpréteur renonce : l'instruction sera exécutée par la VM.
 #[derive(Debug)]
@@ -173,7 +173,7 @@ impl<B: Mmio> Exec<'_, B> {
     // --- Mémoire -------------------------------------------------------
 
     fn read8(&mut self, addr: u32) -> u8 {
-        if self.mmio.claims(addr) {
+        if self.mmio.claims(addr, false) {
             self.mmio_hits += 1;
             self.mmio.read8(addr)
         } else if (addr as usize) < self.mem.size() {
@@ -184,7 +184,7 @@ impl<B: Mmio> Exec<'_, B> {
     }
 
     fn write8(&mut self, addr: u32, v: u8) {
-        if self.mmio.claims(addr) {
+        if self.mmio.claims(addr, true) {
             self.mmio_hits += 1;
             self.mmio.write8(addr, v);
         } else if (addr as usize) < self.mem.size() {

@@ -99,3 +99,40 @@ impl Drop for InstrCounter {
         unsafe { libc::close(self.fd) };
     }
 }
+
+/// Bridage d'une machine : interruption toutes les `SLICE` d'exécution
+/// prévue, puis attente jusqu'à l'échéance correspondant au débit visé.
+pub struct Throttle {
+    counter: InstrCounter,
+    rate: f64,
+    start: std::time::Instant,
+    /// Instructions exécutées hors VM (interpréteur), à décompter aussi.
+    credited: u64,
+}
+
+/// Tranche de bridage.
+const SLICE: std::time::Duration = std::time::Duration::from_millis(1);
+
+impl Throttle {
+    /// À créer dans le thread qui exécute la VM (le signal lui est destiné).
+    pub fn new(mips: f64) -> io::Result<Self> {
+        let rate = mips * 1e6;
+        let period = ((rate * SLICE.as_secs_f64()) as u64).max(1000);
+        Ok(Self { counter: InstrCounter::new(period)?, rate, start: std::time::Instant::now(), credited: 0 })
+    }
+
+    pub fn credit(&mut self, instructions: u64) {
+        self.credited += instructions;
+    }
+
+    /// Appelé quand le compteur a interrompu la VM.
+    pub fn pace(&mut self) -> io::Result<()> {
+        let executed = self.counter.read()? + self.credited;
+        let due = std::time::Duration::from_secs_f64(executed as f64 / self.rate);
+        let now = self.start.elapsed();
+        if due > now {
+            std::thread::sleep(due - now);
+        }
+        self.counter.arm()
+    }
+}
