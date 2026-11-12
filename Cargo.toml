@@ -2,5 +2,9 @@
 name = "dosbox"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 [dependencies]
+kvm-bindings = "0.14.2"
+kvm-ioctls = "0.25.1"
+libc = "0.2.191"
