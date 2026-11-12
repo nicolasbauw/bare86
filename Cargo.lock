@@ -21,6 +21,7 @@ dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
+ "perf-event-open-sys",
 ]
 
 [[package]]
@@ -49,6 +50,15 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "perf-event-open-sys"
+version = "7.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "682e26a7efeaf98dc66fa2417b8bf1c56981baf1e7b446010dcb4e34ea07ab44"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "vmm-sys-util"

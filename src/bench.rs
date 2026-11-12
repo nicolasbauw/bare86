@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use kvm_ioctls::{IoEventAddress, VcpuExit};
 
+use crate::throttle::InstrCounter;
 use crate::vm::Machine;
 use crate::{HOST_CALL_PORT, MEM_SIZE, ROM_SEG, install_ivt, load_com};
 
@@ -110,5 +111,67 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!("\n% CPU : part d'un cœur pour 20 000 accès × 70 images/s (critère étape 0).");
+    Ok(())
+}
+
+/// Débits visés en MIPS ; `None` = sans bridage.
+const TARGETS: [Option<f64>; 6] = [Some(1.0), Some(5.0), Some(25.0), Some(100.0), Some(500.0), None];
+/// Durée de chaque cas.
+const THROTTLE_RUN: Duration = Duration::from_millis(500);
+/// Tranche de bridage.
+const SLICE: Duration = Duration::from_millis(1);
+
+/// Boucle infinie : `xor eax, eax ; l: inc eax ; jmp l` (2 instructions par tour).
+const SPIN_COM: &[u8] = &[0x66, 0x31, 0xC0, 0x66, 0x40, 0xEB, 0xFC];
+
+fn throttle_case(target: Option<f64>) -> Result<(f64, f64, u64), Box<dyn std::error::Error>> {
+    let mut m = Machine::new(MEM_SIZE)?;
+    install_ivt(&m);
+    load_com(&m, SPIN_COM)?;
+    let period = match target {
+        Some(mips) => (mips * 1e6 * SLICE.as_secs_f64()) as u64,
+        None => 10_000_000,
+    };
+    let counter = InstrCounter::new(period)?;
+    let start = Instant::now();
+    let mut interrupts = 0u64;
+    loop {
+        match m.vcpu.run() {
+            Err(e) if e.errno() == libc::EINTR => {}
+            Ok(exit) => return Err(format!("sortie inattendue : {exit:?}").into()),
+            Err(e) => return Err(e.into()),
+        }
+        interrupts += 1;
+        let now = start.elapsed();
+        if now >= THROTTLE_RUN {
+            break;
+        }
+        if let Some(mips) = target {
+            let executed = counter.read()? as f64;
+            let due = Duration::from_secs_f64(executed / (mips * 1e6));
+            if due > now {
+                std::thread::sleep(due - now);
+            }
+        }
+        counter.arm()?;
+    }
+    let secs = start.elapsed().as_secs_f64();
+    let guest = 2.0 * (m.vcpu.get_regs()?.rax as u32) as f64;
+    let perf = counter.read()? as f64;
+    Ok((guest / secs / 1e6, perf / secs / 1e6, interrupts))
+}
+
+pub fn run_throttle() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Tranches de {} ms, {} ms par cas\n", SLICE.as_millis(), THROTTLE_RUN.as_millis());
+    println!("{:>12} {:>14} {:>12} {:>8} {:>12}", "visé MIPS", "invité MIPS", "perf MIPS", "écart", "interruptions");
+    for target in TARGETS {
+        let (guest, perf, n) = throttle_case(target)?;
+        let (label, err) = match target {
+            Some(t) => (format!("{t}"), format!("{:+.1}%", (guest / t - 1.0) * 100.0)),
+            None => ("libre".into(), "-".into()),
+        };
+        println!("{label:>12} {guest:>14.1} {perf:>12.1} {err:>8} {n:>12}");
+    }
+    println!("\ninvité : compté par le programme lui-même (inc eax) ; perf : compteur matériel.");
     Ok(())
 }

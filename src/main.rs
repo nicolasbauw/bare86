@@ -2,6 +2,7 @@
 //! Étape 0 : exécuter un .COM nativement sous KVM, INT 21h minimal côté hôte.
 
 mod bench;
+mod throttle;
 mod vm;
 
 use std::io::Write;
@@ -117,8 +118,13 @@ fn run(m: &mut Machine) -> Result<u8, Box<dyn std::error::Error>> {
 }
 
 fn main() -> ExitCode {
-    if std::env::args().nth(1).as_deref() == Some("--bench") {
-        return match bench::run() {
+    let bench = match std::env::args().nth(1).as_deref() {
+        Some("--bench") => Some(bench::run as fn() -> _),
+        Some("--throttle") => Some(bench::run_throttle as fn() -> _),
+        _ => None,
+    };
+    if let Some(bench) = bench {
+        return match bench() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("erreur : {e}");
