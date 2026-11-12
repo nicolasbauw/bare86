@@ -309,10 +309,23 @@ DIFFTEST_CASES=100000 DIFFTEST_SEED=1 cargo test --release interpreter_matches_c
 
 Comportements constatés sur ce processeur : ENTER 32 bits avec pile 16 bits copie l'ESP entier dans EBP ; LOOPE/LOOPNE préfixés F2/F3 ignorent la condition documentée (laissés à la VM).
 
+### Étape 1 : terminée le 2026-11-12
+
+| Élément | Fichier | État |
+| --- | --- | --- |
+| Abstraction du moteur de virtualisation (`Backend` : run, état CPU, pas à pas) | `src/backend.rs`, `src/kvm.rs` | KVM ; WHPX à l'étape 10 |
+| Carte mémoire : 640 Ko, fenêtre VGA non mappée, texte, UMB, ROM BIOS en lecture seule, mémoire étendue (16 Mo par défaut, A20 active) | `src/machine.rs` | fait |
+| Boucle vCPU : appels hôte, bus d'E/S, MMIO + interpréteur, bridage (`--mips`) | `src/machine.rs`, `src/io.rs` | fait |
+| ROM BIOS assemblée par GNU `as` (`build.rs`) | `asm/bios.S` | stubs F000:n×16, date, modèle AT |
+| Journal des interruptions (`--trace-int`), des ports inconnus (`--trace-io`) | `src/machine.rs` | fait |
+| Débogueur (`--debug` : registres, mémoire, désassemblage, pas à pas) | `src/debug.rs` | fait |
+| Traits `Display`, `AudioSink`, `InputSource`, `TextSink` + backend headless | `src/host.rs` | fait ; **backend SDL3 reporté à l'étape 5** (rien à afficher avant) |
+| Tests automatisés sur programmes en `as` (`asm/tests/*.S`) | `src/tests.rs` | 9 tests + interpréteur |
+
 ### Prochaines étapes
 
 1. Interpréteur, mode protégé 32 bits (Doom dessine en mode planaire sous DOS/4GW), même test différentiel.
-2. Étape 1 (cœur VMM) : assembleur GNU `as` (`.code16`, `.intel_syntax noprefix`, `ld --oformat binary`) appelé par `build.rs` pour la ROM et les tests ; NASM non requis.
+2. Pour Doom sous DOS/4GW : étapes 2 (BIOS), 3 (DOS : MZ, fichiers), 4 (PIC, PIT, clavier), 5 (VGA + SDL3), 6 (XMS, A20, DPMI si nécessaire).
 
 ## Questions ouvertes
 
