@@ -322,10 +322,22 @@ Comportements constatés sur ce processeur : ENTER 32 bits avec pile 16 bits cop
 | Traits `Display`, `AudioSink`, `InputSource`, `TextSink` + backend headless | `src/host.rs` | fait ; **backend SDL3 reporté à l'étape 5** (rien à afficher avant) |
 | Tests automatisés sur programmes en `as` (`asm/tests/*.S`) | `src/tests.rs` | 9 tests + interpréteur |
 
-### Prochaines étapes
+### Interpréteur en mode protégé : terminé le 2026-11-13
 
-1. Interpréteur, mode protégé 32 bits (Doom dessine en mode planaire sous DOS/4GW), même test différentiel.
-2. Pour Doom sous DOS/4GW : étapes 2 (BIOS), 3 (DOS : MZ, fichiers), 4 (PIC, PIT, clavier), 5 (VGA + SDL3), 6 (XMS, A20, DPMI si nécessaire).
+- Code 16 et 32 bits (CS.D), piles 16 et 32 bits (SS.B), adressage selon CS.D inversé par 67h.
+- Contrôles du descripteur en cache à chaque accès : présence, type (code lisible, données en écriture), limite. Segments expand-down laissés au processeur.
+- Laissés au processeur : chargements de registres de segment, transferts lointains, `int`/`iret`/`retf`, CLI/STI si CPL > IOPL, POPF hors ring 0, pagination (CR0.PG), mode V86.
+- Test différentiel étendu au mode protégé (GDT, IDT et gestionnaires en mémoire, segments aléatoires dont lecture seule, expand-down, inutilisables ; CPL 0 et 3) : 10 graines × 100 000 cas, moitié en mode protégé, aucune divergence.
+- Test de bout en bout `asm/tests/pmode.S` : passage en mode protégé 32 bits, `rep stosb` de 1 000 octets en A0000h, retour en mode réel ; une sortie MMIO, le reste interprété.
+- Comportements constatés : ENTER fait #SS si le nouveau sommet de pile sort de la limite ; ROL/SHLD… mémoire avec compte nul contrôlent quand même l'écriture. Banc : après une triple faute, remettre le vCPU en `KVM_MP_STATE_RUNNABLE`, sinon `KVM_RUN` attend indéfiniment.
+
+### Prochaines étapes (vers Doom sous DOS/4GW)
+
+1. Étape 2 : BIOS en HLE (BDA, INT 10h texte, 11h, 12h, 15h dont 88h/E801h, 16h, 1Ah, tick INT 08h, 13h minimal).
+2. Étape 3 : DOS en HLE (PSP, MCB, chargeur MZ, fichiers sur répertoire hôte).
+3. Étape 4 : PIC, PIT, 8042, injection d'IRQ (et HLT).
+4. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
+5. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
 
 ## Questions ouvertes
 
