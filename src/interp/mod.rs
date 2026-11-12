@@ -29,11 +29,42 @@ pub trait Mmio {
     fn write8(&mut self, addr: u32, v: u8);
 }
 
+/// Registre de segment avec son descripteur en cache (comme le processeur).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Seg {
     pub selector: u16,
     pub base: u32,
+    /// Limite en octets (granularité déjà appliquée).
     pub limit: u32,
+    /// Type du descripteur (4 bits) : code = bit 3 ; données : E = bit 2, W = bit 1 ;
+    /// code : R = bit 1.
+    pub typ: u8,
+    /// Descripteur de code ou de données (S = 1).
+    pub s: bool,
+    pub dpl: u8,
+    pub present: bool,
+    /// D/B : code ou pile 32 bits.
+    pub db: bool,
+    pub g: bool,
+    pub unusable: bool,
+}
+
+impl Seg {
+    /// Segment de données lecture-écriture du mode réel.
+    pub fn real(selector: u16) -> Self {
+        Self {
+            selector,
+            base: u32::from(selector) << 4,
+            limit: 0xFFFF,
+            typ: 3,
+            s: true,
+            dpl: 0,
+            present: true,
+            db: false,
+            g: false,
+            unusable: false,
+        }
+    }
 }
 
 /// État du CPU invité pendant une rafale.
@@ -72,7 +103,18 @@ pub struct Burst {
 
 impl Cpu {
     pub fn from_kvm(r: &kvm_regs, s: &kvm_sregs) -> Self {
-        let seg = |x: &kvm_segment| Seg { selector: x.selector, base: x.base as u32, limit: x.limit };
+        let seg = |x: &kvm_segment| Seg {
+            selector: x.selector,
+            base: x.base as u32,
+            limit: x.limit,
+            typ: x.type_,
+            s: x.s != 0,
+            dpl: x.dpl,
+            present: x.present != 0,
+            db: x.db != 0,
+            g: x.g != 0,
+            unusable: x.unusable != 0,
+        };
         Self {
             gpr: [r.rax, r.rcx, r.rdx, r.rbx, r.rsp, r.rbp, r.rsi, r.rdi].map(|v| v as u32),
             ip: r.rip as u32,
@@ -87,10 +129,25 @@ impl Cpu {
 
     /// Mode réel, tous les segments à `seg`, IF levé.
     pub fn real_mode(seg: u16, ip: u16, sp: u16) -> Self {
-        let s = Seg { selector: seg, base: u32::from(seg) << 4, limit: 0xFFFF };
         let mut gpr = [0; 8];
         gpr[4] = sp.into();
+        let s = Seg::real(seg);
         Self { gpr, ip: ip.into(), flags: 0x202, seg: [s; 6], stack32: false, idt_base: 0, cr0: 0, seg_dirty: true }
+    }
+
+    /// Mode protégé (CR0.PE).
+    pub fn protected(&self) -> bool {
+        self.cr0 & 1 != 0
+    }
+
+    /// Code 32 bits (CS.D en mode protégé).
+    pub fn code32(&self) -> bool {
+        self.protected() && self.seg[1].db
+    }
+
+    /// Niveau de privilège courant (DPL de SS, comme le fait SVM).
+    pub fn cpl(&self) -> u8 {
+        if self.protected() { self.seg[2].dpl } else { 0 }
     }
 
     pub fn linear(&self, seg: usize, off: u32) -> u32 {
@@ -114,22 +171,32 @@ impl Cpu {
     }
 }
 
-/// Instruction décodée à CS:IP, avec l'indicateur d'adressage 32 bits (67h).
+/// Instruction décodée à CS:IP, avec l'indicateur d'adressage 32 bits
+/// (taille par défaut du segment de code, inversée par 67h).
 fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
     let mut bytes = [0u8; 15];
-    let ip = cpu.ip & 0xFFFF;
+    let code32 = cpu.code32();
+    let ip = if code32 { cpu.ip } else { cpu.ip & 0xFFFF };
     let at = cpu.seg[1].base.wrapping_add(ip) as usize;
     let n = bytes.len().min(mem.size().saturating_sub(at));
     mem.read(at, &mut bytes[..n]);
-    let ins = Decoder::with_ip(16, &bytes[..n], u64::from(ip), DecoderOptions::NONE).decode();
+    let bitness = if code32 { 32 } else { 16 };
+    let ins = Decoder::with_ip(bitness, &bytes[..n], u64::from(ip), DecoderOptions::NONE).decode();
     if ins.is_invalid() {
         return None;
     }
-    let addr32 = bytes[..ins.len()]
+    let prefix67 = bytes[..ins.len()]
         .iter()
         .take_while(|b| matches!(b, 0x26 | 0x2E | 0x36 | 0x3E | 0x64 | 0x65 | 0x66 | 0x67 | 0xF0 | 0xF2 | 0xF3))
         .any(|&b| b == 0x67);
-    Some((ins, addr32))
+    Some((ins, code32 != prefix67))
+}
+
+/// États que l'interpréteur laisse entièrement au processeur.
+fn unsupported_mode(cpu: &Cpu) -> bool {
+    const VM: u32 = 1 << 17;
+    const PG: u32 = 1 << 31;
+    cpu.flags & (alu::TF | VM) != 0 || cpu.cr0 & PG != 0
 }
 
 /// Résultat d'un pas isolé (tests différentiels).
@@ -143,6 +210,9 @@ pub(crate) struct Stepped {
 /// du processeur). `None` : l'interpréteur renonce, état inchangé.
 #[cfg(test)]
 pub(crate) fn step_once<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M) -> Option<Stepped> {
+    if unsupported_mode(cpu) {
+        return None;
+    }
     let (ins, addr32) = fetch(cpu, mem)?;
     let mut ex = Exec { cpu, mem, mmio, mmio_hits: 0, rep_budget: 1, flags_push: None, addr32 };
     ex.step(&ins).ok()?;
@@ -163,8 +233,8 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         if idle >= idle_limit {
             break StopReason::Idle;
         }
-        // Pas à pas demandé par l'invité : laisser le processeur s'en charger.
-        if cpu.flags & alu::TF != 0 {
+        // Pas à pas, V86, pagination : laissés au processeur.
+        if unsupported_mode(cpu) {
             break StopReason::Unsupported;
         }
         let Some((ins, addr32)) = fetch(cpu, mem) else { break StopReason::Unsupported };
@@ -192,10 +262,6 @@ pub fn continue_in_host<B: Backend, M: Mmio>(
 ) -> crate::backend::Result<Burst> {
     vm.complete_pending()?;
     let mut cpu = vm.state()?;
-    // Mode protégé : pas encore géré par l'interpréteur.
-    if cpu.cr0 & 1 != 0 {
-        return Ok(Burst { instructions: 0, mmio_accesses: 0, reason: StopReason::Unsupported });
-    }
     let burst = run_burst(&mut cpu, vm.mem(), mmio, idle_limit, budget);
     vm.set_state(&cpu)?;
     Ok(burst)

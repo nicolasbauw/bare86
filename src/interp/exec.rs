@@ -202,9 +202,25 @@ impl<B: Mmio> Exec<'_, B> {
         }
     }
 
-    /// Adresse linéaire après contrôle de la limite du segment.
-    fn lin(&self, seg: R, off: u32, size: u32) -> X<u32> {
+    /// Adresse linéaire après contrôle du segment : limite, et en mode
+    /// protégé, présence et droits d'accès du descripteur en cache.
+    fn lin(&self, seg: R, off: u32, size: u32, write: bool) -> X<u32> {
         let s = self.cpu.seg[seg_idx(seg)];
+        if self.cpu.protected() {
+            let code = s.typ & 8 != 0;
+            let ok = s.present
+                && !s.unusable
+                && s.s
+                && if code {
+                    !write && s.typ & 2 != 0
+                } else {
+                    // Segments expand-down : laissés au processeur.
+                    s.typ & 4 == 0 && (!write || s.typ & 2 != 0)
+                };
+            if !ok {
+                return Err(Bail);
+            }
+        }
         if u64::from(off) + u64::from(size) - 1 > u64::from(s.limit) {
             return Err(Bail);
         }
@@ -212,12 +228,12 @@ impl<B: Mmio> Exec<'_, B> {
     }
 
     fn rd(&mut self, seg: R, off: u32, size: u32) -> X<u32> {
-        let a = self.lin(seg, off, size)?;
+        let a = self.lin(seg, off, size, false)?;
         Ok(self.read_lin(a, size))
     }
 
     fn wr(&mut self, seg: R, off: u32, size: u32, v: u32) -> X {
-        let a = self.lin(seg, off, size)?;
+        let a = self.lin(seg, off, size, true)?;
         self.write_lin(a, size, v);
         Ok(())
     }
@@ -269,7 +285,7 @@ impl<B: Mmio> Exec<'_, B> {
 
     fn check(&self, l: Loc, size: u32) -> X {
         if let Loc::Mem { seg, off } = l {
-            self.lin(seg, off, size)?;
+            self.lin(seg, off, size, true)?;
         }
         Ok(())
     }
@@ -295,7 +311,7 @@ impl<B: Mmio> Exec<'_, B> {
         let mut slots = [(0u32, 0u32, 0u32); 8];
         for (i, &(v, size)) in vals.iter().enumerate() {
             sp = sp.wrapping_sub(size) & spm;
-            slots[i] = (self.lin(R::SS, sp, size)?, size, v);
+            slots[i] = (self.lin(R::SS, sp, size, true)?, size, v);
         }
         for &(a, size, v) in &slots[..vals.len()] {
             self.write_lin(a, size, v);
@@ -345,8 +361,11 @@ impl<B: Mmio> Exec<'_, B> {
     // --- Exécution -----------------------------------------------------
 
     pub fn step(&mut self, ins: &Instruction) -> X {
-        let next = ins.next_ip() as u32 & 0xFFFF;
+        let next = if self.cpu.code32() { ins.next_ip() as u32 } else { ins.next_ip() as u32 & 0xFFFF };
         let mn = ins.mnemonic();
+        if self.cpu.protected() && !self.protected_mode_ok(ins) {
+            return Err(Bail);
+        }
         let size = match ins.op_kind(0) {
             OpKind::Register => ins.op_register(0).size() as u32,
             OpKind::Memory => ins.memory_size().size() as u32,
@@ -699,6 +718,8 @@ impl<B: Mmio> Exec<'_, B> {
                 let c = self.loc(ins, 1)?;
                 let count = self.get(c, 1)? & 0x1F;
                 let a = self.get(d, size)?;
+                // Lecture-modification-écriture : contrôle d'écriture même si compte nul.
+                self.check(d, size)?;
                 if count != 0 {
                     let (res, flags, touched) = shift(op, a, count, self.cpu.flag(CF), size);
                     self.set(d, size, res)?;
@@ -711,6 +732,7 @@ impl<B: Mmio> Exec<'_, B> {
                 let c = self.loc(ins, 2)?;
                 let count = self.get(c, 1)? & 0x1F;
                 let a = self.get(d, size)?;
+                self.check(d, size)?;
                 let w = 8 * size;
                 if count > w {
                     return Err(Bail);
@@ -863,6 +885,11 @@ impl<B: Mmio> Exec<'_, B> {
                 }
                 let n = if ins.code() == Code::Enterw_imm16_imm8 { 2 } else { 4 };
                 let bp = if n == 2 { R::BP } else { R::EBP };
+                // Le nouveau sommet de pile doit tenir dans la limite (sinon #SS).
+                let spm = self.cpu.sp_mask();
+                let top = self.cpu.sp().wrapping_sub(n) & spm;
+                let new_sp = top.wrapping_sub(u32::from(ins.immediate16())) & spm;
+                self.lin(R::SS, new_sp, 1, true)?;
                 self.push_all(&[(self.cpu.reg(bp), n)])?;
                 // Constaté sur le processeur : en 32 bits, EBP reçoit l'ESP entier,
                 // même avec une pile 16 bits.
@@ -922,6 +949,37 @@ impl<B: Mmio> Exec<'_, B> {
         }
         self.cpu.ip = next;
         Ok(())
+    }
+
+    /// Mode protégé : chargements de segment, transferts lointains,
+    /// interruptions et instructions sensibles au privilège sont laissés au
+    /// processeur (descripteurs, portes, contrôles de privilège).
+    fn protected_mode_ok(&self, ins: &Instruction) -> bool {
+        let writes_sreg = ins.op_count() > 0
+            && ins.op_kind(0) == OpKind::Register
+            && ins.op_register(0).is_segment_register()
+            && matches!(ins.mnemonic(), Mn::Mov | Mn::Pop);
+        let far = matches!(
+            ins.op_kind(0),
+            OpKind::FarBranch16 | OpKind::FarBranch32
+        ) || matches!(
+            ins.code(),
+            Code::Jmp_m1616 | Code::Jmp_m1632 | Code::Call_m1616 | Code::Call_m1632
+        );
+        let cpl = self.cpu.cpl();
+        let iopl = ((self.cpu.flags >> 12) & 3) as u8;
+        let privileged = match ins.mnemonic() {
+            Mn::Cli | Mn::Sti => cpl > iopl,
+            Mn::Popf | Mn::Popfd => cpl != 0,
+            _ => false,
+        };
+        !(writes_sreg
+            || far
+            || privileged
+            || matches!(
+                ins.mnemonic(),
+                Mn::Int | Mn::Int3 | Mn::Into | Mn::Iret | Mn::Iretd | Mn::Retf | Mn::Lds | Mn::Les | Mn::Lfs | Mn::Lgs | Mn::Lss
+            ))
     }
 
     fn branch(&mut self, ins: &Instruction, next: u32) -> X {
@@ -993,7 +1051,7 @@ impl<B: Mmio> Exec<'_, B> {
             let (s, d) = (self.cpu.reg(si), self.cpu.reg(di));
             match mn {
                 Mn::Movsb | Mn::Movsw | Mn::Movsd => {
-                    self.lin(R::ES, d, size)?;
+                    self.lin(R::ES, d, size, true)?;
                     let v = self.rd(src, s, size)?;
                     self.wr(R::ES, d, size, v)?;
                     self.cpu.set_reg(si, s.wrapping_add(delta));
@@ -1010,7 +1068,7 @@ impl<B: Mmio> Exec<'_, B> {
                     self.cpu.set_reg(si, s.wrapping_add(delta));
                 }
                 Mn::Cmpsb | Mn::Cmpsw | Mn::Cmpsd => {
-                    self.lin(R::ES, d, size)?;
+                    self.lin(R::ES, d, size, false)?;
                     let a = self.rd(src, s, size)?;
                     let b = self.rd(R::ES, d, size)?;
                     self.cpu.set_flags(ARITH, sub(a, b, 0, size).1);

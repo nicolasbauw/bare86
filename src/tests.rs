@@ -59,6 +59,16 @@ fn vga_window_goes_through_interpreter() {
 }
 
 #[test]
+fn protected_mode_burst() {
+    let (code, _, pc) = run(program!("pmode"));
+    assert_eq!(code, 0x5A);
+    assert_eq!(pc.vga_byte(999), 0x5A);
+    // Rafale en mode protégé 32 bits : quelques sorties MMIO seulement.
+    assert!(pc.stats.mmio_exits <= 2, "{:?}", pc.stats);
+    assert!(pc.stats.interpreted >= 1000, "{:?}", pc.stats);
+}
+
+#[test]
 fn unhandled_interrupt_is_reported() {
     let (code, _, pc) = run(program!("unhandled"));
     assert_eq!(code, 7);

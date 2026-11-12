@@ -162,6 +162,19 @@ impl Harness {
             let stub = ((ROM_SEG as usize) << 4) + n * 16;
             image[stub..stub + 3].copy_from_slice(&[0xE6, HOST_CALL_PORT as u8, 0xCF]);
         }
+        // Mode protégé : GDT (sélecteur 08h = code 32 bits plat, ring 0), IDT
+        // dont chaque porte n mène à `out 0xE0, al ; hlt` en PM_HANDLERS + 4n.
+        image[GDT..GDT + 16].copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0x9A, 0xCF, 0]);
+        for n in 0..256usize {
+            let off = (PM_HANDLERS + n * 4) as u32;
+            let gate = IDT + n * 8;
+            image[gate..gate + 2].copy_from_slice(&(off as u16).to_le_bytes());
+            image[gate + 2..gate + 4].copy_from_slice(&8u16.to_le_bytes());
+            image[gate + 4..gate + 6].copy_from_slice(&[0, 0x8E]);
+            image[gate + 6..gate + 8].copy_from_slice(&((off >> 16) as u16).to_le_bytes());
+            let h = PM_HANDLERS + n * 4;
+            image[h..h + 4].copy_from_slice(&[0xE6, HOST_CALL_PORT as u8, 0xF4, 0x90]);
+        }
         m.mem.write(0, &image);
         shadow.write(0, &image);
         let base_sregs = m.vcpu.get_sregs().expect("sregs");
@@ -179,6 +192,20 @@ impl Harness {
             dst.selector = src.selector;
             dst.base = src.base.into();
             dst.limit = src.limit;
+            dst.type_ = src.typ;
+            dst.s = src.s.into();
+            dst.dpl = src.dpl;
+            dst.present = src.present.into();
+            dst.db = src.db.into();
+            dst.g = src.g.into();
+            dst.unusable = src.unusable.into();
+        }
+        if cpu.protected() {
+            sregs.cr0 |= u64::from(cpu.cr0);
+            sregs.gdt.base = GDT as u64;
+            sregs.gdt.limit = 15;
+            sregs.idt.base = IDT as u64;
+            sregs.idt.limit = 256 * 8 - 1;
         }
         let g = cpu.gpr.map(u64::from);
         let regs = kvm_regs {
@@ -202,6 +229,13 @@ impl Harness {
         self.m.vcpu.set_guest_debug(&dbg).map_err(|e| e.to_string())?;
         let exit = match self.m.vcpu.run() {
             Ok(VcpuExit::Debug(_)) => None,
+            Ok(VcpuExit::Shutdown) => {
+                // Triple faute : sans remise à l'état exécutable, le KVM_RUN
+                // suivant attend indéfiniment.
+                let runnable = kvm_bindings::kvm_mp_state { mp_state: kvm_bindings::KVM_MP_STATE_RUNNABLE };
+                self.m.vcpu.set_mp_state(runnable).map_err(|e| e.to_string())?;
+                Some("triple faute".into())
+            }
             Ok(VcpuExit::IoOut(port, _)) => Some(format!("OUT {port:X}h")),
             Ok(other) => Some(format!("{other:?}")),
             Err(e) => Some(e.to_string()),
@@ -209,7 +243,13 @@ impl Harness {
         let r = self.m.vcpu.get_regs().map_err(|e| e.to_string())?;
         let s = self.m.vcpu.get_sregs().map_err(|e| e.to_string())?;
         if let Some(e) = exit {
-            let v = if s.cs.selector == ROM_SEG { format!(" (exception {:02X}h)", (r.rip & 0xFFF) >> 4) } else { String::new() };
+            let v = if s.cs.selector == ROM_SEG {
+                format!(" (exception {:02X}h)", (r.rip & 0xFFF) >> 4)
+            } else if s.cr0 & 1 != 0 && (PM_HANDLERS..PM_HANDLERS + 1024).contains(&(r.rip as usize)) {
+                format!(" (exception {:02X}h)", (r.rip as usize - PM_HANDLERS) / 4)
+            } else {
+                String::new()
+            };
             return Err(format!("sortie native : {e}{v}"));
         }
         Ok(Cpu::from_kvm(&r, &s))
@@ -221,13 +261,22 @@ impl Harness {
     }
 }
 
+/// Structures du mode protégé dans l'image mémoire (hors remplissage aléatoire).
+const GDT: usize = 0x500;
+const IDT: usize = 0x600;
+const PM_HANDLERS: usize = 0x1000;
+
 fn random_cpu(rng: &mut Rng) -> Cpu {
-    let mut seg = [Seg { selector: 0, base: 0, limit: 0xFFFF }; 6];
+    if rng.chance(50) { random_real_cpu(rng) } else { random_protected_cpu(rng) }
+}
+
+fn random_real_cpu(rng: &mut Rng) -> Cpu {
+    let mut seg = [Seg::real(0); 6];
     for (i, s) in seg.iter_mut().enumerate() {
         // CS : code entre 01000h et EFFFFh, hors IVT et stubs.
-        s.selector = if i == 1 { 0x0100 + rng.below(0xD000) as u16 } else { rng.next() as u16 };
-        s.base = u32::from(s.selector) << 4;
+        *s = Seg::real(if i == 1 { 0x0100 + rng.below(0xD000) as u16 } else { rng.next() as u16 });
     }
+    seg[1].typ = 0xB;
     let mut gpr = [0u32; 8];
     for g in &mut gpr {
         *g = interesting(rng);
@@ -244,10 +293,64 @@ fn random_cpu(rng: &mut Rng) -> Cpu {
     }
 }
 
+/// Segment de mode protégé tiré au hasard, tenant dans la mémoire.
+fn pm_segment(rng: &mut Rng, typ: u8, dpl: u8, db: bool, min_base: usize) -> Seg {
+    let base = (min_base + rng.below(0x80000) as usize) & !0xF;
+    let room = MEM_SIZE - base - 16;
+    let limit = if rng.chance(40) { 0xFFFF } else { rng.below(room as u64) as usize | 0xFFF }.min(room);
+    let selector = (0x10 + 8 * rng.below(64) as u16) | u16::from(dpl);
+    Seg { selector, base: base as u32, limit: limit as u32, typ, s: true, dpl, present: true, db, g: false, unusable: false }
+}
+
+fn random_protected_cpu(rng: &mut Rng) -> Cpu {
+    let cpl = if rng.chance(20) { 3 } else { 0 };
+    let code32 = rng.chance(70);
+    // Code exécutable seul (lecture interdite) une fois sur dix.
+    let cs_type = if rng.chance(10) { 0x9 } else { 0xB };
+    let cs = pm_segment(rng, cs_type, cpl, code32, 0x2000);
+    let ss32 = rng.chance(50);
+    let ss = pm_segment(rng, 3, cpl, ss32, 0);
+    let mut data = || {
+        let typ = match rng.below(20) {
+            0 | 1 => 1, // lecture seule
+            2 => 7,     // expand-down
+            _ => 3,
+        };
+        let db = rng.chance(50);
+        let mut s = pm_segment(rng, typ, 3, db, 0);
+        if rng.chance(5) {
+            s.unusable = true;
+            s.present = false;
+        }
+        s
+    };
+    let seg = [data(), cs, ss, data(), data(), data()];
+    let mut gpr = [0u32; 8];
+    for g in &mut gpr {
+        *g = interesting(rng);
+    }
+    let max_ip = if code32 { cs.limit } else { cs.limit.min(0xFFFF) };
+    Cpu {
+        gpr,
+        ip: rng.below(u64::from(max_ip.saturating_sub(16)).max(1)) as u32,
+        flags: (rng.next() as u32 & (ARITH | DF | IF | 0x3000)) | 2,
+        seg,
+        stack32: ss.db,
+        idt_base: IDT as u32,
+        cr0: 0x11,
+        seg_dirty: false,
+    }
+}
+
 fn describe(bytes: &[u8], ins: &Instruction, before: &Cpu) -> String {
     let hex: Vec<String> = bytes[..ins.len()].iter().map(|b| format!("{b:02X}")).collect();
     format!(
-        "{} {:?} | AX={:08X} CX={:08X} DX={:08X} BX={:08X} SP={:08X} BP={:08X} SI={:08X} DI={:08X} FL={:04X}",
+        "{}{} {:?} | AX={:08X} CX={:08X} DX={:08X} BX={:08X} SP={:08X} BP={:08X} SI={:08X} DI={:08X} FL={:04X}",
+        if before.protected() {
+            format!("[PM{} CPL{}] ", if before.code32() { 32 } else { 16 }, before.cpl())
+        } else {
+            String::new()
+        },
         hex.join(" "),
         ins.code(),
         before.gpr[0],
@@ -317,14 +420,19 @@ fn interpreter_matches_cpu() {
     let mut stats: BTreeMap<String, Count> = BTreeMap::new();
     let mut failures: BTreeMap<String, (u64, String)> = BTreeMap::new();
     let mut done = 0;
+    let mut protected = 0;
     while done < cases {
+        let before = random_cpu(&mut rng);
         let bytes = random_instruction(&mut rng);
-        let ins = Decoder::with_ip(16, &bytes, 0, DecoderOptions::NONE).decode();
+        let bitness = if before.code32() { 32 } else { 16 };
+        let ins = Decoder::with_ip(bitness, &bytes, 0, DecoderOptions::NONE).decode();
         if ins.is_invalid() || excluded(&ins) {
             continue;
         }
         done += 1;
-        let before = random_cpu(&mut rng);
+        if before.protected() {
+            protected += 1;
+        }
         let at = (before.seg[1].base + before.ip) as usize;
         h.m.mem.write(at, &bytes);
         h.shadow.write(at, &bytes);
@@ -354,7 +462,7 @@ fn interpreter_matches_cpu() {
         h.restore();
     }
 
-    println!("\n{cases} cas, graine {seed:#X}");
+    println!("\n{cases} cas dont {protected} en mode protégé, graine {seed:#X}");
     let (mut cmp, mut bail) = (0, 0);
     let mut line = String::new();
     for (k, c) in &stats {
@@ -383,7 +491,7 @@ fn int_pushes_and_vectors() {
         gpr: [0, 0, 0, 0, 0x100, 0, 0, 0],
         ip: 0x10,
         flags: 0x0202 | CF,
-        seg: [Seg { selector: 0x1000, base: 0x10000, limit: 0xFFFF }; 6],
+        seg: [Seg::real(0x1000); 6],
         stack32: false,
         idt_base: 0,
         cr0: 0,
