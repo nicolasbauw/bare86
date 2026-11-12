@@ -278,9 +278,41 @@ L'étape 0 est un **go / no-go** : si le bridage ou le VGA planaire ne tiennent 
 11. **3dfx Voodoo (futur lointain)**
     - Wrapper Glide pour DOS traduit vers OpenGL ou Vulkan côté hôte ; émulation des registres Voodoo seulement si nécessaire.
 
+L'étape 0 est terminée : voir [Avancement](#avancement).
+
 Ordre de grandeur pour une personne : quelques semaines pour l'étape 0, plusieurs mois pour arriver à Doom avec le son, des années pour viser la compatibilité de DOSBox.
 
 ---
+
+## Avancement
+
+### Étape 0 : terminée le 2026-11-12 (go)
+
+Mesures sur Ryzen AI 9 HX 370 (AMD-V), noyau Linux avec ses mitigations actives (SRSO, vmscape : IBPB à chaque sortie de VM). On ne les désactive pas, même pour mesurer.
+
+| Point | Résultat | Banc |
+| --- | --- | --- |
+| Hello `.COM` sous KVM | OK : IVT → stubs `out 0xE0, al ; iret` en F000:n×16, INT 20h, INT 21h 09h/4Ch | `cargo run [fichier.com]` |
+| Bridage | ±0,2 % de 1 à 500 MIPS (critère ±20 %) ; sans bridage ≈ 7 600 MIPS | `--throttle` |
+| Sortie de VM | `cpuid` 1,3–1,7 µs ; `out` 3,4–4,7 µs ; MMIO 4,5–4,8 µs ; MMIO regroupé 2,8 µs | `--bench` |
+| VGA planaire, une sortie par accès | ~650 % d'un cœur au critère (20 000 accès/image à 70 Hz) : **raté** | `--bench` |
+| VGA planaire, interpréteur hôte | 73 ns/accès, ~10 % d'un cœur : **tenu** | `--bench` |
+| Remappage d'un plan sur A0000 | slot KVM recréé : 70–100 µs ; vue hôte remappée (memfd + `mmap MAP_FIXED`) : 14,5 µs, rentable au-delà de ~600 accès par plan | `--remap` |
+
+**Décision : interpréteur x86 côté hôte pour les rafales VRAM** (décodeur iced-x86). À la première sortie MMIO, l'hôte termine l'accès (`immediate_exit`), exécute les instructions suivantes jusqu'à 256 instructions sans VRAM (ou 100 000 au plus), puis rend la main. Toute instruction non gérée ou fautive repart dans la VM. À l'étape 5 : hybride avec le mappage d'un plan pour les longues passes mono-plan.
+
+L'interpréteur couvre le jeu entier 8086→486 (+ cmov, setcc) en mode réel. Il est vérifié par un **test différentiel contre le processeur** (pas à pas KVM, état aléatoire, comparaison registres, drapeaux définis, mémoire) : ~454 000 instructions, aucune divergence.
+
+```
+DIFFTEST_CASES=100000 DIFFTEST_SEED=1 cargo test --release interpreter_matches_cpu -- --nocapture
+```
+
+Comportements constatés sur ce processeur : ENTER 32 bits avec pile 16 bits copie l'ESP entier dans EBP ; LOOPE/LOOPNE préfixés F2/F3 ignorent la condition documentée (laissés à la VM).
+
+### Prochaines étapes
+
+1. Interpréteur, mode protégé 32 bits (Doom dessine en mode planaire sous DOS/4GW), même test différentiel.
+2. Étape 1 (cœur VMM) : assembleur GNU `as` (`.code16`, `.intel_syntax noprefix`, `ld --oformat binary`) appelé par `build.rs` pour la ROM et les tests ; NASM non requis.
 
 ## Questions ouvertes
 
