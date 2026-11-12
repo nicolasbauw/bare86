@@ -85,13 +85,27 @@ pub struct Machine {
 }
 
 impl Machine {
-    /// Crée une VM avec `mem_size` octets de RAM à l'adresse physique 0.
+    /// Crée une VM avec `mem_size` octets de RAM à l'adresse physique 0,
+    /// fenêtre graphique VGA laissée non mappée : chaque accès sort de la VM.
     pub fn new(mem_size: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build(mem_size, true)
+    }
+
+    /// Comme `new`, mais toute la mémoire est de la RAM (tests différentiels).
+    #[cfg(test)]
+    pub fn new_flat(mem_size: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build(mem_size, false)
+    }
+
+    fn build(mem_size: usize, vga_hole: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let kvm = Kvm::new().map_err(|e| format!("ouverture de /dev/kvm impossible : {e}"))?;
         let vm = kvm.create_vm()?;
         let mem = GuestMem::new(mem_size)?;
-        // Fenêtre graphique VGA laissée non mappée : chaque accès sort de la VM.
-        let ranges = [(0, VGA_WINDOW.start), (VGA_WINDOW.end, mem_size)];
+        let ranges = if vga_hole {
+            vec![(0, VGA_WINDOW.start), (VGA_WINDOW.end, mem_size)]
+        } else {
+            vec![(0, mem_size)]
+        };
         for (slot, (start, end)) in ranges.into_iter().enumerate() {
             let region = kvm_userspace_memory_region {
                 slot: slot as u32,
