@@ -177,6 +177,7 @@ impl<B: Backend> Pc<B> {
         io.map(0x40..=0x43, Box::new(PitPorts(pit.clone())));
         io.map(0x61..=0x61, Box::new(PitPorts(pit.clone())));
         let heartbeat = Heartbeat::new(heartbeat_period(pit.borrow().irq0_period()))?;
+        io.map(0x70..=0x71, Box::new(crate::rtc::Rtc::new(cfg.extended_kb)));
         let kbc = Kbc::new().shared();
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
@@ -288,7 +289,7 @@ impl<B: Backend> Pc<B> {
                 Some(InputEvent::Quit) => self.host.quit = true,
                 Some(InputEvent::Key(code)) => self.keys.push_back(code),
                 Some(InputEvent::Text(c)) => self.keys.extend(keyboard::text_scancodes(c)),
-                Some(InputEvent::Mouse { .. }) => {}
+                Some(InputEvent::Mouse { dx, dy, buttons }) => self.bios.mouse.event(self.vm.mem(), dx, dy, buttons),
                 None => break,
             }
         }

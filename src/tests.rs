@@ -265,4 +265,11 @@ fn keyboard_irq_hooked() {
     assert_eq!(pc.run().unwrap(), 0x39);
 }
 
+#[test]
+fn mouse_and_cmos() {
+    let (code, _, pc) = run(program!("mouse"));
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/mouse.S)");
+    assert!(pc.unhandled().is_empty(), "{:?}", pc.unhandled());
+}
+
 use crate::backend::Backend;

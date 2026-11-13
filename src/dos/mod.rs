@@ -328,8 +328,8 @@ impl Dos {
                 cpu.set_lo(AX, 3);
                 Out::Keep
             }
-            // Ctrl-C, attente, réseau, multiplex, souris absente : rien d'installé.
-            0x23 | 0x28 | 0x2A | 0x2F | 0x33 => Out::Keep,
+            // Ctrl-C, attente, réseau, multiplex : rien d'installé.
+            0x23 | 0x28 | 0x2A | 0x2F => Out::Keep,
             _ => return Ok(None),
         };
         Ok(Some(self.finish(cpu, mem, out)))

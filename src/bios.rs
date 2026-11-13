@@ -103,11 +103,12 @@ pub struct Bios {
     e0: bool,
     /// Modes vidéo graphiques déjà signalés.
     warned_modes: BTreeSet<u8>,
+    pub mouse: crate::mouse::Mouse,
 }
 
 impl Bios {
     pub fn new(extended_kb: usize) -> Self {
-        Self { extended_kb, e0: false, warned_modes: BTreeSet::new() }
+        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new() }
     }
 
     /// ROM, IVT, BDA, écran texte effacé.
@@ -148,6 +149,7 @@ impl Bios {
             0x15 => self.int15(cpu, mem),
             0x16 => int16(cpu, mem),
             0x1A => self.int1a(cpu, mem),
+            0x33 => self.mouse.int33(cpu, mem),
             // Impression d'écran, Ctrl-Break, tic utilisateur : rien à faire.
             0x05 | 0x1B | 0x1C => Flow::Continue,
             _ => Flow::Unhandled(ah),

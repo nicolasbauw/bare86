@@ -16,8 +16,10 @@ mod keyboard;
 mod kvm;
 mod machine;
 mod mem;
+mod mouse;
 mod pic;
 mod pit;
+mod rtc;
 mod throttle;
 mod timer;
 #[cfg(test)]
