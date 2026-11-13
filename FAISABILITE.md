@@ -400,6 +400,41 @@ Critère tenu : ZZT 3.2 (Epic MegaGames, gratuit depuis 1997, Museum of ZZT, MD5
 
 Constaté en route : ZZT attend le retour de trame VGA sur le port 3DAh (sans lui, boucle infinie) ; DFlat (EDIT) lit l'état des modificateurs juste après la touche.
 
+### Étape 5 : décision sur la mémoire vidéo (2026-11-13)
+
+But : réduire l'émulation d'instructions à un secours rare, sans renoncer au mode planaire.
+
+Constat : toute sortie MMIO passe déjà par l'émulateur x86 de KVM (`arch/x86/kvm/emulate.c`), qui décode l'instruction fautive. Une conception « tout MMIO » repose donc aussi sur de l'émulation d'instructions, cachée dans le noyau. Notre interpréteur ne fait que prolonger ce travail sur les instructions qui touchent la VRAM : le programme reste exécuté nativement ; seuls les accès au périphérique sont émulés, comme dans tout hyperviseur.
+
+**Décision : mapper la VRAM directement dès que la VGA se comporte comme de la RAM, l'interpréteur ne servant qu'au reste.**
+
+| Configuration | Cas typiques | Traitement |
+| --- | --- | --- |
+| Texte, CGA, mode 13h (chain4) | la majorité des jeux | tampon linéaire mappé, zéro sortie (QEMU fait de même pour chain4) |
+| Non chaîné, écriture simple (mode 0, sans rotation, remplacement, masque de bits FFh, set/reset inactif) vers un seul plan P, lecture sur P | mode X ; Doom (copie de l'image plan par plan) | plan P mappé (vue hôte memfd remappée, 14,5 µs) |
+| Latches (mode 1), opérations logiques, masque de bits, set/reset, modes 2 et 3, comparaison de couleur | EGA 16 couleurs, blits en mode X | interpréteur hôte (73 ns/accès) |
+
+- **Adaptatif** : un programme qui change de plan à chaque pixel paierait plus en remappages (14,5 µs ≈ 200 accès interprétés) qu'en interprétation. On ne mappe donc une configuration qu'après un seuil d'accès sans changement (≈ 600, cf. étape 0).
+- **Ordre de grandeur pour Doom** (64 000 octets par image) : environ 4,7 ms par image interprétée, contre environ 60 µs avec le mappage (4 sorties `out` + 4 remappages).
+- **Bonus** : le mappage EPT/NPT vaut aussi en mode protégé ; l'extension de l'interpréteur à la pagination (DOS/4GW) devient probablement inutile.
+- **Mesure** : compteurs d'accès mappés et interprétés, pour suivre ce qui reste émulé.
+
+Pistes écartées :
+
+- **Pages en écriture seule** pour séparer lecture et écriture : interdit par EPT (configuration invalide).
+- **MMIO regroupé** : une sortie vers le noyau par accès (2,8 µs) ; inapplicable aux lectures.
+- **Écrire dans une mémoire fantôme, puis appliquer la logique VGA en bloc à chaque changement de registre.** Juste en théorie : sans lecture, donc avec des latches constants, l'effet d'une suite d'écritures sur un octet ne dépend que de la dernière. Mais le suivi des pages modifiées de KVM ne donne que des pages de 4 Ko, et un octet réécrit avec sa valeur précédente reste invisible. Gardée en réserve pour le mode d'écriture 3 (une écriture de 0 n'y a aucun effet).
+
+Plan de l'étape 5 :
+
+1. Cœur VGA : registres (séquenceur, contrôleur graphique, attributs, DAC, divers, CRTC), 256 Ko en 4 plans dans une mémoire remappable, tous les modes de lecture et d'écriture.
+2. Gestionnaire de la fenêtre A0000 : mode linéaire, plan unique ou interprété, avec seuil adaptatif et compteurs.
+3. Rendu : texte, CGA, EGA, 13h, X ; palette, clignotement, curseur.
+4. Backend SDL3 : fenêtre, clavier, souris, haut-parleur ; vCPU sur son propre thread.
+5. Critère : un jeu en mode 13h et un jeu en mode X à pleine vitesse, avec la part mappée mesurée.
+
+Question ouverte (au propriétaire du projet) : police 8×16 du mode texte, sans copie de la ROM IBM. Candidates : Unifont (OFL ou GPL avec exception de police), Spleen (BSD-2, couverture semi-graphique à vérifier), Terminus (OFL).
+
 ### Prochaines étapes (vers Doom sous DOS/4GW)
 
 1. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
