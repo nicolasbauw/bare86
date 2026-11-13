@@ -24,6 +24,23 @@ const BLOCK: usize = RATE as usize / 200;
 const SPEAKER_LEVEL: f32 = 0.15;
 /// Nuked-OPL3 sort environ 6 dB sous le son numérisé d'une vraie carte.
 const FM_LEVEL: f32 = 2.0;
+/// Marge de sortie (−6 dB) : un jeu qui mixe à pleine échelle (Quake) ne
+/// sature pas à la somme des sources ; la chaîne analogique d'une vraie
+/// carte en avait aussi. Au-delà de `KNEE`, limiteur doux.
+const OUTPUT_GAIN: f32 = 0.5;
+const KNEE: f32 = 0.8;
+
+/// Limiteur doux : linéaire jusqu'à `KNEE`, puis tangente hyperbolique
+/// vers la pleine échelle (pas d'écrêtage brutal).
+fn soft_limit(x: f32) -> f32 {
+    let a = x.abs();
+    if a <= KNEE {
+        x
+    } else {
+        let room = 1.0 - KNEE;
+        x.signum() * (KNEE + room * ((a - KNEE) / room).tanh())
+    }
+}
 
 /// Bloc confié au thread audio : Sound Blaster et haut-parleur déjà mixés
 /// (stéréo entrelacée) à partir de `t0`, écritures OPL jusque-là, gain FM.
@@ -140,7 +157,7 @@ fn audio_thread(rx: Receiver<Block>, mut sink: Box<dyn AudioSink + Send>) {
         fm.queue(b.writes);
         fm.render(b.t0, b.fm_gain, &mut b.frames);
         out.clear();
-        out.extend(b.frames.iter().map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16));
+        out.extend(b.frames.iter().map(|s| (soft_limit(s * OUTPUT_GAIN) * 32767.0) as i16));
         sink.push(&out);
     }
 }
@@ -207,5 +224,18 @@ impl AudioSink for QueueSink {
             let excess = q.len().saturating_sub(QUEUE_MAX);
             q.drain(..excess);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::soft_limit;
+
+    #[test]
+    fn soft_limiter() {
+        assert_eq!(soft_limit(0.5), 0.5);
+        assert_eq!(soft_limit(-0.8), -0.8);
+        assert!(soft_limit(0.9) < 0.9 && soft_limit(0.9) > 0.8);
+        assert!(soft_limit(5.0) <= 1.0 && soft_limit(-5.0) >= -1.0);
     }
 }
