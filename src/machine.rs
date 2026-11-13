@@ -52,6 +52,8 @@ pub const HOST_CALL_PORT: u16 = 0xE0;
 const HOST_KBD_PORT: u16 = 0xE1;
 /// Intervalle entre deux scancodes livrés au 8042.
 const KEY_SPACING: Duration = Duration::from_millis(2);
+/// Durée d'appui d'une touche avant son relâchement.
+const KEY_HOLD: Duration = Duration::from_millis(40);
 /// Délai laissé à un programme qui scrute le clavier après la fin de l'entrée.
 const QUIT_GRACE: Duration = Duration::from_millis(300);
 /// Période des images envoyées à l'affichage (70 Hz, comme la VGA).
@@ -74,11 +76,13 @@ pub struct Config {
     pub trace_int: bool,
     /// Ports d'E/S sans périphérique signalés.
     pub trace_io: bool,
+    /// Durée maximale d'exécution (diagnostic : registres affichés à l'arrêt).
+    pub limit: Option<Duration>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, mips: None, trace_int: false, trace_io: false }
+        Self { extended_kb: 15 * 1024, mips: None, trace_int: false, trace_io: false, limit: None }
     }
 }
 
@@ -168,6 +172,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Scancodes en route vers le 8042, livrés au rythme d'une frappe.
     keys: VecDeque<u8>,
     last_scancode: Option<Instant>,
+    /// Dernier appui livré (son relâchement attend KEY_HOLD).
+    last_made: Option<u8>,
     /// Le programme attend une touche (appel repris après HLT).
     waiting_key: bool,
     /// Fin de l'entrée constatée, tout étant lu : début du délai de grâce.
@@ -178,6 +184,7 @@ pub struct Pc<B: Backend = KvmVm> {
     input_paused_until: Option<Instant>,
     font: Option<crate::font::Font>,
     started: Instant,
+    limit: Option<Duration>,
     last_frame: Option<Instant>,
     /// Dernier rafraîchissement de l'écran du terminal.
     last_render: Option<Instant>,
@@ -244,12 +251,14 @@ impl<B: Backend> Pc<B> {
             kbc,
             keys: VecDeque::new(),
             last_scancode: None,
+            last_made: None,
             waiting_key: false,
             drained_at: None,
             polled_after_drain: false,
             last_render: None,
             font: None,
             started: Instant::now(),
+            limit: cfg.limit,
             last_frame: None,
             input_paused_until: None,
             stepping: false,
@@ -400,7 +409,13 @@ impl<B: Backend> Pc<B> {
             }
         }
         let now = Instant::now();
-        let spaced = self.last_scancode.is_none_or(|t| now.duration_since(t) >= KEY_SPACING);
+        // Une touche reste enfoncée KEY_HOLD avant son relâchement : les jeux
+        // qui lisent l'état du clavier à chaque image (Wolfenstein 3D) la voient.
+        let gap = match (self.keys.front(), self.last_made) {
+            (Some(&b), Some(m)) if b == m | 0x80 => KEY_HOLD,
+            _ => KEY_SPACING,
+        };
+        let spaced = self.last_scancode.is_none_or(|t| now.duration_since(t) >= gap);
         if let Some(&b) = self.keys.front()
             && spaced
             && self.kbc.borrow().is_empty()
@@ -411,6 +426,7 @@ impl<B: Backend> Pc<B> {
                 self.kbc.borrow_mut().feed(b);
                 self.keys.pop_front();
                 self.last_scancode = Some(now);
+                self.last_made = (b & 0x80 == 0 && b != 0xE0).then_some(b);
             }
         }
         if self.kbc.borrow_mut().take_irq() {
@@ -485,6 +501,17 @@ impl<B: Backend> Pc<B> {
     /// Exécute jusqu'au prochain événement (fin du programme ou fin de pas).
     pub fn resume(&mut self) -> Result<Event> {
         loop {
+            if self.limit.is_some_and(|l| self.started.elapsed() >= l) {
+                let cpu = self.vm.state()?;
+                let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);
+                return Err(format!(
+                    "limite de temps atteinte\n{}\n{}\n{:?}",
+                    crate::debug::format_regs(&cpu),
+                    code.join("\n"),
+                    self.stats
+                )
+                .into());
+            }
             self.service_timers()?;
             self.update_window()?;
             self.service_input();

@@ -23,9 +23,13 @@ pub const PLANE: usize = 0x1_0000;
 pub const LINEAR: usize = 4;
 const REGIONS: usize = 5;
 
-/// Retours de trame (70 Hz) et de ligne (31,5 kHz) pour le registre d'état.
-const FRAME_NS: u128 = 14_285_714;
-const VRETRACE_NS: u128 = 2 * 31_778;
+/// Balayage à 70 Hz pour le registre d'état : 449 lignes de 31,778 µs, dont
+/// 400 affichées ; blanc vertical sur les 49 autres, impulsion de
+/// synchronisation verticale (bit 3) sur 2 lignes à l'intérieur ; blanc de
+/// ligne sur les 20 derniers % de chaque ligne.
+const LINES: u128 = 449;
+const VISIBLE_LINES: u128 = 400;
+const VSYNC_LINES: std::ops::Range<u128> = 412..414;
 const LINE_NS: u128 = 31_778;
 const HBLANK_NS: u128 = 6_356;
 
@@ -330,9 +334,12 @@ impl Vga {
     fn status(&mut self) -> u8 {
         self.attr_data = false;
         let t = self.start.elapsed().as_nanos();
-        let vretrace = t % FRAME_NS >= FRAME_NS - VRETRACE_NS;
+        let line = t / LINE_NS % LINES;
+        let vblank = line >= VISIBLE_LINES;
+        let vsync = VSYNC_LINES.contains(&line);
         let hblank = t % LINE_NS >= LINE_NS - HBLANK_NS;
-        u8::from(vretrace || hblank) | if vretrace { 0x08 } else { 0 }
+        // Bit 0 : affichage inactif (blanc de ligne ou vertical) ; bit 3 : synchronisation verticale.
+        u8::from(vblank || hblank) | if vsync { 0x08 } else { 0 }
     }
 
     /// Ports CRTC et état : 3Dxh en couleur (misc bit 0), 3Bxh en mono.

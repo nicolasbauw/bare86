@@ -49,6 +49,8 @@ usage : dosbox [options] [programme [arguments…]]
   --term         affiche l'écran texte en direct dans le terminal
   --shot F.png   capture de l'écran à la fin du programme
   --window       fenêtre SDL3 (vCPU sur son propre thread)
+  --stats        compteurs de la machine à la fin (sorties, VRAM émulée…)
+  --limit S      arrêt au bout de S secondes, avec registres et code à CS:IP
   --font F.psf   police PSF du mode texte (par défaut : celle de la console)
   --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
                  texte, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
@@ -61,6 +63,7 @@ fn main() -> ExitCode {
     let mut term = false;
     let mut shot: Option<String> = None;
     let mut window = false;
+    let mut stats = false;
     let mut font: Option<std::path::PathBuf> = None;
     let mut keys = None;
     let mut program = None;
@@ -100,12 +103,17 @@ fn main() -> ExitCode {
                 _ => return ExitCode::from(2),
             },
             "--trace-int" => cfg.trace_int = true,
+            "--limit" => match value("--limit") {
+                Some(v) if v > 0.0 => cfg.limit = Some(std::time::Duration::from_secs_f64(v)),
+                _ => return ExitCode::from(2),
+            },
             "--trace-io" => cfg.trace_io = true,
             "--debug" => debug = true,
             "--screen" => screen = true,
             "--term" => term = true,
             "--shot" => shot = args.next(),
             "--window" => window = true,
+            "--stats" => stats = true,
             "--font" => font = args.next().map(Into::into),
             "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
                 Some(Ok(ev)) => keys = Some(ev),
@@ -143,7 +151,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font };
+    let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats };
     let result = if window {
         if opts.program.is_none() {
             eprintln!("--window : programme requis (le shell interne ne s'affiche pas encore en fenêtre)");
@@ -186,6 +194,7 @@ struct RunOptions {
     screen: bool,
     shot: Option<String>,
     font: Option<std::path::PathBuf>,
+    stats: bool,
 }
 
 fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
@@ -216,6 +225,9 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
     let code = if o.debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };
     if o.screen {
         println!("\n{}", pc.screen_text().join("\n").trim_end());
+    }
+    if o.stats {
+        eprintln!("{:#?}", pc.stats);
     }
     if let Some(path) = &o.shot {
         match pc.frame() {
