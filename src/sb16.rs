@@ -8,6 +8,7 @@
 //! l'IRQ en fin de bloc. La FM (OPL) est un périphérique à part.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use crate::dma::Dma;
 use crate::io::IoDevice;
@@ -17,6 +18,8 @@ pub const BASE: u16 = 0x220;
 pub const IRQ: u8 = 5;
 const DMA8: usize = 1;
 const DMA16: usize = 5;
+/// Taille (unités DMA) sous laquelle un transfert en cycle unique est achevé aussitôt.
+const SHORT_TRANSFER: u32 = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Bits {
@@ -35,6 +38,7 @@ struct Transfer {
     block: u32,
     left: u32,
     paused: bool,
+    started: Instant,
 }
 
 pub struct Sb16 {
@@ -143,6 +147,28 @@ impl Sb16 {
         }
     }
 
+    /// Transfert en cycle unique assez court pour être une détection d'IRQ ;
+    /// rend l'instant où il s'achèverait sur la carte (taille ÷ taux). Les
+    /// pilotes d'époque l'attendent par une boucle calibrée pour un 386
+    /// (≈ 10 µs à la vitesse native) : la machine l'achève donc après
+    /// quelques instructions (`complete_short`). Livrée tout de suite,
+    /// l'IRQ précéderait la remise à zéro du drapeau attendu ; au passage
+    /// suivant du mixeur, elle arriverait après la fin de la boucle.
+    pub fn short_transfer_end(&self) -> Option<Instant> {
+        let t = self.transfer.filter(|t| !t.auto_init && !t.paused && t.block <= SHORT_TRANSFER)?;
+        let ns = u64::from(t.block) * 1_000_000_000 / u64::from(self.rate.max(1000));
+        Some(t.started + Duration::from_nanos(ns))
+    }
+
+    /// Lit d'un coup le transfert court en cours, puis lève l'IRQ.
+    pub fn complete_short(&mut self, dma: &mut Dma, mem: &GuestMem) {
+        while self.short_transfer_end().is_some() {
+            if self.fetch(dma, mem).is_none() {
+                break;
+            }
+        }
+    }
+
     fn start(&mut self, bits: Bits, mode: u8, auto_init: bool, units: u32) {
         let t = Transfer {
             bits,
@@ -152,6 +178,7 @@ impl Sb16 {
             block: units,
             left: units,
             paused: false,
+            started: Instant::now(),
         };
         self.transfer = Some(t);
     }

@@ -61,6 +61,12 @@ fn heartbeat_period(irq0: Duration) -> Duration {
     irq0.clamp(Duration::from_micros(50), Duration::from_millis(10))
 }
 
+/// Pas à pas entre la commande d'un transfert Sound Blaster court et son
+/// IRQ : assez pour que le pilote ait remis à zéro le drapeau qu'il attend,
+/// assez peu pour rester dans sa boucle d'attente (≈ 10 µs à la vitesse
+/// native, calibrée pour un 386).
+const SHORT_TRANSFER_STEPS: u32 = 64;
+
 /// Port d'appel hôte utilisé par les stubs.
 pub const HOST_CALL_PORT: u16 = 0xE0;
 /// Port par lequel l'INT 09h de la ROM confie un scancode à l'hôte.
@@ -236,6 +242,9 @@ pub struct Pc<B: Backend = KvmVm> {
     last_render: Option<Instant>,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
+    /// Instructions à exécuter en pas à pas avant d'achever un transfert
+    /// Sound Blaster court (détection d'IRQ).
+    irq_steps: Option<u32>,
     trace_int: bool,
     /// Services non gérés déjà signalés (vecteur, AH).
     unhandled: BTreeSet<(u8, u8)>,
@@ -330,6 +339,7 @@ impl<B: Backend> Pc<B> {
             last_frame: None,
             input_paused_until: None,
             stepping: false,
+            irq_steps: None,
             trace_int: cfg.trace_int,
             unhandled: BTreeSet::new(),
             a20: None,
@@ -468,6 +478,12 @@ impl<B: Backend> Pc<B> {
         let speaker = pit.speaker();
         drop(pit);
         let mut sb = self.sb.borrow_mut();
+        // Transfert court (détection d'IRQ) : achevé après quelques
+        // instructions en pas à pas (voir `Sb16::short_transfer_end`).
+        if sb.short_transfer_end().is_some() && self.irq_steps.is_none() && !self.stepping {
+            self.irq_steps = Some(SHORT_TRANSFER_STEPS);
+            self.vm.set_single_step(true)?;
+        }
         self.mixer.advance(
             Instant::now(),
             &mut sb,
@@ -669,6 +685,17 @@ impl<B: Backend> Pc<B> {
                     }
                 }
                 Exit::IrqWindow => {}
+                Exit::Step if self.irq_steps.is_some() => {
+                    let left = self.irq_steps.unwrap_or(0).saturating_sub(1);
+                    let pending = self.sb.borrow().short_transfer_end().is_some();
+                    if left == 0 || !pending {
+                        self.irq_steps = None;
+                        self.vm.set_single_step(self.stepping)?;
+                        self.sb.borrow_mut().complete_short(&mut self.dma.borrow_mut(), self.vm.mem());
+                    } else {
+                        self.irq_steps = Some(left);
+                    }
+                }
                 Exit::Step => return Ok(Event::Step),
                 Exit::Hlt => self.halt()?,
                 Exit::Shutdown => return Err("arrêt du processeur (triple faute ?)".into()),
@@ -736,6 +763,12 @@ impl<B: Backend> Pc<B> {
         let driver = match vector {
             0x2F => self.xms.int2f(&mut cpu, (ROM_SEG, bios::XMS_ENTRY)),
             0x67 => Some(self.ems.int67(&mut cpu, mem)),
+            // Pas à pas sans débogueur dans l'invité (TF resté empilé après
+            // notre propre pas à pas) : TF effacé au retour.
+            0x01 => {
+                set_ret_flag(&cpu, mem, 1 << 8, false);
+                Some(Flow::Continue)
+            }
             0x15 if ah == 0x24 && cpu.lo(AX) <= 2 => {
                 let mut kbc = self.kbc.borrow_mut();
                 match cpu.lo(AX) {
