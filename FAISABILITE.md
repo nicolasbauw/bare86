@@ -472,10 +472,28 @@ Avancement :
 - **Dune (Cryo, 1992, copie du propriétaire)** : `DUNEPRG.EXE ENG VGA` (sans EMS, étape 6) tourne : logo Virgin, intro spatiale, puis le jeu (salle du trône, curseur souris), en mode 13h natif (`vram_emulated: 0`). Stocké dans `~/Dev/dos-progs/dune`.
 - **Mise à l'échelle nette** : l'étirement direct au plus proche voisin (200 → 720 lignes, facteur 3,6) doublait certaines lignes, visible sur le texte de Dune. Désormais : agrandissement entier sans lissage vers une texture intermédiaire, puis réduction lissée à la taille de la fenêtre. Vérifié sur une capture de la vraie fenêtre (logo Virgin).
 
-### Prochaines étapes (vers Doom sous DOS/4GW)
+### Étape 6 : mémoire étendue et extendeurs, en cours (2026-11-13)
 
-1. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
-2. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
+**Doom 1.9 shareware tourne** (DOS/4GW 1.95, démo, jeu). Archive `doom19s.zip` de l'archive idgames, installée dans l'émulateur par son `DEICE.EXE` puis l'auto-extracteur ; `DOOM1.WAD` a le MD5 connu de la 1.9 shareware (`f0cefca49926d00903cf57551d901abe`). Stocké hors dépôt dans `~/Dev/dos-progs/doom/c/DOOMS`.
+
+- **DOS/4GW tournait déjà en mode raw** (aucune pagination, donc pas besoin de l'étendre à l'interpréteur) : un programme Watcom 32 bits alloue, écrit et relit 4 Mo (somme exacte).
+- **Vitesse : `DOOM -timedemo demo1`**, 5026 tics de jeu.
+
+  | Version | Tics réels | Images/s | Cause |
+  |---|---|---|---|
+  | Départ | 8920 | 19,7 | Doom change de plan à chaque colonne (≈ 1 400 fois par image) : le refroidissement renvoyait toute la VRAM à l'interpréteur (561 000 instructions interprétées par image) |
+  | Sans refroidissement | 4263 | 41 | Chaque changement de plan = `mmap` + invalidation EPT + refautes (≈ 13 µs, 89 s de temps système sur 122) |
+  | Scène VGA | 1412 | **124** | Voir ci-dessous |
+
+  Réf. : un 486DX2-66 fait ≈ 20 i/s, un Pentium 100 ≈ 40.
+- **Scène VGA** (`src/vga.rs`) : la vue de la fenêtre ne change plus de cible pour un plan. Elle reste sur une région « scène » du memfd, qui tient le contenu du plan choisi ; changer de plan = deux copies de 64 Ko (scène → ancien plan, nouveau plan → scène), sans appel système ni faute de page dans KVM. Les accès du modèle passent par `locate`. Le refroidissement est supprimé : un changement de plan coûte moins qu'une sortie MMIO. Wolfenstein en profite aussi (accès émulés ≈ 350 000/s → quelques milliers).
+- **XMS 3.0** (`src/xms.rs`) : INT 2Fh 4300h/4310h, point d'entrée en ROM F000:E8A0 (saut court + 3 NOP, `out E0h, al`, `retf`) ; HMA, A20 (toujours ouverte), EMB au-dessus de la HMA (allocation, libération, copie, verrouillage, redimensionnement, versions 32 bits 88h/89h/8Eh/8Fh). Pas d'UMB. INT 15h AH=88h rend 0, comme sous HIMEM.SYS. DOS/4GW, DOS/32A et PMODE/W passent par XMS.
+- **EMS LIM 4.0** (`src/ems.rs`) : page frame en E000h, pages logiques côté hôte (`--ems MO`, 4 par défaut), mappage par copie de 16 Ko. Détection : le vecteur INT 67h pointe en FE8Bh:0012h, segment qui commence par un en-tête de périphérique « EMMXXXX0 » en ROM. Limite : une page logique mappée dans deux pages physiques n'est pas partagée. Dune tourne avec `ENG VGA EMS 386`, ses arguments d'origine ; Wolfenstein voit l'EMS et la XMS.
+- **CPUID filtré** (`src/kvm.rs`) : sans table, KVM rendait des zéros (famille 0), et DOS/32A et PMODE/W concluaient à un 286. L'invité voit maintenant un Pentium MMX (famille 5, modèle 4, fabricant de l'hôte, FPU/VME/DE/PSE/TSC/MSR/CX8/MMX). DOS/32A 9.1.2 et PMODE/W (Open Watcom) font tourner le programme de test.
+- **Divers** : port 92h (A20 rapide, reflète le port de sortie du 8042), INT 33h AX=0015h–0017h (état du pilote souris, demandé par DOS/4GW).
+- Tests : `asm/tests/{xms,ems,cpu386}.S`, tests unitaires XMS, EMS, scène VGA ; 54 tests.
+
+**Restent pour l'étape 6** : UMB (XMS 10h, DOS 58h) ; A20 réellement fermable (repliement à 1 Mo, pour les .EXE compressés par EXEPACK chargés sous 64 Ko) ; CWSDPMI / DJGPP (aucun programme de test pour l'instant) ; essai interactif de Doom dans la fenêtre par le propriétaire du projet. Le son de Doom (Sound Blaster, OPL) relève de l'étape 7.
 
 ## Questions ouvertes
 
