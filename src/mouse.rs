@@ -92,8 +92,18 @@ impl Mouse {
         self.redraw(mem);
     }
 
-    /// Curseur texte : attribut inversé de la cellule sous la souris.
+    /// Bloc d'état lu par l'INT 33h de la ROM (AX=0003h sans sortie de VM).
+    fn publish(&self, mem: &GuestMem) {
+        let at = crate::bios::MOUSE_STATE;
+        mem.write_u16(at, u16::from(self.buttons));
+        mem.write_u16(at + 2, self.x as u16);
+        mem.write_u16(at + 4, self.y as u16);
+    }
+
+    /// Curseur texte : attribut inversé de la cellule sous la souris ; bloc
+    /// d'état de la ROM tenu à jour (appelé après chaque changement).
     fn redraw(&mut self, mem: &GuestMem) {
+        self.publish(mem);
         if let Some((at, attr)) = self.drawn.take() {
             mem.write_u8(at, attr);
         }
@@ -127,6 +137,7 @@ impl Mouse {
                 }
                 cpu.set_w(AX, 0xFFFF);
                 cpu.set_w(BX, 2);
+                self.publish(mem);
             }
             0x0001 => {
                 self.shown = (self.shown + 1).min(0);

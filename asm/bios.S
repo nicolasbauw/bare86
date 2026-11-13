@@ -76,6 +76,22 @@ wait21:
     cli
     jmp stubs + 0x21 * 16
 
+    # INT 33h : AX=0003h (position et boutons) servi ici sans sortie de VM,
+    # d'après le bloc d'état que l'hôte tient à jour (lecture seule pour
+    # l'invité) ; les autres fonctions passent par l'hôte.
+    .org 0xE870, 0xFF
+int33:
+    cmp ax, 3
+    jne 1f
+    mov bx, cs:[mouse_state]
+    mov cx, cs:[mouse_state + 2]
+    mov dx, cs:[mouse_state + 4]
+    iret
+1:  jmp stubs + 0x33 * 16
+    .org 0xE890, 0xFF
+mouse_state:
+    .word 0, 320, 100
+
     # INT 09h, IRQ 1 (adresse de l'IBM AT) : scancode lu au 8042, proposé à
     # INT 15h AH=4Fh, puis confié à l'hôte (port E1h) qui tient la BDA.
     .org 0xE987, 0xFF

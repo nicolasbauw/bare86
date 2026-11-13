@@ -74,6 +74,9 @@ pub const INT09: u16 = 0xE987;
 /// Reprises après HLT d'un appel qui attend une touche (asm/bios.S).
 pub const WAIT16: u16 = 0xE850;
 pub const WAIT21: u16 = 0xE860;
+/// INT 33h en ROM (AX=0003h sans sortie) et son bloc d'état (asm/bios.S).
+const INT33: u16 = 0xE870;
+pub const MOUSE_STATE: usize = 0xF_E890;
 
 /// ROM BIOS en F0000 et IVT : le vecteur n pointe sur le stub F000:n*16,
 /// sauf les IRQ et INT 1Ch, servies en ROM sans sortie de VM.
@@ -88,6 +91,7 @@ pub fn install_rom(mem: &GuestMem) {
     }
     set(0x08, INT08);
     set(0x09, INT09);
+    set(0x33, INT33);
     for n in 0x0A..=0x0F {
         set(n, IRQ_MASTER_DEFAULT);
     }

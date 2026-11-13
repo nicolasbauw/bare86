@@ -270,6 +270,9 @@ fn mouse_and_cmos() {
     let (code, _, pc) = run(program!("mouse"));
     assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/mouse.S)");
     assert!(pc.unhandled().is_empty(), "{:?}", pc.unhandled());
+    // AX=0003h servi en ROM : les deux lectures de position sans appel hôte
+    // (restent : reset, position, plage, sortie).
+    assert_eq!(pc.stats.host_calls, 4, "{:?}", pc.stats);
 }
 
 /// Fenêtre A0000 : mappage direct quand la VGA se comporte comme de la RAM,
