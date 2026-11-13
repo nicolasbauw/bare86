@@ -162,4 +162,19 @@ fn bios_ticks_follow_host_clock() {
     assert!((1..=3).contains(&ticks), "{ticks} tics pour 110 ms");
 }
 
+/// Critère de l'étape 2 : programme C Open Watcom (c/tests/textdemo.c,
+/// compilé par c/build.sh) ; écran texte par INT 10h, printf, getch.
+#[test]
+fn watcom_text_program() {
+    let image = include_bytes!("../c/tests/textdemo.com");
+    let (mut pc, out) = machine_with_input(&Config::default(), image, &[InputEvent::Text(b'k')]);
+    assert_eq!(pc.run().unwrap(), 0);
+    assert!(pc.unhandled().is_empty(), "{:?}", pc.unhandled());
+    assert_eq!(&*out.0.borrow(), b"Touche ? k (107)\r\n");
+    let screen = pc.screen_text();
+    assert_eq!(screen[4], "         Open Watcom en mode texte");
+    assert_eq!(screen[6], "         Touche ? k (107)");
+    assert_eq!(bios::screen_attr(pc.vm.mem(), 4, 9), 0x1E);
+}
+
 use crate::backend::Backend;

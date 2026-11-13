@@ -24,6 +24,8 @@ pub const ROM: Range<usize> = 0xF_0000..0x10_0000;
 const BIOS_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bios.bin"));
 /// Table de configuration (INT 15h AH=C0h), dans asm/bios.S.
 const CONFIG_TABLE: u16 = 0xE6F5;
+/// Table DBCS vide (INT 21h AX=6300h), dans asm/bios.S.
+pub const DBCS_TABLE: u16 = 0xE700;
 
 /// Adresses dans la BDA.
 mod bda {
@@ -662,25 +664,35 @@ fn classic(word: u16) -> u16 {
     if word as u8 == 0xE0 { word & 0xFF00 } else { word }
 }
 
+/// Retire la prochaine touche du tampon, en l'attendant au besoin.
+pub fn read_key(mem: &GuestMem, host: &mut Host) -> Result<u16> {
+    kb_pump(mem, host);
+    loop {
+        if let Some(w) = kb_pop(mem) {
+            return Ok(w);
+        }
+        match host.input.wait() {
+            Some(ev) => kb_event(mem, ev),
+            None => return Err("attente d'une touche, plus aucune entrée".into()),
+        }
+    }
+}
+
+/// Prochaine touche du tampon, sans la retirer ni attendre.
+pub fn peek_key(mem: &GuestMem, host: &mut Host) -> Option<u16> {
+    kb_pump(mem, host);
+    kb_peek(mem)
+}
+
 fn int16(cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Flow> {
     let ah = cpu.hi(AX);
     match ah {
         0x00 | 0x10 => {
-            kb_pump(mem, host);
-            let word = loop {
-                if let Some(w) = kb_pop(mem) {
-                    break w;
-                }
-                match host.input.wait() {
-                    Some(ev) => kb_event(mem, ev),
-                    None => return Err("INT 16h : attente d'une touche, plus aucune entrée".into()),
-                }
-            };
+            let word = read_key(mem, host).map_err(|e| format!("INT 16h : {e}"))?;
             cpu.set_w(AX, if ah == 0 { classic(word) } else { word });
         }
         0x01 | 0x11 => {
-            kb_pump(mem, host);
-            let word = kb_peek(mem);
+            let word = peek_key(mem, host);
             if let Some(w) = word {
                 cpu.set_w(AX, if ah == 1 { classic(w) } else { w });
             }

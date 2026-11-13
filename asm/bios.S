@@ -27,6 +27,11 @@ config_table:
     .byte 0x60              # 8259 esclave, RTC
     .byte 0, 0, 0, 0
 
+    # Table DBCS vide du DOS (INT 21h AX=6300h) : aucun octet de tête.
+    .org 0xE700, 0xFF
+dbcs_table:
+    .word 0
+
     # Point d'entrée après réinitialisation (F000:FFF0) : pas de POST,
     # l'hôte prépare la machine et charge le programme directement.
     .org 0xFFF0, 0xFF

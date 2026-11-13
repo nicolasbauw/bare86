@@ -92,6 +92,7 @@ pub struct Pc<B: Backend = KvmVm> {
     pub host: Host,
     pub stats: Stats,
     bios: Bios,
+    dos: dos::Dos,
     vga: VgaWindow,
     throttle: Option<Throttle>,
     trace_int: bool,
@@ -129,6 +130,7 @@ impl<B: Backend> Pc<B> {
             host,
             stats: Stats::default(),
             bios,
+            dos: dos::Dos::default(),
             vga: VgaWindow(vec![0; VGA_WINDOW.len()]),
             throttle,
             trace_int: cfg.trace_int,
@@ -227,7 +229,7 @@ impl<B: Backend> Pc<B> {
         self.bios.sync_ticks(mem);
         let flow = match vector {
             0x20 => Flow::Exit(0),
-            0x21 => dos::int21(&mut cpu, mem, &mut self.host),
+            0x21 => self.dos.int21(&mut cpu, mem, &mut self.host)?,
             _ => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
         };
         match flow {

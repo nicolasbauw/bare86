@@ -331,7 +331,7 @@ Comportements constatés sur ce processeur : ENTER 32 bits avec pile 16 bits cop
 - Test de bout en bout `asm/tests/pmode.S` : passage en mode protégé 32 bits, `rep stosb` de 1 000 octets en A0000h, retour en mode réel ; une sortie MMIO, le reste interprété.
 - Comportements constatés : ENTER fait #SS si le nouveau sommet de pile sort de la limite ; ROL/SHLD… mémoire avec compte nul contrôlent quand même l'écriture. Banc : après une triple faute, remettre le vCPU en `KVM_MP_STATE_RUNNABLE`, sinon `KVM_RUN` attend indéfiniment.
 
-### Étape 2 : BIOS en HLE, fait le 2026-11-13 (critère C en attente)
+### Étape 2 : BIOS en HLE, terminée le 2026-11-13
 
 État dans la BDA, comme un vrai BIOS (`src/bios.rs`) ; registres et drapeaux rendus par IRET dans `src/hle.rs`.
 
@@ -347,7 +347,9 @@ Comportements constatés sur ce processeur : ENTER 32 bits avec pile 16 bits cop
 
 Provisoire jusqu'à l'étape 4 : tics recalculés d'après l'horloge hôte à chaque appel hôte (un programme qui scrute 0040:006C sans aucun appel ne les voit pas avancer) ; touches rangées dans le tampon par l'hôte, sans IRQ 1. INT 21h 02h/09h passent par le télétype du BIOS. En ligne de commande, le clavier du terminal est lu sans écho et `--screen` affiche l'écran texte à la fin. Tests : `asm/tests/bios_{text,info,kbd,tick}.S`, 21 tests au total.
 
-Critère « programme Turbo C ou Open Watcom en mode texte » : pas encore vérifié, faute de compilateur 16 bits installé ; il dépend aussi de l'INT 21h (étape 3).
+Critère tenu : `c/tests/textdemo.c`, compilé en `.COM` (modèle tiny) par Open Watcom v2, place du texte en couleur par INT 10h, écrit par `printf` et lit une touche par `getch` (test `watcom_text_program`). Open Watcom est construit depuis ses sources dans `~/Dev/open-watcom-v2` (`./build.sh rel` ; seule l'aide du navigateur Windows échoue, faute de DOSBox) ; `c/build.sh` recompile les tests, et les `.COM` sont versionnés pour que `cargo test` se passe du compilateur. `graph.lib` ne se lie pas en modèle tiny (relocations de segment) : elle attendra le chargeur MZ.
+
+Le runtime Watcom a demandé, en avance sur l'étape 3, une petite partie de l'INT 21h : 01h, 07h, 08h, 0Bh (console par le clavier du BIOS, touches étendues en deux appels), 40h sur les handles 1 et 2, 4400h, 4Ah (sans MCB : tout jusqu'à A000h), 6300h (table DBCS vide en F000:E700), 6601h (page de codes 437). L'état du DOS vit dans `dos::Dos`.
 
 ### Prochaines étapes (vers Doom sous DOS/4GW)
 
