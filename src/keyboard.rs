@@ -118,7 +118,8 @@ pub fn text_scancodes(c: u8) -> Vec<u8> {
 
 /// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
 /// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
-/// `{ctrl+c}`…), pauses (`{wait:500}`, en ms), `{{` pour une accolade. Une
+/// `{ctrl+c}`…), pauses (`{wait:500}`, en ms), vitesse (`{speed:25}` en
+/// MIPS, `{speed:max}`), `{{` pour une accolade. Une
 /// fin de session suit le script.
 pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> {
     use crate::host::InputEvent::{Key, Quit, Text};
@@ -138,6 +139,11 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
         rest = &rest[end + 1..];
         if let Some(ms) = name.strip_prefix("wait:") {
             out.push(crate::host::InputEvent::Wait(ms.parse().map_err(|_| format!("durée invalide : {ms}"))?));
+            continue;
+        }
+        if let Some(v) = name.strip_prefix("speed:") {
+            let mips = if v == "max" { None } else { Some(v.parse().map_err(|_| format!("vitesse invalide : {v}"))?) };
+            out.push(crate::host::InputEvent::Speed(mips));
             continue;
         }
         let (mods, key) = match name.rsplit_once('+') {

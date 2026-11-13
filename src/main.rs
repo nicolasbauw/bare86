@@ -62,9 +62,13 @@ usage: bare86 [options] [program [arguments…]]
   --no-interp    no interpreter bursts: one VM exit per emulated VRAM
                  access (to measure what the interpreter brings)
   --limit S      stop after S seconds, with registers and code at CS:IP
+  window keys:   Alt+Enter full screen, Ctrl+F5 screenshot,
+                 Ctrl+F11/F12 slower/faster, Ctrl+F10 or middle button
+                 releases the mouse
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
+                 {wait:MS} pause, {speed:MIPS} or {speed:max} speed change
   --bench | --throttle | --remap   step 0 measurement benches";
 
 fn main() -> ExitCode {
@@ -173,7 +177,8 @@ fn main() -> ExitCode {
     let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats };
     let result = if window {
         let host_keys = keys;
-        sdl::run("Bare86", move |mut host| {
+        let mips = opts.cfg.mips;
+        sdl::run("Bare86", mips, move |mut host| {
             if let Some(ev) = host_keys {
                 host.input = Box::new(host::ScriptedInput(ev.into()));
             }

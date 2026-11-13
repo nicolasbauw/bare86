@@ -18,7 +18,14 @@ struct FOwnerEx {
     pid: libc::pid_t,
 }
 
-extern "C" fn on_signal(_: c_int) {}
+/// Débordement signalé et pas encore traité. Le signal peut arriver hors
+/// de KVM_RUN (pendant le service d'une sortie de VM) : il n'interrompt
+/// alors rien, et sans ce drapeau le compteur ne serait jamais réarmé.
+static OVERFLOWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_signal(_: c_int) {
+    OVERFLOWED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
 
 pub struct InstrCounter {
     fd: c_int,
@@ -125,7 +132,12 @@ impl Throttle {
         self.credited += instructions;
     }
 
-    /// Appelé quand le compteur a interrompu la VM.
+    /// Débordement du compteur à traiter (`pace`) ; remet le drapeau à zéro.
+    pub fn take_overflow(&self) -> bool {
+        OVERFLOWED.swap(false, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Appelé après un débordement du compteur (`take_overflow`).
     pub fn pace(&mut self) -> io::Result<()> {
         let executed = self.counter.read()? + self.credited;
         let due = std::time::Duration::from_secs_f64(executed as f64 / self.rate);

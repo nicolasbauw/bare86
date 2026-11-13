@@ -65,7 +65,8 @@ impl Dos {
                     host.quit = true;
                     return None;
                 }
-                InputEvent::Mouse { .. } => None,
+                // Vitesse : sans objet au shell (aucun programme ne tourne).
+                InputEvent::Mouse { .. } | InputEvent::Speed(_) => None,
                 InputEvent::Wait(ms) => {
                     std::thread::sleep(std::time::Duration::from_millis(u64::from(ms)));
                     None

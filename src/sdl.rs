@@ -55,6 +55,34 @@ impl InputSource for ChannelInput {
     }
 }
 
+/// Vitesses de Ctrl+F11 / Ctrl+F12 (MIPS) ; au-delà, sans bridage.
+const SPEEDS: [f64; 8] = [3.0, 6.0, 12.0, 25.0, 50.0, 100.0, 200.0, 400.0];
+
+/// Cran suivant (`faster`) ou précédent de l'échelle des vitesses.
+fn step_speed(current: Option<f64>, faster: bool) -> Option<f64> {
+    let i = current.map_or(SPEEDS.len(), |m| SPEEDS.iter().position(|&s| s >= m).unwrap_or(SPEEDS.len()));
+    if faster {
+        SPEEDS.get(i + 1).copied()
+    } else {
+        Some(SPEEDS[i.saturating_sub(1)])
+    }
+}
+
+/// Capture de l'image courante : `bare86_NNN.png` dans le répertoire courant.
+fn screenshot(frame: &Mutex<SharedFrame>) {
+    let Ok(f) = frame.lock() else { return };
+    if f.width == 0 {
+        return;
+    }
+    let png = crate::render::png(f.width, f.height, &f.pixels);
+    drop(f);
+    let Some(path) = (1..10_000).map(|n| format!("bare86_{n:03}.png")).find(|p| !std::path::Path::new(p).exists()) else { return };
+    match std::fs::write(&path, png) {
+        Ok(()) => eprintln!("capture : {path}"),
+        Err(e) => eprintln!("{path} : {e}"),
+    }
+}
+
 /// Coussin visé dans le flux SDL : 40 ms ; reconstitué en silence quand
 /// le flux se vide (à-coups du vCPU).
 const AUDIO_CUSHION: usize = (crate::audio::RATE / 25 * 2) as usize;
@@ -149,7 +177,7 @@ fn send_key(tx: &Sender<InputEvent>, scancode: Option<Scancode>, release: bool) 
 /// Ouvre la fenêtre et exécute `machine` (qui construit et lance la
 /// machine avec l'hôte fourni) sur le thread du vCPU. Rend son résultat, ou
 /// 0 si la fenêtre est fermée avant la fin du programme.
-pub fn run<F>(title: &str, machine: F) -> Result<u8, String>
+pub fn run<F>(title: &str, initial_mips: Option<f64>, machine: F) -> Result<u8, String>
 where
     F: FnOnce(Host) -> Result<u8, String> + Send + 'static,
 {
@@ -203,37 +231,62 @@ where
     // la libèrent.
     let mouse = sdl.mouse();
     let mut captured = false;
-    let mut swallow_f10 = false;
     let mut swallow_middle = false;
-    let set_capture = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, on: bool, captured: &mut bool| {
+    // Raccourcis (Ctrl+F5, F10, F11, F12, Alt+Entrée) : leur relâchement
+    // n'est pas transmis à l'invité.
+    let mut swallowed: Vec<Scancode> = Vec::new();
+    let mut speed = initial_mips;
+    let mut fullscreen = false;
+    let set_title = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, captured: bool, speed: Option<f64>| {
+        let hint = if captured { "bouton central ou Ctrl+F10 libère la souris" } else { "cliquer pour capturer la souris" };
+        let mips = speed.map_or("vitesse max".to_string(), |m| format!("{m} MIPS"));
+        let _ = canvas.window_mut().set_title(&format!("{title} — {mips} — {hint}"));
+    };
+    let set_capture = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, on: bool, captured: &mut bool, speed: Option<f64>| {
         *captured = on;
         mouse.set_relative_mouse_mode(canvas.window(), on);
-        let hint = if on { "bouton central ou Ctrl+F10 libère la souris" } else { "cliquer pour capturer la souris" };
-        let _ = canvas.window_mut().set_title(&format!("{title} — {hint}"));
+        set_title(canvas, on, speed);
     };
-    set_capture(&mut canvas, false, &mut captured);
+    set_capture(&mut canvas, false, &mut captured, speed);
     loop {
         while let Some(ev) = events.poll_event() {
             match ev {
                 Event::Quit { .. } => return Ok(0),
                 Event::Window { win_event: sdl3::event::WindowEvent::FocusLost, .. } if captured => {
-                    set_capture(&mut canvas, false, &mut captured);
+                    set_capture(&mut canvas, false, &mut captured, speed);
                 }
-                Event::KeyDown { scancode: Some(Scancode::F10), keymod, .. }
-                    if captured && keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD) =>
+                Event::KeyDown { scancode: Some(sc @ (Scancode::F5 | Scancode::F10 | Scancode::F11 | Scancode::F12)), keymod, repeat, .. }
+                    if keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD)
+                        && (sc != Scancode::F10 || captured) =>
                 {
-                    swallow_f10 = true;
-                    set_capture(&mut canvas, false, &mut captured);
+                    swallowed.push(sc);
+                    match sc {
+                        Scancode::F10 => set_capture(&mut canvas, false, &mut captured, speed),
+                        Scancode::F5 if !repeat => screenshot(&frame),
+                        Scancode::F11 | Scancode::F12 => {
+                            speed = step_speed(speed, sc == Scancode::F12);
+                            let _ = tx.send(InputEvent::Speed(speed));
+                            set_title(&mut canvas, captured, speed);
+                        }
+                        _ => {}
+                    }
                 }
-                Event::KeyUp { scancode: Some(Scancode::F10), .. } if swallow_f10 => swallow_f10 = false,
+                Event::KeyDown { scancode: Some(Scancode::Return), keymod, repeat: false, .. }
+                    if keymod.intersects(sdl3::keyboard::Mod::LALTMOD | sdl3::keyboard::Mod::RALTMOD) =>
+                {
+                    swallowed.push(Scancode::Return);
+                    fullscreen = !fullscreen;
+                    let _ = canvas.window_mut().set_fullscreen(fullscreen);
+                }
+                Event::KeyUp { scancode: Some(sc), .. } if swallowed.contains(&sc) => swallowed.retain(|&s| s != sc),
                 Event::MouseButtonDown { mouse_btn: sdl3::mouse::MouseButton::Middle, .. } if captured => {
                     swallow_middle = true;
-                    set_capture(&mut canvas, false, &mut captured);
+                    set_capture(&mut canvas, false, &mut captured, speed);
                 }
                 Event::MouseButtonUp { mouse_btn: sdl3::mouse::MouseButton::Middle, .. } if swallow_middle => {
                     swallow_middle = false;
                 }
-                Event::MouseButtonDown { .. } if !captured => set_capture(&mut canvas, true, &mut captured),
+                Event::MouseButtonDown { .. } if !captured => set_capture(&mut canvas, true, &mut captured, speed),
                 Event::MouseMotion { .. } | Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } if !captured => {}
                 Event::KeyDown { scancode, repeat, .. } => {
                     // Répétition : le clavier PC renvoie l'appui.
@@ -314,5 +367,23 @@ where
         } else {
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::step_speed;
+
+    #[test]
+    fn speed_ladder() {
+        assert_eq!(step_speed(None, false), Some(400.0));
+        assert_eq!(step_speed(None, true), None);
+        assert_eq!(step_speed(Some(400.0), true), None);
+        assert_eq!(step_speed(Some(25.0), true), Some(50.0));
+        assert_eq!(step_speed(Some(25.0), false), Some(12.0));
+        assert_eq!(step_speed(Some(3.0), false), Some(3.0));
+        // Valeur hors échelle (--mips 30) : cran supérieur ou inférieur le plus proche.
+        assert_eq!(step_speed(Some(30.0), true), Some(100.0));
+        assert_eq!(step_speed(Some(30.0), false), Some(25.0));
     }
 }

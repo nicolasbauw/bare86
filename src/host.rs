@@ -24,7 +24,7 @@ pub trait AudioSink {
     fn push(&mut self, samples: &[i16]);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InputEvent {
     /// Scancode PC (jeu 1), relâchement = bit 7.
     Key(u8),
@@ -33,6 +33,8 @@ pub enum InputEvent {
     Mouse { dx: i32, dy: i32, buttons: u8 },
     /// Pause d'un script (millisecondes) : l'entrée suivante attend.
     Wait(u32),
+    /// Vitesse réglée à chaud (MIPS ; `None` : sans bridage).
+    Speed(Option<f64>),
     /// Fin de la session : fenêtre fermée, entrée épuisée, fin d'un script.
     Quit,
 }

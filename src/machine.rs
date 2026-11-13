@@ -531,6 +531,12 @@ impl<B: Backend> Pc<B> {
                     break;
                 }
                 Some(InputEvent::Quit) => self.host.quit = true,
+                // Le compteur d'instructions est lié au thread du vCPU : le
+                // bridage est recréé ici.
+                Some(InputEvent::Speed(mips)) => match mips.map(Throttle::new).transpose() {
+                    Ok(t) => self.throttle = t,
+                    Err(e) => eprintln!("bridage : {e}"),
+                },
                 Some(InputEvent::Key(code)) => self.keys.push_back(code),
                 Some(InputEvent::Text(c)) => self.keys.extend(keyboard::text_scancodes(c)),
                 Some(InputEvent::Mouse { dx, dy, buttons }) => self.bios.mouse.event(self.vm.mem(), dx, dy, buttons),
@@ -651,6 +657,11 @@ impl<B: Backend> Pc<B> {
             if self.input_finished() {
                 return Err("fin de l'entrée : session arrêtée".into());
             }
+            if let Some(t) = &mut self.throttle
+                && t.take_overflow()
+            {
+                t.pace()?;
+            }
             self.deliver_irq()?;
             self.stats.exits += 1;
             let mut host_call = false;
@@ -699,11 +710,9 @@ impl<B: Backend> Pc<B> {
                     // Écriture en ROM : ignorée, pas de rafale.
                     mmio = VGA_WINDOW.contains(&(addr as usize));
                 }
-                Exit::Interrupted => {
-                    if let Some(t) = &mut self.throttle {
-                        t.pace()?;
-                    }
-                }
+                // Signal (battement, débordement du compteur) : le bridage
+                // est servi en tête de boucle.
+                Exit::Interrupted => {}
                 Exit::IrqWindow => {}
                 Exit::Step if self.irq_steps.is_some() => {
                     let left = self.irq_steps.unwrap_or(0).saturating_sub(1);
