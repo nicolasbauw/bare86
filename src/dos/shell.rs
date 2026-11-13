@@ -66,7 +66,11 @@ impl Dos {
                     return None;
                 }
                 // Vitesse : sans objet au shell (aucun programme ne tourne).
-                InputEvent::Mouse { .. } | InputEvent::Speed(_) => None,
+                InputEvent::Mouse { .. }
+                | InputEvent::Speed(_)
+                | InputEvent::JoyPresent(_)
+                | InputEvent::JoyAxis(..)
+                | InputEvent::JoyButton(..) => None,
                 InputEvent::Wait(ms) => {
                     std::thread::sleep(std::time::Duration::from_millis(u64::from(ms)));
                     None

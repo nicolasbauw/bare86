@@ -12,6 +12,7 @@ mod dma;
 mod dos;
 mod ems;
 mod font;
+mod gameport;
 mod hle;
 mod host;
 mod interp;

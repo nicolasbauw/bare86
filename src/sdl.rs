@@ -205,6 +205,24 @@ where
     let (tx, rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     let display = SharedDisplay(frame.clone());
+    // Joystick : le premier branché, au démarrage ou à son arrivée. Ouvert
+    // avant le vCPU : les jeux le détectent dès leur lancement.
+    let joysticks = sdl.joystick().ok();
+    let mut joystick: Option<sdl3::joystick::Joystick> = None;
+    let open_joystick = |id, joystick: &mut Option<sdl3::joystick::Joystick>| {
+        if joystick.is_some() {
+            return;
+        }
+        if let Some(j) = joysticks.as_ref().and_then(|s| s.open(id).ok()) {
+            let sticks = if j.num_axes() >= 4 { 2 } else { 1 };
+            eprintln!("joystick : {} ({} axes)", j.name(), j.num_axes());
+            let _ = tx.send(InputEvent::JoyPresent(sticks));
+            *joystick = Some(j);
+        }
+    };
+    if let Some(id) = joysticks.as_ref().and_then(|s| s.joysticks().ok()).and_then(|v| v.first().copied()) {
+        open_joystick(id, &mut joystick);
+    }
     std::thread::Builder::new()
         .name("vcpu".into())
         .spawn(move || {
@@ -282,6 +300,20 @@ where
                     let _ = canvas.window_mut().set_fullscreen(fullscreen);
                 }
                 Event::KeyUp { scancode: Some(sc), .. } if swallowed.contains(&sc) => swallowed.retain(|&s| s != sc),
+                Event::JoyDeviceAdded { which, .. } => open_joystick(which, &mut joystick),
+                Event::JoyDeviceRemoved { which, .. } if joystick.as_ref().is_some_and(|j| j.id() == which) => {
+                    joystick = None;
+                    let _ = tx.send(InputEvent::JoyPresent(0));
+                }
+                Event::JoyAxisMotion { axis_idx, value, .. } if axis_idx < 4 => {
+                    let _ = tx.send(InputEvent::JoyAxis(axis_idx, value));
+                }
+                Event::JoyButtonDown { button_idx, .. } => {
+                    let _ = tx.send(InputEvent::JoyButton(button_idx, true));
+                }
+                Event::JoyButtonUp { button_idx, .. } => {
+                    let _ = tx.send(InputEvent::JoyButton(button_idx, false));
+                }
                 Event::MouseButtonDown { mouse_btn: sdl3::mouse::MouseButton::Middle, .. } if captured => {
                     swallow_middle = true;
                     set_capture(&mut canvas, false, &mut captured, speed);

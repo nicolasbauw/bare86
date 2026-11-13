@@ -35,6 +35,10 @@ pub enum InputEvent {
     Wait(u32),
     /// Vitesse réglée à chaud (MIPS ; `None` : sans bridage).
     Speed(Option<f64>),
+    /// Joystick : manches branchés (0, 1 ou 2), axe (n°, valeur SDL), bouton.
+    JoyPresent(u8),
+    JoyAxis(u8, i16),
+    JoyButton(u8, bool),
     /// Fin de la session : fenêtre fermée, entrée épuisée, fin d'un script.
     Quit,
 }

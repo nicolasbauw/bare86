@@ -229,6 +229,7 @@ pub struct Pc<B: Backend = KvmVm> {
     kbc: Rc<RefCell<Kbc>>,
     xms: crate::xms::Xms,
     dma: Rc<RefCell<crate::dma::Dma>>,
+    gameport: Rc<RefCell<crate::gameport::Gameport>>,
     sb: Rc<RefCell<crate::sb16::Sb16>>,
     opl: Rc<RefCell<crate::opl::Opl>>,
     mixer: crate::audio::Mixer,
@@ -309,6 +310,8 @@ impl<B: Backend> Pc<B> {
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
         io.map(0x92..=0x92, Box::new(KbcPorts(kbc.clone())));
+        let gameport = Rc::new(RefCell::new(crate::gameport::Gameport::new()));
+        io.map(0x201..=0x201, Box::new(crate::gameport::GameportPorts(gameport.clone())));
         let dma = crate::dma::Dma::new().shared();
         io.map(0x00..=0x0F, Box::new(crate::dma::DmaPorts(dma.clone())));
         io.map(0x81..=0x8F, Box::new(crate::dma::DmaPorts(dma.clone())));
@@ -337,6 +340,7 @@ impl<B: Backend> Pc<B> {
             kbc,
             xms: crate::xms::Xms::new(0x10_0000 + cfg.extended_kb * 1024),
             dma,
+            gameport,
             sb,
             opl,
             mixer,
@@ -533,6 +537,9 @@ impl<B: Backend> Pc<B> {
                 Some(InputEvent::Quit) => self.host.quit = true,
                 // Le compteur d'instructions est lié au thread du vCPU : le
                 // bridage est recréé ici.
+                Some(InputEvent::JoyPresent(n)) => self.gameport.borrow_mut().set_present(n),
+                Some(InputEvent::JoyAxis(i, v)) => self.gameport.borrow_mut().set_axis(usize::from(i), v),
+                Some(InputEvent::JoyButton(i, down)) => self.gameport.borrow_mut().set_button(usize::from(i), down),
                 Some(InputEvent::Speed(mips)) => match mips.map(Throttle::new).transpose() {
                     Ok(t) => self.throttle = t,
                     Err(e) => eprintln!("bridage : {e}"),
@@ -814,6 +821,22 @@ impl<B: Backend> Pc<B> {
             // notre propre pas à pas) : TF effacé au retour.
             0x01 => {
                 set_ret_flag(&cpu, mem, 1 << 8, false);
+                Some(Flow::Continue)
+            }
+            // Joystick du BIOS : boutons (DX=0) ou positions (DX=1).
+            0x15 if ah == 0x84 => {
+                let g = self.gameport.borrow();
+                match cpu.w(crate::hle::DX) {
+                    0 => cpu.set_lo(AX, g.bios_buttons()),
+                    _ => {
+                        let [a, b, c, d] = g.bios_positions();
+                        cpu.set_w(AX, a);
+                        cpu.set_w(crate::hle::BX, b);
+                        cpu.set_w(crate::hle::CX, c);
+                        cpu.set_w(crate::hle::DX, d);
+                    }
+                }
+                set_ret_flag(&cpu, mem, CF, false);
                 Some(Flow::Continue)
             }
             0x15 if ah == 0x24 && cpu.lo(AX) <= 2 => {

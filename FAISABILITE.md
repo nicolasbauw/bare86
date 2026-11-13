@@ -540,6 +540,15 @@ Avancement :
 - Tests : `asm/tests/vbe.S` (bloc d'information, mode 101h, banques par 4F05h et par la fonction de fenêtre), `vbe_direct_color_rendering` ; 62 tests.
 - Restent hors critère : INT 10h 1Bh et EFh (demandés par l'installeur de Duke, non gérés, sans conséquence) ; `.BAT` et COMMAND.COM interactif.
 
+### Étape 9 : confort d'utilisation, en cours (2026-11-13)
+
+- **Projet renommé Bare86** (crate, binaire `target/release/bare86`, répertoire `~/Dev/bare86`, titre de la fenêtre, nom OEM VBE). `--help` en anglais ; les autres messages seront traduits plus tard.
+- **Fenêtre** : Alt+Entrée (plein écran), Ctrl+F5 (capture `bare86_NNN.png` dans le répertoire courant), Ctrl+F11 / Ctrl+F12 (vitesse : 3, 6, 12, 25, 50, 100, 200, 400 MIPS ou sans bridage, affichée dans le titre), Ctrl+F10 ou bouton central (souris). Les touches relâchées d'un raccourci ne vont pas à l'invité. `--fullscreen`. Au clavier scripté : `{speed:N}`, `{speed:max}`.
+- **Bridage corrigé** : le signal du compteur d'instructions pouvait tomber hors de KVM_RUN (pendant le service d'une sortie de VM) ; il n'interrompait alors rien, le compteur n'était plus réarmé et le bridage s'éteignait. Doom, qui passe l'essentiel de son temps en sorties, n'était donc jamais bridé. Le gestionnaire lève maintenant un drapeau consulté à chaque tour de boucle. Doom `-timedemo` : 1445 tics sans bridage, 2948 à 50 MIPS, 12230 à 12 MIPS ; banc de l'étape 0 inchangé (±0,2 %).
+- **Fichier de configuration** (`src/config.rs`) : `option = valeur`, comme `--option valeur` (`true` : option seule) ; `program`, `args` ; chemins relatifs au fichier. `--config F`, sinon `./bare86.conf`, sinon `~/.config/bare86/bare86.conf`. La ligne de commande l'emporte.
+- **Joystick** (`src/gameport.rs`) : port 201h (quatre monostables de 24 µs à 1,1 ms selon la position, boutons), INT 15h AH=84h ; premier joystick SDL, ouvert avant le vCPU (les jeux le détectent au lancement). Keen 4 détecte « Joystick #1 » avec une manette Logitech Precision. Coût : Keen mesure la manche en continu (≈ 120 000 lectures de 201h par seconde, chacune une sortie de VM) ; piste : raccourcir les durées.
+- **Restent** : CD-ROM (MSCDEX en HLE, images ISO/CUE, pistes audio), démarrage d'un vrai DOS.
+
 ### L'interpréteur est-il encore nécessaire ? (2026-11-13)
 
 Question du propriétaire du projet : KVM fournit un vCPU, l'interpréteur x86 sert-il encore ? Il ne sert plus qu'à un cas : les accès à la fenêtre VGA qu'aucun mappage ne peut exécuter, parce que la carte les transforme (write modes 1–3, latches, set/reset, masque de bits, plusieurs plans à la fois, lecture d'un autre plan). Sans lui, chacun coûte une sortie de VM (≈ 4,5 µs) ; avec lui, la première sortie est suivie d'une rafale côté hôte (≈ 73 ns par accès) jusqu'à ce que le code ne touche plus la VRAM.
