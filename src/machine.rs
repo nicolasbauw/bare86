@@ -269,6 +269,9 @@ pub struct Pc<B: Backend = KvmVm> {
     unhandled: BTreeSet<(u8, u8)>,
     /// État de la porte A20 appliqué aux slots mémoire.
     a20: Option<bool>,
+    /// Scrutation du clavier à vide (INT 16h AH=01h/11h sans touche) : début
+    /// de la série et dernier appel.
+    idle_polls: Option<(Instant, Instant)>,
     /// DOS fourni par l'hôte ; faux après un démarrage sur image disque.
     dos_hle: bool,
     /// Lecteur de démarrage (redémarrages à chaud).
@@ -309,6 +312,9 @@ impl<B: Backend> Pc<B> {
         io.trace = cfg.trace_io;
         // Port de diagnostic POST, utilisé aussi comme temporisation.
         io.map(0x80..=0x80, Box::new(crate::io::Sink));
+        for base in [0x1F0u16, 0x170, 0x1E8, 0x168] {
+            io.map(base..=base + 7, Box::new(crate::io::NoIde));
+        }
         let pic = Pic::new().shared();
         io.map(0x20..=0x21, Box::new(PicPorts(pic.clone())));
         io.map(0xA0..=0xA1, Box::new(PicPorts(pic.clone())));
@@ -377,6 +383,7 @@ impl<B: Backend> Pc<B> {
             interp: cfg.interp,
             unhandled: BTreeSet::new(),
             a20: None,
+            idle_polls: None,
             dos_hle: true,
             boot_drive: 0,
             mem_size: 0x10_0000 + cfg.extended_kb * 1024,
@@ -897,10 +904,13 @@ impl<B: Backend> Pc<B> {
                 }
             }
         }
-        let mem = self.vm.mem();
         let entry = cpu.clone();
         self.waiting_key = false;
         let ah = (cpu.gpr[0] >> 8) as u8;
+        if vector == 0x16 && matches!(ah, 0x01 | 0x11) {
+            self.idle_poll();
+        }
+        let mem = self.vm.mem();
         if self.drained_at.is_some() && matches!((vector, ah), (0x16, 0x01 | 0x11) | (0x21, 0x06 | 0x0B)) {
             self.polled_after_drain = true;
         }
@@ -982,6 +992,26 @@ impl<B: Backend> Pc<B> {
         self.sync_a20()?;
         self.vm.set_state(&cpu)?;
         Ok(None)
+    }
+
+    /// Boucle d'attente d'une touche par scrutation (FreeCOM à l'invite) :
+    /// au-delà de 20 ms d'appels rapprochés (moins de 200 µs entre deux) sans
+    /// touche, chaque appel cède 1 ms à l'hôte au lieu d'occuper un cœur. Un
+    /// jeu qui scrute une fois par image n'est pas concerné.
+    fn idle_poll(&mut self) {
+        let now = Instant::now();
+        if !self.keys.is_empty() || bios::peek_key(self.vm.mem()).is_some() {
+            self.idle_polls = None;
+            return;
+        }
+        let start = match self.idle_polls {
+            Some((start, last)) if now - last < Duration::from_micros(200) => start,
+            _ => now,
+        };
+        if now - start > Duration::from_millis(20) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.idle_polls = Some((start, Instant::now()));
     }
 
     /// Services non gérés rencontrés (vecteur, AH).

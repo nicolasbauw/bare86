@@ -56,6 +56,18 @@ impl IoBus {
     }
 }
 
+/// Canal IDE sans disque : registres à 0 (ni BSY ni DRDY), comme un
+/// contrôleur dont le bus est tiré à la masse. Un bus flottant (FFh) a BSY
+/// levé : les pilotes de CD-ROM attendaient leur délai maximal sur chaque canal.
+pub struct NoIde;
+
+impl IoDevice for NoIde {
+    fn read(&mut self, _: u16, _: u8) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u16, _: u8, _: u32) {}
+}
+
 /// Port sans effet : écritures ignorées, lectures à FFh.
 pub struct Sink;
 
