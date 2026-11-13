@@ -80,6 +80,15 @@ fn vga_window_without_interpreter() {
 }
 
 #[test]
+fn vbe_banks() {
+    let (code, _, pc) = run(program!("vbe"));
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/vbe.S)");
+    let vga = pc.vga();
+    let fb = vga.fb();
+    assert_eq!((fb[0], fb[0x1_0000], fb[0x2_0000]), (0x11, 0x22, 0x33));
+}
+
+#[test]
 fn protected_mode_burst() {
     let (code, _, pc) = run(program!("pmode"));
     assert_eq!(code, 0x5A);

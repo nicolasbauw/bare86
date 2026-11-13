@@ -89,4 +89,7 @@ pub trait Backend {
     fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()>;
     /// Porte A20 : fermée, la HMA (100000h–10FFEFh) se replie sur 0.
     fn set_a20(&mut self, open: bool) -> Result<()>;
+    /// Framebuffer linéaire SVGA : `size` octets de mémoire hôte à
+    /// `host_addr`, mappés une fois pour toutes à l'adresse du LFB.
+    fn map_lfb(&mut self, host_addr: u64, size: usize) -> Result<()>;
 }

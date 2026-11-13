@@ -27,6 +27,9 @@ const VGA_SLOT: u32 = 31;
 /// Slot de la HMA (100000h–10FFFFh) : la mémoire de 1 Mo, ou les 64
 /// premiers Ko quand la porte A20 est fermée (repliement).
 const HMA_SLOT: u32 = 30;
+/// Framebuffer linéaire SVGA (VBE 2.0), à une adresse physique haute.
+const LFB_SLOT: u32 = 29;
+pub const LFB_ADDR: u64 = 0xE000_0000;
 pub const HMA: std::ops::Range<usize> = 0x10_0000..0x11_0000;
 
 pub struct KvmVm {
@@ -70,6 +73,18 @@ impl KvmVm {
         }
         let vcpu = vm.create_vcpu(0)?;
         vcpu.set_cpuid2(&dos_era_cpuid(&kvm)?)?;
+        // PAT de l'invité : toutes les entrées en write-back. Sous AMD (NPT),
+        // elle s'applique aux tables de pages de l'invité : un extendeur qui
+        // mappe le framebuffer linéaire en non caché (PCD, comme pour un
+        // périphérique) le rendrait très lent (Quake en VESA : 17 i/s).
+        // Le Pentium MMX annoncé n'a pas de PAT ; Intel (EPT) l'ignore.
+        let pat = kvm_bindings::Msrs::from_entries(&[kvm_bindings::kvm_msr_entry {
+            index: 0x277,
+            data: 0x0606_0606_0606_0606,
+            ..Default::default()
+        }])
+        .map_err(|e| format!("MSR PAT : {e:?}"))?;
+        vcpu.set_msrs(&pat)?;
         Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false })
     }
 
@@ -222,6 +237,19 @@ impl Backend for KvmVm {
 
     fn set_a20(&mut self, open: bool) -> Result<()> {
         self.set_a20_slot(open)
+    }
+
+    fn map_lfb(&mut self, host_addr: u64, size: usize) -> Result<()> {
+        let region = kvm_userspace_memory_region {
+            slot: LFB_SLOT,
+            flags: 0,
+            guest_phys_addr: LFB_ADDR,
+            memory_size: size as u64,
+            userspace_addr: host_addr,
+        };
+        // SAFETY: la mémoire doit rester mappée tant que la VM vit (à la charge de l'appelant).
+        unsafe { self.vm.set_user_memory_region(region)? };
+        Ok(())
     }
 
     fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()> {

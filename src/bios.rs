@@ -74,6 +74,77 @@ pub const INT09: u16 = 0xE987;
 /// Reprises après HLT d'un appel qui attend une touche (asm/bios.S).
 /// Point d'entrée XMS (saut court, NOP, `out E0h, al`, `retf`).
 pub const XMS_ENTRY: u16 = 0xE8A0;
+/// VBE (asm/bios.S) : fonction de fenêtre, chaînes, liste des modes.
+const VBE_WIN_FUNC: u16 = 0xE8D0;
+const VBE_OEM: u16 = 0xE8E0;
+const VBE_VENDOR: u16 = 0xE8F0;
+const VBE_PRODUCT: u16 = 0xE900;
+const VBE_REVISION: u16 = 0xE910;
+const VBE_MODES: u16 = 0xE918;
+
+/// Mode VBE de la liste (même ordre que `vbe_modes` dans asm/bios.S).
+struct VbeMode {
+    mode: u16,
+    width: usize,
+    height: usize,
+    bpp: usize,
+}
+
+impl VbeMode {
+    fn bytes(&self) -> usize {
+        self.bpp.div_ceil(8)
+    }
+}
+
+fn vbe_mode(mode: u16) -> Option<VbeMode> {
+    let (width, height, bpp) = match mode {
+        0x100 => (640, 400, 8),
+        0x101 => (640, 480, 8),
+        0x103 => (800, 600, 8),
+        0x105 => (1024, 768, 8),
+        0x110 => (640, 480, 15),
+        0x111 => (640, 480, 16),
+        0x112 => (640, 480, 24),
+        0x113 => (800, 600, 15),
+        0x114 => (800, 600, 16),
+        0x115 => (800, 600, 24),
+        0x116 => (1024, 768, 15),
+        0x117 => (1024, 768, 16),
+        0x118 => (1024, 768, 24),
+        _ => return None,
+    };
+    Some(VbeMode { mode, width, height, bpp })
+}
+
+/// Bloc d'information d'un mode (INT 10h AX=4F01h), 256 octets.
+fn write_mode_info(mem: &GuestMem, at: usize, m: &VbeMode) {
+    let pitch = m.width * m.bytes();
+    mem.fill(at, 256, 0);
+    // Supporté, informations étendues, couleur, graphique, sans télétype, LFB.
+    mem.write_u16(at, 0x009B);
+    mem.write_u8(at + 2, 0x07); // fenêtre A : présente, lecture, écriture
+    mem.write_u16(at + 4, 64); // granularité (Ko)
+    mem.write_u16(at + 6, 64); // taille (Ko)
+    mem.write_u16(at + 8, 0xA000);
+    mem.write_u32(at + 0x0C, (u32::from(ROM_SEG) << 16) | u32::from(VBE_WIN_FUNC));
+    mem.write_u16(at + 0x10, pitch as u16);
+    mem.write_u16(at + 0x12, m.width as u16);
+    mem.write_u16(at + 0x14, m.height as u16);
+    mem.write(at + 0x16, &[8, 16, 1, m.bpp as u8, 1]);
+    mem.write_u8(at + 0x1B, if m.bpp == 8 { 4 } else { 6 }); // compact / couleurs directes
+    let pages = (crate::vga::FB_SIZE / (pitch * m.height)).saturating_sub(1).min(255);
+    mem.write_u8(at + 0x1D, pages as u8);
+    mem.write_u8(at + 0x1E, 1);
+    // Masques (taille, position) rouge, vert, bleu, réservé.
+    let masks: [u8; 8] = match m.bpp {
+        15 => [5, 10, 5, 5, 5, 0, 1, 15],
+        16 => [5, 11, 6, 5, 5, 0, 0, 0],
+        24 => [8, 16, 8, 8, 8, 0, 0, 0],
+        _ => [0; 8],
+    };
+    mem.write(at + 0x1F, &masks);
+    mem.write_u32(at + 0x28, crate::kvm::LFB_ADDR as u32);
+}
 pub const WAIT16: u16 = 0xE850;
 pub const WAIT21: u16 = 0xE860;
 /// INT 33h en ROM (AX=0003h sans sortie) et son bloc d'état (asm/bios.S).
@@ -282,10 +353,155 @@ impl Bios {
                 cpu.set_lo(AX, 0x1A);
                 cpu.set_w(BX, 0x0008);
             }
-            // Pas de VBE avant l'étape 8 : AL reste différent de 4Fh.
-            0x4F => {}
+            0x4F => return self.vbe(cpu, mem),
             _ => return Flow::Unhandled(ah),
         }
+        Flow::Continue
+    }
+
+    // ---- VBE 2.0 (SVGA) ----
+
+    /// INT 10h AH=4Fh. AX=004Fh en cas de succès, 014Fh en cas d'échec.
+    fn vbe(&mut self, cpu: &mut Cpu, mem: &GuestMem) -> Flow {
+        let al = cpu.lo(AX);
+        let es_di = lin(cpu.sreg(ES), cpu.w(DI));
+        let rom = |off: u16| (u32::from(ROM_SEG) << 16) | u32::from(off);
+        let ok = match al {
+            // Information sur le contrôleur ; bloc VBE 2.0 de 512 octets si
+            // l'appelant a écrit « VBE2 ».
+            0x00 => {
+                let vbe2 = mem.read_u32(es_di) == u32::from_le_bytes(*b"VBE2");
+                mem.fill(es_di, if vbe2 { 512 } else { 256 }, 0);
+                mem.write(es_di, b"VESA");
+                mem.write_u16(es_di + 4, 0x0200);
+                mem.write_u32(es_di + 6, rom(VBE_OEM));
+                mem.write_u32(es_di + 14, rom(VBE_MODES));
+                mem.write_u16(es_di + 18, (crate::vga::FB_SIZE >> 16) as u16);
+                if vbe2 {
+                    mem.write_u16(es_di + 20, 0x0001);
+                    mem.write_u32(es_di + 22, rom(VBE_VENDOR));
+                    mem.write_u32(es_di + 26, rom(VBE_PRODUCT));
+                    mem.write_u32(es_di + 30, rom(VBE_REVISION));
+                }
+                true
+            }
+            0x01 => match vbe_mode(cpu.w(CX) & 0x1FF) {
+                Some(m) => {
+                    write_mode_info(mem, es_di, &m);
+                    true
+                }
+                None => false,
+            },
+            0x02 => {
+                let bx = cpu.w(BX);
+                let keep = bx & 0x8000 != 0;
+                if bx & 0x1FF < 0x100 {
+                    let _ = self.set_mode(mem, (bx as u8 & 0x7F) | if keep { 0x80 } else { 0 });
+                    true
+                } else if let Some(m) = vbe_mode(bx & 0x1FF) {
+                    let _ = self.set_mode(mem, 0x13 | 0x80);
+                    let v = crate::vga::Vbe {
+                        mode: m.mode,
+                        width: m.width,
+                        height: m.height,
+                        bpp: m.bpp,
+                        pitch: m.width * m.bytes(),
+                        start: 0,
+                        bank: 0,
+                        lfb: bx & 0x4000 != 0,
+                    };
+                    self.vga.borrow_mut().set_vbe(v, !keep);
+                    true
+                } else {
+                    false
+                }
+            }
+            0x03 => {
+                let mode = match &self.vga.borrow().vbe {
+                    Some(v) => v.mode | if v.lfb { 0x4000 } else { 0 },
+                    None => u16::from(mem.read_u8(bda::VIDEO_MODE)),
+                };
+                cpu.set_w(BX, mode);
+                true
+            }
+            // Fenêtre A seulement, granularité de 64 Ko.
+            0x05 => {
+                let mut vga = self.vga.borrow_mut();
+                match (&mut vga.vbe, cpu.hi(BX), cpu.lo(BX)) {
+                    (Some(v), 0, 0) => {
+                        v.bank = usize::from(cpu.w(DX));
+                        true
+                    }
+                    (Some(v), 1, 0) => {
+                        cpu.set_w(DX, v.bank as u16);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            // Longueur de ligne logique : en points (0), lue (1), en octets (2), maximale (3).
+            0x06 => {
+                let mut vga = self.vga.borrow_mut();
+                match &mut vga.vbe {
+                    Some(v) => {
+                        let bytes = v.bpp.div_ceil(8);
+                        match cpu.lo(BX) {
+                            0 => v.pitch = usize::from(cpu.w(CX)) * bytes,
+                            2 => v.pitch = usize::from(cpu.w(CX)),
+                            _ => {}
+                        }
+                        let pitch = if cpu.lo(BX) == 3 { (crate::vga::FB_SIZE / v.height).min(0x7FFF) } else { v.pitch };
+                        cpu.set_w(BX, pitch as u16);
+                        cpu.set_w(CX, (pitch / bytes) as u16);
+                        cpu.set_w(DX, (crate::vga::FB_SIZE / pitch.max(1)).min(0xFFFF) as u16);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            // Début de l'affichage : réglage (00h, 80h au retour vertical), lecture (01h).
+            0x07 => {
+                let mut vga = self.vga.borrow_mut();
+                match &mut vga.vbe {
+                    Some(v) => {
+                        let bytes = v.bpp.div_ceil(8);
+                        match cpu.lo(BX) {
+                            0x00 | 0x80 => v.start = usize::from(cpu.w(DX)) * v.pitch + usize::from(cpu.w(CX)) * bytes,
+                            _ => {
+                                cpu.set_hi(BX, 0);
+                                cpu.set_w(CX, ((v.start % v.pitch.max(1)) / bytes) as u16);
+                                cpu.set_w(DX, (v.start / v.pitch.max(1)) as u16);
+                            }
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            }
+            // DAC fixe à 6 bits.
+            0x08 => {
+                cpu.set_hi(BX, 6);
+                true
+            }
+            // Palette : entrées de 4 octets (bleu, vert, rouge, alignement).
+            0x09 => {
+                let (count, first) = (usize::from(cpu.w(CX)), usize::from(cpu.w(DX)));
+                let mut vga = self.vga.borrow_mut();
+                for i in 0..count.min(256usize.saturating_sub(first)) {
+                    let at = es_di + i * 4;
+                    let e = &mut vga.dac[first + i];
+                    if cpu.lo(BX) & 0x7F == 0 {
+                        *e = [mem.read_u8(at + 2) & 0x3F, mem.read_u8(at + 1) & 0x3F, mem.read_u8(at) & 0x3F];
+                    } else {
+                        mem.write(at, &[e[2], e[1], e[0], 0]);
+                    }
+                }
+                true
+            }
+            // Sauvegarde d'état (04h), interface protégée (0Ah) : absentes.
+            _ => false,
+        };
+        cpu.set_w(AX, if ok { 0x004F } else { 0x014F });
         Flow::Continue
     }
 

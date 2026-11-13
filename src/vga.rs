@@ -4,7 +4,9 @@
 //! modes de lecture et d'écriture, opérations logiques, masque de bits).
 //!
 //! Mémoire : un memfd de 6 × 64 Ko, les 4 plans, un tampon linéaire qui
-//! fait foi en mode chain4 (13h), puis une scène pour les plans ; au passage chain4 ↔ non chaîné, le
+//! fait foi en mode chain4 (13h), puis une scène pour les plans, suivis du
+//! framebuffer SVGA de 4 Mo (modes VBE : fenêtre par banques de 64 Ko en
+//! A0000, framebuffer linéaire mappé par la machine à `LFB_ADDR`) ; au passage chain4 ↔ non chaîné, le
 //! contenu est réparti ou rassemblé (plan a & 3, décalage a & !3, comme le
 //! câblage de la VGA). La fenêtre A0000 de l'invité est une vue de 64 Ko
 //! sur ce fichier, que la machine fait pointer sur le tampon linéaire ou
@@ -27,6 +29,27 @@ pub const LINEAR: usize = 4;
 /// Scène : tient le contenu du plan `Vram::staged`, qui y fait foi.
 const STAGE: usize = 5;
 const REGIONS: usize = 6;
+/// Framebuffer SVGA, après les régions VGA (une banque = une région de 64 Ko).
+pub const FB_SIZE: usize = 4 << 20;
+const FB_REGION: usize = REGIONS;
+const TOTAL: usize = REGIONS * PLANE + FB_SIZE;
+
+/// Mode VBE en cours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Vbe {
+    pub mode: u16,
+    pub width: usize,
+    pub height: usize,
+    pub bpp: usize,
+    /// Octets par ligne logique (VBE 06h).
+    pub pitch: usize,
+    /// Début de l'affichage, en octets (VBE 07h).
+    pub start: usize,
+    /// Banque visible en A0000 (VBE 05h, en unités de 64 Ko).
+    pub bank: usize,
+    /// Mode demandé avec le framebuffer linéaire (bit 14).
+    pub lfb: bool,
+}
 
 /// Balayage à 70 Hz pour le registre d'état : 449 lignes de 31,778 µs, dont
 /// 400 affichées ; blanc vertical sur les 49 autres, impulsion de
@@ -55,14 +78,14 @@ impl Vram {
         // SAFETY: appels système vérifiés ; les vues vivent autant que Vram.
         unsafe {
             let fd = libc::memfd_create(c"vga-vram".as_ptr(), libc::MFD_CLOEXEC);
-            if fd < 0 || libc::ftruncate(fd, (REGIONS * PLANE) as i64) != 0 {
+            if fd < 0 || libc::ftruncate(fd, TOTAL as i64) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             let map = |len: usize, off: usize| {
                 let p = libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, off as i64);
                 if p == libc::MAP_FAILED { Err(std::io::Error::last_os_error()) } else { Ok(p.cast::<u8>()) }
             };
-            let all = map(REGIONS * PLANE, 0)?;
+            let all = map(TOTAL, 0)?;
             let window = map(PLANE, 0)?;
             Ok(Self { fd, all, window, window_region: 0, staged: None })
         }
@@ -129,7 +152,7 @@ impl Drop for Vram {
     fn drop(&mut self) {
         // SAFETY: mappages et descripteur possédés.
         unsafe {
-            libc::munmap(self.all.cast(), REGIONS * PLANE);
+            libc::munmap(self.all.cast(), TOTAL);
             libc::munmap(self.window.cast(), PLANE);
             libc::close(self.fd);
         }
@@ -141,6 +164,8 @@ impl Drop for Vram {
 pub enum Access {
     /// Chain4 (13h) : le tampon linéaire, en lecture et écriture natives.
     Linear,
+    /// Mode VBE : la banque de 64 Ko du framebuffer, en accès natifs.
+    Bank(usize),
     /// Non chaîné, écriture simple vers ce seul plan. Une lecture native
     /// rendrait ce plan même si le plan de lecture diffère : la machine ne
     /// mappe alors que si aucune lecture n'a été vue dans cette configuration.
@@ -150,6 +175,8 @@ pub enum Access {
 }
 
 pub struct Vga {
+    /// Mode VBE en cours (sinon : modes VGA standard).
+    pub vbe: Option<Vbe>,
     /// Écritures du registre 0Ch du CRTC (adresse de début, octet haut) :
     /// une par changement de page, d'où la cadence d'affichage d'un jeu.
     pub start_writes: u64,
@@ -184,6 +211,7 @@ pub struct Vga {
 impl Vga {
     pub fn new() -> std::io::Result<Self> {
         let mut v = Self {
+            vbe: None,
             start_writes: 0,
             vram: Vram::new()?,
             latch: [0; 4],
@@ -235,8 +263,36 @@ impl Vga {
         self.vram.window as u64
     }
 
+    /// Adresse hôte du framebuffer SVGA (slot du framebuffer linéaire).
+    pub fn fb_host_addr(&self) -> u64 {
+        // SAFETY: dans le mappage complet.
+        unsafe { self.vram.all.add(FB_REGION * PLANE) as u64 }
+    }
+
+    /// Framebuffer SVGA, en lecture (rendu).
+    pub fn fb(&self) -> &[u8] {
+        // SAFETY: dans le mappage complet, vivant autant que self ; le
+        // contenu peut changer sous l'invité (rendu seulement).
+        unsafe { std::slice::from_raw_parts(self.vram.all.add(FB_REGION * PLANE), FB_SIZE) }
+    }
+
+    /// Passe en mode VBE : registres d'un mode 256 couleurs (DAC compris),
+    /// framebuffer effacé sauf si `clear` est faux.
+    pub fn set_vbe(&mut self, v: Vbe, clear: bool) {
+        self.set_mode(0x13, false);
+        if clear {
+            // SAFETY: région du framebuffer, dans le mappage complet.
+            unsafe { std::ptr::write_bytes(self.vram.all.add(FB_REGION * PLANE), 0, FB_SIZE) };
+        }
+        self.vbe = Some(v);
+        self.epoch += 1;
+    }
+
     /// Accès possible à la fenêtre dans la configuration courante.
     pub fn access(&self) -> Access {
+        if let Some(v) = &self.vbe {
+            return Access::Bank(v.bank.min(FB_SIZE / PLANE - 1));
+        }
         if self.chain4() {
             return Access::Linear;
         }
@@ -259,6 +315,7 @@ impl Vga {
         match access {
             Access::Linear => self.vram.point_window(LINEAR),
             Access::Plane(p) => self.vram.point_window(p),
+            Access::Bank(b) => self.vram.point_window(FB_REGION + b),
             Access::Emulated => Ok(()),
         }
     }
@@ -469,6 +526,7 @@ impl Vga {
 
     /// Mode VGA standard programmé par l'INT 10h (registres du BIOS).
     pub fn set_mode(&mut self, mode: u8, clear: bool) {
+        self.vbe = None;
         let p = mode_params(mode);
         self.misc = p.misc;
         self.seq[..5].copy_from_slice(&p.seq);

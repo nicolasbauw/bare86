@@ -358,6 +358,8 @@ impl<B: Backend> Pc<B> {
             a20: None,
         };
         pc.sync_a20()?;
+        let fb = pc.vga.borrow().fb_host_addr();
+        pc.vm.map_lfb(fb, crate::vga::FB_SIZE)?;
         Ok(pc)
     }
 
@@ -462,7 +464,7 @@ impl<B: Backend> Pc<B> {
         }
         let want = match access {
             Access::Emulated => None,
-            Access::Linear => Some(access),
+            Access::Linear | Access::Bank(_) => Some(access),
             // Lectures vues alors qu'elles viseraient un autre plan que celui mappé.
             Access::Plane(p) if p != vga.read_plane() && w.reads_in_epoch > 0 => None,
             Access::Plane(_) if w.mapped || w.emulated_in_epoch >= MAP_THRESHOLD => Some(access),

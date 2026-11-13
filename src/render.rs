@@ -58,6 +58,9 @@ fn geometry(vga: &Vga, pixels_per_char: usize) -> Geometry {
 
 /// Rend l'image du mode graphique courant dans `out` ; `None` en mode texte.
 pub fn render(vga: &Vga, mem: &GuestMem, out: &mut Vec<u32>) -> Option<(usize, usize)> {
+    if let Some(v) = &vga.vbe {
+        return Some(render_vbe(vga, v, out));
+    }
     let bios_mode = mem.read_u8(0x449);
     if matches!(bios_mode, 4..=6) {
         return Some(render_cga(vga, mem, bios_mode, out));
@@ -97,6 +100,37 @@ pub fn render(vga: &Vga, mem: &GuestMem, out: &mut Vec<u32>) -> Option<(usize, u
         }
     }
     Some((g.width, g.height))
+}
+
+/// Mode VBE : 8 bits par la palette, 15, 16 ou 24 bits en couleurs
+/// directes ; depuis le début de l'affichage, ligne logique de `pitch` octets.
+fn render_vbe(vga: &Vga, v: &crate::vga::Vbe, out: &mut Vec<u32>) -> (usize, usize) {
+    let fb = vga.fb();
+    let bytes = v.bpp.div_ceil(8);
+    out.clear();
+    out.reserve(v.width * v.height);
+    let at = |o: usize| fb.get(o).copied().unwrap_or(0);
+    let c5 = |x: u16| u32::from(x & 31) * 255 / 31;
+    for y in 0..v.height {
+        let line = v.start + y * v.pitch;
+        for x in 0..v.width {
+            let o = line + x * bytes;
+            let px = match v.bpp {
+                8 => dac_rgb(vga, at(o)),
+                15 | 16 => {
+                    let w = u16::from_le_bytes([at(o), at(o + 1)]);
+                    if v.bpp == 15 {
+                        (c5(w >> 10) << 16) | (c5(w >> 5) << 8) | c5(w)
+                    } else {
+                        (c5(w >> 11) << 16) | ((u32::from((w >> 5) & 63) * 255 / 63) << 8) | c5(w)
+                    }
+                }
+                _ => (u32::from(at(o + 2)) << 16) | (u32::from(at(o + 1)) << 8) | u32::from(at(o)),
+            };
+            out.push(px);
+        }
+    }
+    (v.width, v.height)
 }
 
 /// Mode texte avec la police `font` : attributs par la palette du

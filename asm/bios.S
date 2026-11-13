@@ -109,6 +109,34 @@ ems_device:
     .ascii "EMMXXXX0"
     jmp 0xF000:(stubs + 0x67 * 16)
 
+    # VBE : fonction de fenêtre (appel lointain, BH=0 réglage / 1 lecture,
+    # BL=fenêtre, DX=position), qui relaie vers INT 10h AX=4F05h ; chaînes
+    # du bloc d'information et liste des modes (INT 10h AX=4F00h).
+    .org 0xE8D0, 0xFF
+vbe_win_func:
+    push ax
+    mov ax, 0x4F05
+    int 0x10
+    pop ax
+    retf
+    .org 0xE8E0, 0xFF
+vbe_oem:
+    .asciz "DOS sous KVM"
+    .org 0xE8F0, 0xFF
+vbe_vendor:
+    .asciz "dosbox-kvm"
+    .org 0xE900, 0xFF
+vbe_product:
+    .asciz "SVGA VBE 2.0"
+    .org 0xE910, 0xFF
+vbe_revision:
+    .asciz "0.1"
+    .org 0xE918, 0xFF
+vbe_modes:
+    .word 0x100, 0x101, 0x103, 0x105
+    .word 0x110, 0x111, 0x112, 0x113, 0x114, 0x115, 0x116, 0x117, 0x118
+    .word 0xFFFF
+
     # INT 09h, IRQ 1 (adresse de l'IBM AT) : scancode lu au 8042, proposé à
     # INT 15h AH=4Fh, puis confié à l'hôte (port E1h) qui tient la BDA.
     .org 0xE987, 0xFF
