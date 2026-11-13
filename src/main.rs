@@ -6,6 +6,7 @@ mod audio;
 mod backend;
 mod bench;
 mod bios;
+mod config;
 mod debug;
 mod dma;
 mod dos;
@@ -44,6 +45,10 @@ use machine::{Config, Pc};
 const USAGE: &str = "\
 usage: bare86 [options] [program [arguments…]]
   without a program: built-in shell on drive C:
+  --config FILE  configuration file (default: ./bare86.conf, then
+                 ~/.config/bare86/bare86.conf); one \"option = value\" per
+                 line, as on the command line, which takes precedence;
+                 \"program = …\" and \"args = …\" give the program to run
   --mount DIR    host directory mounted as C: (default: the program's
                  directory, or the current directory for the shell)
   --mips N       throttle to N million instructions per second
@@ -57,6 +62,7 @@ usage: bare86 [options] [program [arguments…]]
   --shot F.png   screenshot when the program ends
   --wav F.wav    record the sound to a file (without a window)
   --window       SDL3 window (vCPU on its own thread)
+  --fullscreen   window, full screen from the start
   --stats        machine counters at the end (exits, emulated VRAM…)
   --vbe1         VESA 1.2 card: banked windows only, no linear framebuffer
   --no-interp    no interpreter bursts: one VM exit per emulated VRAM
@@ -85,7 +91,19 @@ fn main() -> ExitCode {
     let mut program = None;
     let mut mount: Option<std::path::PathBuf> = None;
     let mut tail = Vec::new();
-    let mut args = std::env::args().skip(1);
+    let mut fullscreen = false;
+    let cli: Vec<String> = std::env::args().skip(1).collect();
+    let conf = match config::load(&cli) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("configuration : {e}");
+            return ExitCode::from(2);
+        }
+    };
+    // Options du fichier d'abord : la ligne de commande l'emporte.
+    let skip_config = cli.iter().position(|a| a == "--config").map(|i| [i, i + 1]);
+    let cli_args = cli.iter().enumerate().filter(|(i, _)| !skip_config.is_some_and(|s| s.contains(i))).map(|(_, a)| a.clone());
+    let mut args = conf.options.clone().into_iter().chain(cli_args);
     while let Some(a) = args.next() {
         let bench = match a.as_str() {
             "--bench" => Some(bench::run as fn() -> _),
@@ -136,6 +154,10 @@ fn main() -> ExitCode {
             "--shot" => shot = args.next(),
             "--wav" => wav = args.next(),
             "--window" => window = true,
+            "--fullscreen" => {
+                window = true;
+                fullscreen = true;
+            }
             "--stats" => stats = true,
             "--font" => font = args.next().map(Into::into),
             "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
@@ -174,11 +196,20 @@ fn main() -> ExitCode {
             }
         }
     }
+    if program.is_none()
+        && let Some(p) = conf.program
+    {
+        program = Some(p);
+        if let Some(a) = conf.args {
+            tail.push(b' ');
+            tail.extend_from_slice(a.as_bytes());
+        }
+    }
     let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats };
     let result = if window {
         let host_keys = keys;
         let mips = opts.cfg.mips;
-        sdl::run("Bare86", mips, move |mut host| {
+        sdl::run("Bare86", mips, fullscreen, move |mut host| {
             if let Some(ev) = host_keys {
                 host.input = Box::new(host::ScriptedInput(ev.into()));
             }

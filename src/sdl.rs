@@ -177,7 +177,7 @@ fn send_key(tx: &Sender<InputEvent>, scancode: Option<Scancode>, release: bool) 
 /// Ouvre la fenêtre et exécute `machine` (qui construit et lance la
 /// machine avec l'hôte fourni) sur le thread du vCPU. Rend son résultat, ou
 /// 0 si la fenêtre est fermée avant la fin du programme.
-pub fn run<F>(title: &str, initial_mips: Option<f64>, machine: F) -> Result<u8, String>
+pub fn run<F>(title: &str, initial_mips: Option<f64>, start_fullscreen: bool, machine: F) -> Result<u8, String>
 where
     F: FnOnce(Host) -> Result<u8, String> + Send + 'static,
 {
@@ -236,7 +236,10 @@ where
     // n'est pas transmis à l'invité.
     let mut swallowed: Vec<Scancode> = Vec::new();
     let mut speed = initial_mips;
-    let mut fullscreen = false;
+    let mut fullscreen = start_fullscreen;
+    if fullscreen {
+        let _ = canvas.window_mut().set_fullscreen(true);
+    }
     let set_title = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, captured: bool, speed: Option<f64>| {
         let hint = if captured { "bouton central ou Ctrl+F10 libère la souris" } else { "cliquer pour capturer la souris" };
         let mips = speed.map_or("vitesse max".to_string(), |m| format!("{m} MIPS"));
