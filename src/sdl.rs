@@ -203,10 +203,34 @@ where
     let mut size = (0, 0);
     let mut shown = 0u64;
     let mut buttons = 0u8;
+    // Souris capturée (mode relatif, curseur masqué) : un clic dans la
+    // fenêtre la capture, Ctrl+F10 ou la perte du focus la libère.
+    let mouse = sdl.mouse();
+    let mut captured = false;
+    let mut swallow_f10 = false;
+    let set_capture = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, on: bool, captured: &mut bool| {
+        *captured = on;
+        mouse.set_relative_mouse_mode(canvas.window(), on);
+        let hint = if on { "Ctrl+F10 libère la souris" } else { "cliquer pour capturer la souris" };
+        let _ = canvas.window_mut().set_title(&format!("{title} — {hint}"));
+    };
+    set_capture(&mut canvas, false, &mut captured);
     loop {
         while let Some(ev) = events.poll_event() {
             match ev {
                 Event::Quit { .. } => return Ok(0),
+                Event::Window { win_event: sdl3::event::WindowEvent::FocusLost, .. } if captured => {
+                    set_capture(&mut canvas, false, &mut captured);
+                }
+                Event::KeyDown { scancode: Some(Scancode::F10), keymod, .. }
+                    if captured && keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD) =>
+                {
+                    swallow_f10 = true;
+                    set_capture(&mut canvas, false, &mut captured);
+                }
+                Event::KeyUp { scancode: Some(Scancode::F10), .. } if swallow_f10 => swallow_f10 = false,
+                Event::MouseButtonDown { .. } if !captured => set_capture(&mut canvas, true, &mut captured),
+                Event::MouseMotion { .. } | Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } if !captured => {}
                 Event::KeyDown { scancode, repeat, .. } => {
                     // Répétition : le clavier PC renvoie l'appui.
                     let _ = repeat;
