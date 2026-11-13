@@ -58,6 +58,8 @@ usage : dosbox [options] [programme [arguments…]]
   --wav F.wav    son enregistré dans un fichier (sans fenêtre)
   --window       fenêtre SDL3 (vCPU sur son propre thread)
   --stats        compteurs de la machine à la fin (sorties, VRAM émulée…)
+  --no-interp    sans rafales de l'interpréteur : une sortie de VM par accès
+                 à la VRAM émulée (pour mesurer son apport)
   --limit S      arrêt au bout de S secondes, avec registres et code à CS:IP
   --font F.psf   police PSF du mode texte (par défaut : Terminus 8×16 embarquée)
   --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
@@ -121,6 +123,7 @@ fn main() -> ExitCode {
                 _ => return ExitCode::from(2),
             },
             "--trace-io" => cfg.trace_io = true,
+            "--no-interp" => cfg.interp = false,
             "--debug" => debug = true,
             "--screen" => screen = true,
             "--term" => term = true,

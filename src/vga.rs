@@ -150,6 +150,9 @@ pub enum Access {
 }
 
 pub struct Vga {
+    /// Écritures du registre 0Ch du CRTC (adresse de début, octet haut) :
+    /// une par changement de page, d'où la cadence d'affichage d'un jeu.
+    pub start_writes: u64,
     vram: Vram,
     latch: [u8; 4],
     pub misc: u8,
@@ -181,6 +184,7 @@ pub struct Vga {
 impl Vga {
     pub fn new() -> std::io::Result<Self> {
         let mut v = Self {
+            start_writes: 0,
             vram: Vram::new()?,
             latch: [0; 4],
             misc: 0x67,
@@ -452,6 +456,9 @@ impl Vga {
                     }
                 } else {
                     self.crtc[i] = v;
+                }
+                if i == 0x0C {
+                    self.start_writes += 1;
                 }
             }
             0x3D8 => self.cga_mode = v,

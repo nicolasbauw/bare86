@@ -35,11 +35,13 @@ fn main() {
         .opt_level(2)
         .warnings(false)
         .compile("nuked_opl3");
-    for entry in std::fs::read_dir("asm/tests").unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "S") {
-            println!("cargo:rerun-if-changed={}", path.display());
-            assemble(&path, &out, 0x100);
+    for dir in ["asm/tests", "asm/bench"] {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "S") {
+                println!("cargo:rerun-if-changed={}", path.display());
+                assemble(&path, &out, 0x100);
+            }
         }
     }
 }

@@ -99,13 +99,16 @@ pub struct Config {
     pub trace_int: bool,
     /// Ports d'E/S sans périphérique signalés.
     pub trace_io: bool,
+    /// Rafales de l'interpréteur après une sortie MMIO (sinon : une sortie
+    /// de VM par accès à la VRAM émulée ; `--no-interp`, pour mesurer).
+    pub interp: bool,
     /// Durée maximale d'exécution (diagnostic : registres affichés à l'arrêt).
     pub limit: Option<Duration>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, limit: None }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, limit: None }
     }
 }
 
@@ -137,7 +140,8 @@ impl Mmio for MmioBus<'_> {
 
 /// Suivi du mappage de la fenêtre A0000 (FAISABILITE, « décision sur la
 /// mémoire vidéo ») : linéaire tout de suite, plan unique après
-/// `MAP_THRESHOLD` accès émulés sans changement de configuration, puis
+/// `MAP_THRESHOLD` accès émulés sans quitter le mode « un plan » (les
+/// changements de plan ne remettent pas le compte à zéro), puis
 /// maintenu d'un plan à l'autre : un changement de plan ne coûte que deux
 /// copies de 64 Ko (scène de `Vram`), moins qu'une sortie MMIO.
 #[derive(Default)]
@@ -147,6 +151,9 @@ struct WindowState {
     emulated_in_epoch: u64,
     /// Lectures émulées dans cette configuration (plan de lecture ≠ plan écrit).
     reads_in_epoch: u64,
+    /// Configurations successives en mode « un plan » (`emulated_in_epoch`
+    /// les cumule alors).
+    plane_streak: bool,
 }
 
 const MAP_THRESHOLD: u64 = 600;
@@ -163,6 +170,8 @@ pub struct Stats {
     /// Mappages et démappages de la fenêtre A0000.
     pub vram_maps: u64,
     pub vram_unmaps: u64,
+    /// Changements de page de l'affichage (écritures du registre 0Ch du CRTC).
+    pub page_flips: u64,
     /// Sorties d'E/S par port (lectures et écritures).
     pub io_ports: std::collections::HashMap<u16, u64>,
 }
@@ -179,6 +188,7 @@ impl std::fmt::Debug for Stats {
             .field("vram_emulated", &self.vram_emulated)
             .field("vram_maps", &self.vram_maps)
             .field("vram_unmaps", &self.vram_unmaps)
+            .field("page_flips", &self.page_flips)
             .field("io_ports", &ports)
             .finish()
     }
@@ -242,6 +252,7 @@ pub struct Pc<B: Backend = KvmVm> {
     last_render: Option<Instant>,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
+    interp: bool,
     /// Instructions à exécuter en pas à pas avant d'achever un transfert
     /// Sound Blaster court (détection d'IRQ).
     irq_steps: Option<u32>,
@@ -342,6 +353,7 @@ impl<B: Backend> Pc<B> {
             stepping: false,
             irq_steps: None,
             trace_int: cfg.trace_int,
+            interp: cfg.interp,
             unhandled: BTreeSet::new(),
             a20: None,
         };
@@ -436,12 +448,18 @@ impl<B: Backend> Pc<B> {
     fn update_window(&mut self) -> Result<()> {
         let mut vga = self.vga.borrow_mut();
         let w = &mut self.window;
+        let access = vga.access();
         if vga.epoch != w.epoch {
             w.epoch = vga.epoch;
-            w.emulated_in_epoch = 0;
+            // D'un plan à l'autre, les accès s'additionnent : un flux de
+            // colonnes (un plan chacune) finit par être mappé.
+            let plane = matches!(access, Access::Plane(_));
+            if !(plane && w.plane_streak) {
+                w.emulated_in_epoch = 0;
+            }
+            w.plane_streak = plane;
             w.reads_in_epoch = 0;
         }
-        let access = vga.access();
         let want = match access {
             Access::Emulated => None,
             Access::Linear => Some(access),
@@ -644,6 +662,9 @@ impl<B: Backend> Pc<B> {
                     if matches!(port, 0x60 | 0x92) {
                         self.sync_a20()?;
                     }
+                    if matches!(port, 0x3D4 | 0x3D5) {
+                        self.stats.page_flips = self.vga.borrow().start_writes;
+                    }
                 }
                 Exit::IoIn { port, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
@@ -695,7 +716,9 @@ impl<B: Backend> Pc<B> {
                 Exit::Shutdown => return Err("arrêt du processeur (triple faute ?)".into()),
                 Exit::Other(e) => return Err(format!("sortie de VM inattendue : {e}").into()),
             }
-            if mmio {
+            if mmio && !self.interp {
+                self.stats.mmio_exits += 1;
+            } else if mmio {
                 self.stats.mmio_exits += 1;
                 let mut vga = self.vga.borrow_mut();
                 let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };

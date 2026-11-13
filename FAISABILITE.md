@@ -527,6 +527,36 @@ Avancement :
 
   Gain du déplacement : ≈ 4 % (1583 → 1521). L'écart restant avec `-nosound` (≈ 4 %) vient surtout du travail de l'invité lui-même : DMX mélange les effets en logiciel dans ses IRQ, comme sur une vraie machine. Celui avec la version d'avant le son (≈ 2 %) est le coût fixe des nouveaux périphériques à chaque sortie de VM.
 
+### L'interpréteur est-il encore nécessaire ? (2026-11-13)
+
+Question du propriétaire du projet : KVM fournit un vCPU, l'interpréteur x86 sert-il encore ? Il ne sert plus qu'à un cas : les accès à la fenêtre VGA qu'aucun mappage ne peut exécuter, parce que la carte les transforme (write modes 1–3, latches, set/reset, masque de bits, plusieurs plans à la fois, lecture d'un autre plan). Sans lui, chacun coûte une sortie de VM (≈ 4,5 µs) ; avec lui, la première sortie est suivie d'une rafale côté hôte (≈ 73 ns par accès) jusqu'à ce que le code ne touche plus la VRAM.
+
+Outils ajoutés : `--no-interp` (une sortie de VM par accès émulé, KVM terminant lui-même l'instruction ; test `vga_window_without_interpreter` : mêmes résultats) ; `page_flips` dans `--stats` (écritures du registre 0Ch du CRTC, une par changement de page) ; banc `asm/bench/vrambench.S`, chronométré dans l'invité par RDTSC calibré sur les tics du BIOS (`cargo test --release vram_bench -- --ignored --nocapture`).
+
+**Banc** (µs par répétition, deux passes ; les valeurs absolues varient du simple au double d'une passe à l'autre, les rapports sont stables) :
+
+| Motif | Avec | Sans | Rapport |
+|---|---|---|---|
+| 1. EGA 0Dh, copie écran → écran par latches, 8000 o (défilement de Keen) | 205–328 | 51 430–89 738 | ×250–275 |
+| 2. EGA 0Dh, remplissage 4 plans par set/reset, 8000 o | 167–273 | 41 898–58 821 | ×215–250 |
+| 3. Mode X, 320 colonnes d'un plan (Doom, Wolfenstein) | 2 275–3 689 | 2 374–3 422 | ≈ 1 (mappé) |
+| 4. Mode X, remplissage 4 plans, 16 000 o | 219–375 | 41 742–58 437 | ×155–190 |
+| 5. Mode 13h, 64 000 o | 13–22 | 11–30 | natif |
+
+**Correction trouvée en route** : le motif 3 n'était jamais mappé (18,2 ms par image au lieu de 1,6). Le seuil de 600 accès émulés avant mappage repartait de zéro à chaque changement de configuration, donc à chaque colonne. Les accès s'additionnent maintenant tant que l'on reste en mode « un plan » ; le compte ne repart à zéro qu'en le quittant, ce qui garde au seuil son rôle face aux alternances coûteuses (mappage ↔ émulation = suppression et recréation d'un slot KVM).
+
+**Jeux** :
+
+| Jeu | Avec | Sans |
+|---|---|---|
+| Doom, `-timedemo demo1 -nosound` (tics, 3 passes) | 1450–1456 | 1553–1559 (+7 %) |
+| Wolfenstein, 60 s d'attente + démo | 36 863 sorties MMIO, 167 changements de page | 1 562 419 sorties (≈ 12 % du temps), 120 changements de page (−28 %) |
+| Commander Keen 4, 60 s de démo | 266 268 sorties MMIO, 1 324 changements de page | 1 958 196 sorties (≈ 16 % du temps), 1 265 (−4 %) |
+
+**Conclusion** : l'interpréteur reste nécessaire, mais seulement comme accélérateur de la logique VGA (×150 à ×275 sur les motifs émulés). Les jeux VGA 256 couleurs modernes (Doom, Quake) s'en passeraient presque (+7 % pour Doom, rien pour Quake) ; les jeux EGA et mode X qui recopient par latches ou écrivent plusieurs plans à la fois (Keen, Wolfenstein, la plupart des jeux 16 couleurs) perdraient de 12 à 16 % du temps en sorties sur ces démos légères, et bien plus sur un jeu chargé. Ce n'est pas un émulateur de processeur : il rend la main au vCPU après 256 instructions sans accès à la VRAM, ou sur tout ce qu'il ne gère pas.
+
+Relevé en route (Commander Keen 4 v1.4 shareware, archive.org `Keen4e-sw`, MD5 `278e73fe…`, `~/Dev/dos-progs/keen4/c`) : l'image du mode EGA de Keen n'est rendue que sur 160 points de large (géométrie lue dans le CRTC, à revoir), et Keen ne voit pas l'EMS (« Expanded 0 Kbytes » : détection probable par ouverture du périphérique `EMMXXXX0` par INT 21h).
+
 ## Questions ouvertes
 
 - ~~DOS réimplémenté côté hôte ou vrai noyau FreeDOS dans la VM ?~~ Tranché : voir [Choix du DOS](#choix-du-dos).

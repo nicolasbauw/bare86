@@ -66,6 +66,20 @@ fn vga_window_goes_through_interpreter() {
 }
 
 #[test]
+fn vga_window_without_interpreter() {
+    // Même programme, une sortie de VM par accès : même résultat.
+    let cfg = Config { interp: false, ..Config::default() };
+    let cases: [(&str, &[u8], u8, usize); 2] = [("vga", program!("vga"), 0xE7, 0), ("pmode", program!("pmode"), 0x5A, 999)];
+    for (name, image, byte, at) in cases {
+        let (mut pc, _) = machine(&cfg, image);
+        assert_eq!(pc.run().expect("exécution"), byte, "{name}");
+        assert_eq!(pc.vga_byte(at), byte, "{name}");
+        assert_eq!(pc.stats.interpreted, 0, "{name}");
+        assert!(pc.stats.mmio_exits >= 1000, "{name} : {:?}", pc.stats);
+    }
+}
+
+#[test]
 fn protected_mode_burst() {
     let (code, _, pc) = run(program!("pmode"));
     assert_eq!(code, 0x5A);
@@ -344,4 +358,20 @@ fn flags_show_a_386() {
 #[test]
 fn a20_gate() {
     assert_eq!(run(program!("a20")).0, 0, "n° du contrôle en échec (voir asm/tests/a20.S)");
+}
+
+/// Banc de la mémoire vidéo (asm/bench/vrambench.S), avec puis sans les
+/// rafales de l'interpréteur :
+/// `cargo test --release vram_bench -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn vram_bench() {
+    for interp in [true, false] {
+        let cfg = Config { interp, ..Config::default() };
+        let (mut pc, out) = machine(&cfg, program!("vrambench"));
+        assert_eq!(pc.run().expect("exécution"), 0);
+        println!("--- {} ---", if interp { "avec l'interpréteur" } else { "sans (--no-interp)" });
+        println!("{}", String::from_utf8_lossy(&out.0.borrow()).trim_end());
+        println!("{:?}", pc.stats);
+    }
 }
