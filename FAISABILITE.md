@@ -500,7 +500,7 @@ Avancement :
 
 **Critère de l'étape 6 tenu** (Doom tourne, ainsi que Quake, Dune avec EMS, DOS/4GW, DOS/32A, PMODE/W, CWSDPMI). Reste hors critère : relier les UMB à la chaîne de MCB du DOS (`DOS=UMB`, `LOADHIGH`), un hôte DPMI en HLE seulement si un programme l'exige.
 
-### Étape 7 : Sound Blaster 16, en cours (2026-11-13)
+### Étape 7 : Sound Blaster 16, terminée le 2026-11-13
 
 - **DMA 8237** (`src/dma.rs`) : canaux 0–3 et 4–7, pages, auto-init, sens décroissant, fin de comptage ; transferts tirés par le périphérique au fil du rendu.
 - **DSP SB16 4.05** (`src/sb16.rs`) en 220h, IRQ 5, DMA 1 et 5 : réinitialisation, version, sortie directe, DMA 8 et 16 bits (cycle unique, auto-init, haute vitesse), taux (40h, 41h), pause et reprise, silence (80h), IRQ forcées (F2h, F3h), mixeur (état des IRQ en 82h, volumes maître et voix). Rééchantillonnage linéaire vers 48 kHz.
@@ -514,8 +514,18 @@ Avancement :
   - **Détection d'IRQ d'`AUDBLAST.DRV`** : il démasque les IRQ 3, 5, 7, 10, lance un transfert DMA d'un octet (14h) et l'attend par une boucle calibrée pour un 386, qui ne dure qu'≈ 10 µs à la vitesse native (mesuré). Livrée au passage suivant du mixeur, l'IRQ arrivait trop tard (« Unable to initialize your audio hardware ») ; livrée tout de suite, elle précédait la remise à zéro du drapeau attendu. Désormais, un transfert en cycle unique de ≤ 64 unités est achevé après 64 instructions en pas à pas.
   - **Fuite de TF** : pendant ce pas à pas, un `pushf` ou un `int` de l'invité empile TF=1, que le pilote rétablit plus tard (piège déjà noté). L'INT 1 qui arrive alors sur le stub de la ROM (aucun débogueur dans l'invité) efface TF au retour.
   - Niveaux : musique FM forte (rms ≈ 15 000), 0,05 % d'échantillons écrêtés dans les passages les plus forts.
-- **Coût** : la synthèse OPL et le mixeur tournent sur le thread du vCPU ; le timedemo de Doom passe de 124 à 111 i/s. Piste : rendu sur un thread dédié.
-- **Reste** : écoute de la démo de King's Quest VI dans la fenêtre par le propriétaire du projet.
+- **Écoute de la démo de King's Quest VI par le propriétaire du projet : pas de craquements, musique correcte. Critère de l'étape 7 tenu.**
+- **FM sur un thread audio** (`src/audio.rs`, `src/opl.rs`) : le vCPU garde ce qui répond à l'invité (adresse, minuteries et état de l'OPL ; DSP et DMA, qui lisent la mémoire invitée ; haut-parleur) et envoie toutes les 5 ms un bloc déjà mixé avec les écritures OPL horodatées ; le thread audio y ajoute la FM (Nuked-OPL3) et livre à la sortie. Un seul canal : toute écriture antérieure à la fin d'un bloc arrive avant lui. Le mixeur ne rend qu'au-delà d'1 ms due, testée par une simple comparaison d'instants.
+- **Mesure** (Doom `-timedemo demo1`, tics réels, médiane de 5 passes alternées, même machine) :
+
+  | Version | Tics | i/s |
+  |---|---|---|
+  | Avant le son (`1e2a44f`), `-nosound` | 1429 | 123 |
+  | FM sur le thread du vCPU (`b4b124f`), avec son | ≈ 1583 (3 passes) | 111 |
+  | FM sur le thread audio, `-nosound` | 1457 | 121 |
+  | FM sur le thread audio, avec son | 1521 | 116 |
+
+  Gain du déplacement : ≈ 4 % (1583 → 1521). L'écart restant avec `-nosound` (≈ 4 %) vient surtout du travail de l'invité lui-même : DMX mélange les effets en logiciel dans ses IRQ, comme sur une vraie machine. Celui avec la version d'avant le son (≈ 2 %) est le coût fixe des nouveaux périphériques à chaque sortie de VM.
 
 ## Questions ouvertes
 

@@ -269,7 +269,8 @@ impl Pc<KvmVm> {
 }
 
 impl<B: Backend> Pc<B> {
-    pub fn with_backend(vm: B, cfg: &Config, host: Host) -> Result<Self> {
+    pub fn with_backend(vm: B, cfg: &Config, mut host: Host) -> Result<Self> {
+        let mixer = crate::audio::Mixer::new(std::mem::replace(&mut host.audio, Box::new(crate::host::NullAudio::default())));
         let vga = Rc::new(RefCell::new(Vga::new()?));
         let mut bios = Bios::new(cfg.extended_kb, vga.clone());
         bios.install(vm.mem());
@@ -302,7 +303,7 @@ impl<B: Backend> Pc<B> {
         // DSP et mixeur ; 228h–229h reviennent à la FM.
         io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, Box::new(crate::sb16::Sb16Ports(sb.clone())));
         io.map(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));
-        let opl = Rc::new(RefCell::new(crate::opl::Opl::new(crate::audio::RATE)));
+        let opl = Rc::new(RefCell::new(crate::opl::Opl::new()));
         for ports in [0x388..=0x38B, crate::sb16::BASE..=crate::sb16::BASE + 3, crate::sb16::BASE + 8..=crate::sb16::BASE + 9] {
             io.map(ports, Box::new(crate::opl::OplPorts(opl.clone())));
         }
@@ -324,7 +325,7 @@ impl<B: Backend> Pc<B> {
             dma,
             sb,
             opl,
-            mixer: crate::audio::Mixer::new(),
+            mixer,
             ems: crate::ems::Ems::new(cfg.ems_kb),
             keys: VecDeque::new(),
             last_scancode: None,
@@ -470,8 +471,9 @@ impl<B: Backend> Pc<B> {
 
     /// Minuterie : IRQ 0 échue, cadence du battement.
     fn service_timers(&mut self) -> Result<()> {
+        let now = Instant::now();
         let mut pit = self.pit.borrow_mut();
-        if pit.take_irq0(Instant::now()) {
+        if pit.take_irq0(now) {
             self.pic.borrow_mut().raise(0);
         }
         self.heartbeat.set_period(heartbeat_period(pit.irq0_period()))?;
@@ -484,15 +486,7 @@ impl<B: Backend> Pc<B> {
             self.irq_steps = Some(SHORT_TRANSFER_STEPS);
             self.vm.set_single_step(true)?;
         }
-        self.mixer.advance(
-            Instant::now(),
-            &mut sb,
-            &mut self.opl.borrow_mut(),
-            &mut self.dma.borrow_mut(),
-            self.vm.mem(),
-            speaker,
-            self.host.audio.as_mut(),
-        );
+        self.mixer.advance(now, &mut sb, &mut self.opl.borrow_mut(), &mut self.dma.borrow_mut(), self.vm.mem(), speaker);
         if sb.take_irq() {
             self.pic.borrow_mut().raise(crate::sb16::IRQ);
         }

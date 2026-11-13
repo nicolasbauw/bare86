@@ -2,8 +2,10 @@
 //! FM OPL3 (YMF262) : synthèse par Nuked-OPL3 (third_party, LGPL-2.1+),
 //! registres d'adresse des deux bancs, minuteries et registre d'état
 //! (détection AdLib). Ports 388h–38Bh, et 220h–223h, 228h–229h de la
-//! Sound Blaster. Chaque écriture est horodatée et appliquée à l'échantillon
-//! correspondant lors du rendu, pour que la musique garde son rythme.
+//! Sound Blaster. Côté vCPU (`Opl`) : adresse, minuteries, état, et
+//! écritures horodatées ; côté thread audio (`FmSynth`) : la puce, qui
+//! applique chaque écriture à l'échantillon de son instant, pour que la
+//! musique garde son rythme.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -44,24 +46,32 @@ impl Timer {
     }
 }
 
+/// Écriture de registre horodatée : instant, registre (banc 1 = 100h), valeur.
+pub type Write = (Instant, u16, u8);
+
+/// Partie de la puce vue par l'invité, sur le thread du vCPU.
 pub struct Opl {
-    chip: *mut Chip,
-    rate: u32,
     address: u16,
     timers: [Timer; 2],
-    /// Écritures en attente de rendu : instant, registre, valeur.
-    pending: VecDeque<(Instant, u16, u8)>,
-    /// Puce sollicitée au moins une fois (sinon le rendu est sauté).
-    used: bool,
+    /// Écritures pas encore confiées au thread audio.
+    writes: Vec<Write>,
+}
+
+impl Default for Opl {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Opl {
-    pub fn new(rate: u32) -> Self {
-        // SAFETY: allocation C vérifiée ; libérée par Drop.
-        let chip = unsafe { dosbox_opl3_new(rate) };
-        assert!(!chip.is_null(), "OPL3 : allocation impossible");
+    pub fn new() -> Self {
         let t = |step| Timer { step: Duration::from_micros(step), ..Default::default() };
-        Self { chip, rate, address: 0, timers: [t(80), t(320)], pending: VecDeque::new(), used: false }
+        Self { address: 0, timers: [t(80), t(320)], writes: Vec::new() }
+    }
+
+    /// Écritures en attente, pour le thread audio.
+    pub fn take_writes(&mut self) -> Vec<Write> {
+        std::mem::take(&mut self.writes)
     }
 
     fn status(&mut self, now: Instant) -> u8 {
@@ -95,11 +105,35 @@ impl Opl {
                     }
                 }
             }
-            reg => {
-                self.used = true;
-                self.pending.push_back((now, reg, v));
-            }
+            reg => self.writes.push((now, reg, v)),
         }
+    }
+}
+
+/// La puce Nuked-OPL3, sur le thread audio.
+pub struct FmSynth {
+    chip: *mut Chip,
+    rate: u32,
+    /// Écritures reçues, pas encore appliquées.
+    pending: VecDeque<Write>,
+    /// Puce sollicitée au moins une fois (sinon le rendu est sauté).
+    used: bool,
+}
+
+// SAFETY: la puce n'est accédée que par son propriétaire, sur un seul thread à la fois.
+unsafe impl Send for FmSynth {}
+
+impl FmSynth {
+    pub fn new(rate: u32) -> Self {
+        // SAFETY: allocation C vérifiée ; libérée par Drop.
+        let chip = unsafe { dosbox_opl3_new(rate) };
+        assert!(!chip.is_null(), "OPL3 : allocation impossible");
+        Self { chip, rate, pending: VecDeque::new(), used: false }
+    }
+
+    pub fn queue(&mut self, writes: Vec<Write>) {
+        self.used |= !writes.is_empty();
+        self.pending.extend(writes);
     }
 
     /// Ajoute à `out` (stéréo entrelacée) le rendu des trames qui
@@ -127,7 +161,7 @@ impl Opl {
     }
 }
 
-impl Drop for Opl {
+impl Drop for FmSynth {
     fn drop(&mut self) {
         // SAFETY: allouée par dosbox_opl3_new.
         unsafe { dosbox_opl3_free(self.chip) };
@@ -160,7 +194,7 @@ mod tests {
 
     #[test]
     fn adlib_detection_and_a_note() {
-        let mut o = Opl::new(48_000);
+        let mut o = Opl::new();
         let t = Instant::now();
         let w = |o: &mut Opl, reg: u16, v: u8| {
             o.address = reg;
@@ -178,8 +212,10 @@ mod tests {
         for (reg, v) in [(0x20, 0x01), (0x23, 0x01), (0x40, 0x10), (0x43, 0x00), (0x60, 0xF0), (0x63, 0xF0), (0x80, 0x77), (0x83, 0x77), (0xC0, 0x30), (0xA0, 0x98), (0xB0, 0x31)] {
             w(&mut o, reg, v);
         }
+        let mut fm = FmSynth::new(48_000);
+        fm.queue(o.take_writes());
         let mut out = vec![0f32; 2 * 4800];
-        o.render(t, [1.0, 1.0], &mut out);
+        fm.render(t, [1.0, 1.0], &mut out);
         let peak = out.iter().fold(0f32, |m, x| m.max(x.abs()));
         assert!(peak > 0.05, "crête {peak}");
     }

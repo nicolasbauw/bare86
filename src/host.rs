@@ -53,7 +53,7 @@ pub trait TextSink {
 
 pub struct Host {
     pub display: Box<dyn Display>,
-    pub audio: Box<dyn AudioSink>,
+    pub audio: Box<dyn AudioSink + Send>,
     pub input: Box<dyn InputSource>,
     pub text: Box<dyn TextSink>,
     /// Écran texte affiché en direct dans le terminal (`--term`).
