@@ -37,13 +37,17 @@ impl Dos {
     /// Lit une ligne au clavier ; `None` quand l'entrée est épuisée. Le shell
     /// tourne côté hôte, sans programme invité pour servir l'IRQ 1 : il lit
     /// donc l'entrée de l'hôte directement.
-    pub fn shell_read(&mut self, mem: &GuestMem, host: &mut Host) -> Option<Vec<u8>> {
+    /// `redraw` rafraîchit l'affichage (terminal, fenêtre) avant chaque attente.
+    pub fn shell_read(
+        &mut self,
+        mem: &GuestMem,
+        host: &mut Host,
+        redraw: &mut dyn FnMut(&GuestMem, &mut Host),
+    ) -> Option<Vec<u8>> {
         let mut line = Vec::new();
         let mut shift = 0u8;
         loop {
-            if let Some(t) = &mut host.term {
-                t.render(mem);
-            }
+            redraw(mem, host);
             let ascii = match host.input.wait()? {
                 InputEvent::Text(c) => keyboard::char_word(c).map(|w| w as u8),
                 InputEvent::Key(code) => {

@@ -153,10 +153,6 @@ fn main() -> ExitCode {
     }
     let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats };
     let result = if window {
-        if opts.program.is_none() {
-            eprintln!("--window : programme requis (le shell interne ne s'affiche pas encore en fenêtre)");
-            return ExitCode::from(2);
-        }
         let host_keys = keys;
         sdl::run("DOS sous KVM", move |mut host| {
             if let Some(ev) = host_keys {

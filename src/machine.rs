@@ -36,6 +36,21 @@ use crate::vga::{Access, Vga, VgaPorts};
 /// Attente maximale sur HLT sans échéance de minuterie (entrées à relire).
 const HALT_MAX: Duration = Duration::from_millis(10);
 
+/// Image de l'écran : mode graphique, ou texte si une police est fournie
+/// (clignotement à environ 1,9 Hz depuis `started`).
+fn frame_of(
+    vga: &Vga,
+    mem: &crate::mem::GuestMem,
+    font: Option<&crate::font::Font>,
+    started: Instant,
+) -> Option<(usize, usize, Vec<u32>)> {
+    let mut px = Vec::new();
+    let blink_on = (started.elapsed().as_millis() / 267).is_multiple_of(2);
+    let (w, h) = crate::render::render(vga, mem, &mut px)
+        .or_else(|| crate::render::render_text(vga, mem, font?, blink_on, &mut px))?;
+    Some((w, h, px))
+}
+
 /// Le programme a remplacé l'INT 09h de la ROM (il lit le clavier lui-même).
 fn int09_hooked(mem: &crate::mem::GuestMem) -> bool {
     mem.read_u32(0x09 * 4) != (u32::from(ROM_SEG) << 16 | u32::from(bios::INT09))
@@ -302,7 +317,18 @@ impl<B: Backend> Pc<B> {
         loop {
             let mem = self.vm.mem();
             self.dos.prompt(mem, &mut self.host);
-            let Some(line) = self.dos.shell_read(mem, &mut self.host) else { return Ok(code) };
+            let (vga, font, started) = (&self.vga, &self.font, self.started);
+            let mut redraw = |mem: &crate::mem::GuestMem, host: &mut Host| {
+                if let Some(t) = &mut host.term {
+                    t.render(mem);
+                }
+                if host.wants_frames
+                    && let Some((width, height, pixels)) = frame_of(&vga.borrow(), mem, font.as_ref(), started)
+                {
+                    host.display.present(&crate::host::Frame { width, height, pixels: &pixels });
+                }
+            };
+            let Some(line) = self.dos.shell_read(mem, &mut self.host, &mut redraw) else { return Ok(code) };
             match self.dos.shell_command(mem, &mut self.host, &line)? {
                 dos::Action::Continue => {}
                 dos::Action::Exit => return Ok(code),
@@ -668,13 +694,7 @@ impl<B: Backend> Pc<B> {
 
     /// Image de l'écran : mode graphique, ou texte si une police est chargée.
     pub fn frame(&self) -> Option<(usize, usize, Vec<u32>)> {
-        let mut px = Vec::new();
-        let vga = self.vga.borrow();
-        let mem = self.vm.mem();
-        let blink_on = (self.started.elapsed().as_millis() / 267).is_multiple_of(2);
-        let (w, h) = crate::render::render(&vga, mem, &mut px)
-            .or_else(|| crate::render::render_text(&vga, mem, self.font.as_ref()?, blink_on, &mut px))?;
-        Some((w, h, px))
+        frame_of(&self.vga.borrow(), self.vm.mem(), self.font.as_ref(), self.started)
     }
 
     /// Police du mode texte (rendu en image : fenêtre, captures).
