@@ -3,14 +3,17 @@
 //! DAC, divers, CRTC, état), mémoire vidéo et logique des plans (latches,
 //! modes de lecture et d'écriture, opérations logiques, masque de bits).
 //!
-//! Mémoire : un memfd de 5 × 64 Ko, les 4 plans puis un tampon linéaire qui
-//! fait foi en mode chain4 (13h) ; au passage chain4 ↔ non chaîné, le
+//! Mémoire : un memfd de 6 × 64 Ko, les 4 plans, un tampon linéaire qui
+//! fait foi en mode chain4 (13h), puis une scène pour les plans ; au passage chain4 ↔ non chaîné, le
 //! contenu est réparti ou rassemblé (plan a & 3, décalage a & !3, comme le
 //! câblage de la VGA). La fenêtre A0000 de l'invité est une vue de 64 Ko
 //! sur ce fichier, que la machine fait pointer sur le tampon linéaire ou
 //! sur un plan quand la configuration le permet (accès natifs, sans sortie
 //! de VM) ; sinon les accès passent par `read` / `write` (MMIO,
-//! interpréteur). Voir FAISABILITE.md, « décision sur la mémoire vidéo ».
+//! interpréteur). Pour un plan, la vue ne change pas de cible : elle reste
+//! sur la scène, qui tient le contenu du plan choisi ; changer de plan
+//! revient à deux copies de 64 Ko (scène → ancien plan, nouveau plan →
+//! scène), sans appel système ni faute de page dans KVM. Voir FAISABILITE.md, « décision sur la mémoire vidéo ».
 //!
 //! Texte et CGA restent en RAM ordinaire (B0000–BFFFF).
 
@@ -21,7 +24,9 @@ use crate::io::IoDevice;
 pub const PLANE: usize = 0x1_0000;
 /// Région du tampon linéaire chain4 dans le fichier.
 pub const LINEAR: usize = 4;
-const REGIONS: usize = 5;
+/// Scène : tient le contenu du plan `Vram::staged`, qui y fait foi.
+const STAGE: usize = 5;
+const REGIONS: usize = 6;
 
 /// Balayage à 70 Hz pour le registre d'état : 449 lignes de 31,778 µs, dont
 /// 400 affichées ; blanc vertical sur les 49 autres, impulsion de
@@ -41,6 +46,8 @@ struct Vram {
     window: *mut u8,
     /// Région visée par la vue de la fenêtre.
     window_region: usize,
+    /// Plan dont le contenu est dans la scène.
+    staged: Option<usize>,
 }
 
 impl Vram {
@@ -57,24 +64,45 @@ impl Vram {
             };
             let all = map(REGIONS * PLANE, 0)?;
             let window = map(PLANE, 0)?;
-            Ok(Self { fd, all, window, window_region: 0 })
+            Ok(Self { fd, all, window, window_region: 0, staged: None })
         }
     }
 
+    /// Région où se trouve réellement le contenu de `region`.
+    fn locate(&self, region: usize) -> usize {
+        if self.staged == Some(region) { STAGE } else { region }
+    }
+
     fn get(&self, region: usize, off: usize) -> u8 {
-        debug_assert!(region < REGIONS && off < PLANE);
+        debug_assert!(region < STAGE && off < PLANE);
+        let region = self.locate(region);
         // SAFETY: dans le mappage ; le vCPU est arrêté pendant les accès hôte.
         unsafe { self.all.add(region * PLANE + off).read_volatile() }
     }
 
     fn set(&self, region: usize, off: usize, v: u8) {
-        debug_assert!(region < REGIONS && off < PLANE);
+        debug_assert!(region < STAGE && off < PLANE);
+        let region = self.locate(region);
         // SAFETY: idem.
         unsafe { self.all.add(region * PLANE + off).write_volatile(v) }
     }
 
     /// Fait pointer la vue de la fenêtre sur `region` (même adresse hôte).
     fn point_window(&mut self, region: usize) -> std::io::Result<()> {
+        // Un plan passe par la scène : la vue n'est remappée qu'une fois.
+        let target = if region < LINEAR { STAGE } else { region };
+        if region < LINEAR && self.staged != Some(region) {
+            // SAFETY: régions distinctes du mappage complet ; le vCPU est arrêté.
+            unsafe {
+                let stage = self.all.add(STAGE * PLANE);
+                if let Some(old) = self.staged {
+                    std::ptr::copy_nonoverlapping(stage, self.all.add(old * PLANE), PLANE);
+                }
+                std::ptr::copy_nonoverlapping(self.all.add(region * PLANE), stage, PLANE);
+            }
+            self.staged = Some(region);
+        }
+        let region = target;
         if region == self.window_region {
             return Ok(());
         }
@@ -453,7 +481,7 @@ impl Vga {
         self.chain4_was = self.chain4();
         self.epoch += 1;
         if clear {
-            for r in 0..REGIONS {
+            for r in 0..STAGE {
                 for o in 0..PLANE {
                     self.vram.set(r, o, 0);
                 }
@@ -687,6 +715,26 @@ mod tests {
         v.read(20);
         v.write(20, 0xFF);
         assert_eq!(v.plane_byte(0, 20), 0xF0);
+    }
+
+    #[test]
+    fn plane_stage_follows_window() {
+        let mut v = Vga::new().unwrap();
+        v.set_mode(0x12, true);
+        let poke = |v: &Vga, off: usize, val: u8| unsafe { v.vram.window.add(off).write_volatile(val) };
+        let peek = |v: &Vga, off: usize| unsafe { v.vram.window.add(off).read_volatile() };
+        v.point_window(Access::Plane(1)).unwrap();
+        poke(&v, 10, 0x11);
+        // Le modèle voit l'écriture native tant que le plan est en scène…
+        assert_eq!(v.plane_byte(1, 10), 0x11);
+        v.point_window(Access::Plane(2)).unwrap();
+        poke(&v, 10, 0x22);
+        // …et après le changement de plan, chacun garde la sienne.
+        assert_eq!((v.plane_byte(1, 10), v.plane_byte(2, 10)), (0x11, 0x22));
+        v.point_window(Access::Plane(1)).unwrap();
+        assert_eq!(peek(&v, 10), 0x11);
+        v.point_window(Access::Linear).unwrap();
+        assert_eq!(v.plane_byte(1, 10), 0x11);
     }
 
     #[test]

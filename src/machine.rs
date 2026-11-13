@@ -129,9 +129,9 @@ impl Mmio for MmioBus<'_> {
 
 /// Suivi du mappage de la fenêtre A0000 (FAISABILITE, « décision sur la
 /// mémoire vidéo ») : linéaire tout de suite, plan unique après
-/// `MAP_THRESHOLD` accès émulés sans changement de configuration ;
-/// retour à l'émulation pour `COOLDOWN` si la configuration change trop
-/// souvent (un plan par pixel : les remappages coûteraient plus cher).
+/// `MAP_THRESHOLD` accès émulés sans changement de configuration, puis
+/// maintenu d'un plan à l'autre : un changement de plan ne coûte que deux
+/// copies de 64 Ko (scène de `Vram`), moins qu'une sortie MMIO.
 #[derive(Default)]
 struct WindowState {
     mapped: bool,
@@ -139,15 +139,9 @@ struct WindowState {
     emulated_in_epoch: u64,
     /// Lectures émulées dans cette configuration (plan de lecture ≠ plan écrit).
     reads_in_epoch: u64,
-    rate_start: Option<Instant>,
-    changes_in_rate: u32,
-    cooldown_until: Option<Instant>,
 }
 
 const MAP_THRESHOLD: u64 = 600;
-const RATE_PERIOD: Duration = Duration::from_millis(100);
-const MAX_CHANGES_PER_PERIOD: u32 = 200;
-const COOLDOWN: Duration = Duration::from_millis(500);
 
 #[derive(Default, Debug)]
 pub struct Stats {
@@ -358,26 +352,15 @@ impl<B: Backend> Pc<B> {
     /// Mappe, remappe ou démappe la fenêtre A0000 selon la configuration VGA.
     fn update_window(&mut self) -> Result<()> {
         let mut vga = self.vga.borrow_mut();
-        let now = Instant::now();
         let w = &mut self.window;
         if vga.epoch != w.epoch {
             w.epoch = vga.epoch;
             w.emulated_in_epoch = 0;
             w.reads_in_epoch = 0;
-            if w.rate_start.is_none_or(|t| now.duration_since(t) >= RATE_PERIOD) {
-                w.rate_start = Some(now);
-                w.changes_in_rate = 0;
-            }
-            w.changes_in_rate += 1;
-            if w.changes_in_rate > MAX_CHANGES_PER_PERIOD {
-                w.cooldown_until = Some(now + COOLDOWN);
-            }
         }
-        let cooling = w.cooldown_until.is_some_and(|t| now < t);
         let access = vga.access();
         let want = match access {
             Access::Emulated => None,
-            _ if cooling => None,
             Access::Linear => Some(access),
             // Lectures vues alors qu'elles viseraient un autre plan que celui mappé.
             Access::Plane(p) if p != vga.read_plane() && w.reads_in_epoch > 0 => None,
