@@ -31,6 +31,7 @@ pub enum InputEvent {
     /// Caractère tapé au terminal (sans scancode d'origine).
     Text(u8),
     Mouse { dx: i32, dy: i32, buttons: u8 },
+    /// Fin de la session : fenêtre fermée, entrée épuisée, fin d'un script.
     Quit,
 }
 
@@ -53,6 +54,15 @@ pub struct Host {
     pub audio: Box<dyn AudioSink>,
     pub input: Box<dyn InputSource>,
     pub text: Box<dyn TextSink>,
+    /// Fin de session demandée (`InputEvent::Quit` reçu).
+    pub quit: bool,
+    /// Fin de session effective : après `quit`, le programme a redemandé
+    /// une touche alors que tout ce qui avait été tapé était lu.
+    pub stop: bool,
+    /// Premier constat d'un tampon vide après `quit` : un programme qui
+    /// scrute le clavier garde un délai de grâce pour traiter les dernières
+    /// touches (boucles d'événements qui les traitent au tour suivant).
+    pub drained_at: Option<std::time::Instant>,
 }
 
 /// Dernière image conservée, pour les captures des tests.
@@ -130,8 +140,12 @@ impl StdinInput {
         let mut b = 0u8;
         // SAFETY: lecture d'un octet dans `b`.
         unsafe {
-            if libc::poll(&mut fd, 1, timeout_ms) <= 0 || libc::read(0, (&raw mut b).cast(), 1) != 1 {
+            if libc::poll(&mut fd, 1, timeout_ms) <= 0 {
                 return None;
+            }
+            // Fin de l'entrée (tube vidé, Ctrl-D) : fin de session.
+            if libc::read(0, (&raw mut b).cast(), 1) != 1 {
+                return Some(InputEvent::Quit);
             }
         }
         Some(InputEvent::Text(b))
@@ -190,6 +204,9 @@ impl Host {
             audio: Box::new(NullAudio::default()),
             input: Box::new(ScriptedInput::default()),
             text,
+            quit: false,
+            stop: false,
+            drained_at: None,
         }
     }
 }

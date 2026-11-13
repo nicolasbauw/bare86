@@ -565,10 +565,21 @@ pub fn screen_text(mem: &GuestMem) -> Vec<String> {
     let page = mem.read_u8(bda::PAGE);
     (0..s.rows)
         .map(|r| {
-            let line: String = (0..s.cols).map(|c| char::from(mem.read_u8(s.cell(page, r as u8, c as u8)))).collect();
+            let line: String = (0..s.cols).map(|c| cp437(mem.read_u8(s.cell(page, r as u8, c as u8)))).collect();
             line.trim_end().to_owned()
         })
         .collect()
+}
+
+/// Caractère Unicode d'un octet de la page de codes 437.
+fn cp437(b: u8) -> char {
+    const HIGH: &str = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ";
+    match b {
+        0 => ' ',
+        0x20..=0x7E => char::from(b),
+        0x80.. => HIGH.chars().nth(usize::from(b - 0x80)).unwrap_or('?'),
+        _ => '·',
+    }
 }
 
 /// Octet d'attribut d'une cellule de la page active (tests).
@@ -642,6 +653,7 @@ fn kb_pop(mem: &GuestMem) -> Option<u16> {
 
 /// Range un événement d'entrée dans le tampon clavier de la BDA.
 /// Provisoire : à l'étape 4, l'IRQ 1 et INT 09h s'en chargeront.
+/// Applique un événement : état des modificateurs, touche rangée.
 fn kb_event(mem: &GuestMem, ev: InputEvent) {
     match ev {
         InputEvent::Key(code) => {
@@ -666,20 +678,27 @@ fn kb_event(mem: &GuestMem, ev: InputEvent) {
     }
 }
 
-fn kb_full(mem: &GuestMem) -> bool {
-    let mut next = mem.read_u16(bda::KB_TAIL) + 2;
-    if next >= mem.read_u16(bda::KB_END) {
-        next = mem.read_u16(bda::KB_START);
-    }
-    next == mem.read_u16(bda::KB_HEAD)
-}
-
-/// Range les entrées en attente, tant que le tampon a de la place : le
-/// reste attend dans la source (texte collé, entrée redirigée).
+/// Range l'entrée en attente dans le tampon de la BDA. Le relâchement d'un
+/// modificateur attend aussi que la touche frappée avec lui ait été lue :
+/// AH=02h juste après la lecture voit l'état de la frappe (DFlat, Alt+F).
 fn kb_pump(mem: &GuestMem, host: &mut Host) {
-    while !kb_full(mem) {
-        let Some(ev) = host.input.poll() else { break };
-        kb_event(mem, ev);
+    // Une touche à la fois, comme sous des doigts : la suivante attend que
+    // la précédente ait été lue (les boucles d'événements, DFlat par
+    // exemple, ne mélangent ainsi pas l'ordre des raccourcis et du texte).
+    if kb_peek(mem).is_some() {
+        return;
+    }
+    while !host.quit {
+        match host.input.poll() {
+            Some(InputEvent::Quit) => host.quit = true,
+            Some(ev) => {
+                kb_event(mem, ev);
+                if kb_peek(mem).is_some() {
+                    break;
+                }
+            }
+            None => break,
+        }
     }
 }
 
@@ -695,17 +714,30 @@ pub fn read_key(mem: &GuestMem, host: &mut Host) -> Result<u16> {
         if let Some(w) = kb_pop(mem) {
             return Ok(w);
         }
+        if host.quit {
+            host.stop = true;
+            return Err("attente d'une touche, fin de l'entrée".into());
+        }
         match host.input.wait() {
+            Some(InputEvent::Quit) => host.quit = true,
             Some(ev) => kb_event(mem, ev),
             None => return Err("attente d'une touche, plus aucune entrée".into()),
         }
     }
 }
 
+/// Délai laissé à un programme qui scrute le clavier après la fin de l'entrée.
+const QUIT_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// Prochaine touche du tampon, sans la retirer ni attendre.
 pub fn peek_key(mem: &GuestMem, host: &mut Host) -> Option<u16> {
     kb_pump(mem, host);
-    kb_peek(mem)
+    let key = kb_peek(mem);
+    if key.is_none() && host.quit {
+        let since = *host.drained_at.get_or_insert_with(std::time::Instant::now);
+        host.stop = since.elapsed() >= QUIT_GRACE;
+    }
+    key
 }
 
 fn int16(cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Flow> {
@@ -722,8 +754,9 @@ fn int16(cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Flow> {
             }
             set_ret_flag(cpu, mem, ZF, word.is_none());
         }
+        // État des modificateurs, sans lire l'entrée : il reste celui de la
+        // dernière touche rangée.
         0x02 | 0x12 => {
-            kb_pump(mem, host);
             cpu.set_lo(AX, mem.read_u8(bda::SHIFT));
             if ah == 0x12 {
                 cpu.set_hi(AX, 0);

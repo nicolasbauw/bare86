@@ -35,12 +35,15 @@ usage : dosbox [options] [programme [arguments…]]
   --trace-io     signale les ports d'E/S sans périphérique
   --debug        débogueur (registres, mémoire, pas à pas)
   --screen       affiche l'écran texte à la fin du programme
+  --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
+                 texte, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
   --bench | --throttle | --remap   bancs de mesure de l'étape 0";
 
 fn main() -> ExitCode {
     let mut cfg = Config::default();
     let mut debug = false;
     let mut screen = false;
+    let mut keys = None;
     let mut program = None;
     let mut mount: Option<std::path::PathBuf> = None;
     let mut tail = Vec::new();
@@ -81,6 +84,17 @@ fn main() -> ExitCode {
             "--trace-io" => cfg.trace_io = true,
             "--debug" => debug = true,
             "--screen" => screen = true,
+            "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
+                Some(Ok(ev)) => keys = Some(ev),
+                Some(Err(e)) => {
+                    eprintln!("--keys : {e}");
+                    return ExitCode::from(2);
+                }
+                None => {
+                    eprintln!("--keys : script attendu");
+                    return ExitCode::from(2);
+                }
+            },
             "--mount" => match args.next() {
                 Some(d) => mount = Some(d.into()),
                 None => {
@@ -106,7 +120,11 @@ fn main() -> ExitCode {
             }
         }
     }
-    let result = Pc::new(&cfg, Host::terminal()).and_then(|mut pc| {
+    let host = match keys {
+        Some(ev) => Host { input: Box::new(host::ScriptedInput(ev.into())), ..Host::headless(Box::new(host::Stdout)) },
+        None => Host::terminal(),
+    };
+    let result = Pc::new(&cfg, host).and_then(|mut pc| {
         match &program {
             Some(path) => {
                 let path = std::path::Path::new(path);

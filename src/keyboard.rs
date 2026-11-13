@@ -96,6 +96,76 @@ pub fn char_word(c: u8) -> Option<u16> {
     None
 }
 
+/// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
+/// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
+/// `{ctrl+c}`…), `{{` pour une accolade. Une fin de session suit le script.
+pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> {
+    use crate::host::InputEvent::{Key, Quit, Text};
+    let mut out = Vec::new();
+    let mut rest = spec.as_bytes();
+    while let Some((&c, tail)) = rest.split_first() {
+        rest = tail;
+        if c != b'{' || rest.first() == Some(&b'{') {
+            if c == b'{' {
+                rest = &rest[1..];
+            }
+            out.push(Text(if c == b'\n' { b'\r' } else { c }));
+            continue;
+        }
+        let end = rest.iter().position(|&c| c == b'}').ok_or("« { » sans « } »")?;
+        let name = String::from_utf8_lossy(&rest[..end]).to_ascii_lowercase();
+        rest = &rest[end + 1..];
+        let (mods, key) = match name.rsplit_once('+') {
+            Some((m, k)) => (m.to_string(), k.to_string()),
+            None => (String::new(), name.clone()),
+        };
+        let scan = match key.as_str() {
+            "enter" => 0x1C,
+            "esc" => 0x01,
+            "tab" => 0x0F,
+            "bs" | "backspace" => 0x0E,
+            "space" => 0x39,
+            "up" => 0x48,
+            "down" => 0x50,
+            "left" => 0x4B,
+            "right" => 0x4D,
+            "home" => 0x47,
+            "end" => 0x4F,
+            "pgup" => 0x49,
+            "pgdn" => 0x51,
+            "ins" => 0x52,
+            "del" => 0x53,
+            k if k.len() == 1 => {
+                let ch = k.as_bytes()[0];
+                NORMAL.iter().position(|&x| x == ch && ch != 0).ok_or(format!("touche inconnue : {k}"))? as u8
+            }
+            k if k.starts_with('f') => match k[1..].parse::<u8>() {
+                Ok(n @ 1..=10) => 0x3A + n,
+                Ok(11) => 0x57,
+                Ok(12) => 0x58,
+                _ => return Err(format!("touche inconnue : {k}")),
+            },
+            k => return Err(format!("touche inconnue : {k}")),
+        };
+        let mods: Vec<u8> = mods
+            .split('+')
+            .filter(|m| !m.is_empty())
+            .map(|m| match m {
+                "alt" => Ok(0x38),
+                "ctrl" => Ok(0x1D),
+                "shift" => Ok(0x2A),
+                _ => Err(format!("modificateur inconnu : {m}")),
+            })
+            .collect::<Result<_, _>>()?;
+        out.extend(mods.iter().map(|&m| Key(m)));
+        out.push(Key(scan));
+        out.push(Key(scan | 0x80));
+        out.extend(mods.iter().rev().map(|&m| Key(m | 0x80)));
+    }
+    out.push(Quit);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +184,13 @@ mod tests {
         assert_eq!(char_word(b'\n'), Some(0x1C0D));
         assert_eq!(char_word(3), Some(0x2E03));
         assert_eq!(char_word(b'~'), Some(0x297E));
+    }
+
+    #[test]
+    fn script() {
+        use crate::host::InputEvent::{Key, Quit, Text};
+        let ev = parse_script("a{alt+f}{{{enter}").unwrap();
+        assert_eq!(ev, [Text(b'a'), Key(0x38), Key(0x21), Key(0xA1), Key(0xB8), Text(b'{'), Key(0x1C), Key(0x9C), Quit]);
+        assert!(parse_script("{nope}").is_err());
     }
 }

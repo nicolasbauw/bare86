@@ -1088,9 +1088,9 @@ impl Dos {
                 set_ret_flag(cpu, mem, CF, true);
                 Out::Keep
             }
+            // Fonction inconnue : AL = 0, comme MS-DOS.
             _ => {
-                cpu.set_w(AX, ERR_INVALID_FUNCTION);
-                set_ret_flag(cpu, mem, CF, true);
+                cpu.set_lo(AX, 0);
                 Out::Flow(Flow::Unhandled(ah))
             }
         })

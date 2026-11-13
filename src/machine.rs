@@ -262,11 +262,12 @@ impl<B: Backend> Pc<B> {
             let sp = cpu.linear(2, cpu.gpr[4] & 0xFFFF) as usize;
             let (ip, cs) = (mem.read_u16(sp), mem.read_u16(sp + 2));
             eprintln!(
-                "[int] {vector:02X}h AX={:04X} BX={:04X} CX={:04X} DX={:04X} depuis {cs:04X}:{ip:04X}",
+                "[int] {vector:02X}h AX={:04X} BX={:04X} CX={:04X} DX={:04X} ES={:04X} depuis {cs:04X}:{ip:04X}",
                 cpu.gpr[0] & 0xFFFF,
                 cpu.gpr[3] & 0xFFFF,
                 cpu.gpr[1] & 0xFFFF,
-                cpu.gpr[2] & 0xFFFF
+                cpu.gpr[2] & 0xFFFF,
+                cpu.seg[0].selector
             );
         }
         let mem = self.vm.mem();
@@ -285,7 +286,23 @@ impl<B: Backend> Pc<B> {
             }
             Flow::Continue => {}
         }
+        if self.trace_int {
+            let mem = self.vm.mem();
+            let flags = mem.read_u16(cpu.linear(2, (cpu.gpr[4] + 4) & 0xFFFF) as usize);
+            eprintln!(
+                "      → AX={:04X} BX={:04X} CX={:04X} DX={:04X} ES={:04X} CF={}",
+                cpu.gpr[0] & 0xFFFF,
+                cpu.gpr[3] & 0xFFFF,
+                cpu.gpr[1] & 0xFFFF,
+                cpu.gpr[2] & 0xFFFF,
+                cpu.seg[0].selector,
+                flags & 1
+            );
+        }
         self.vm.set_state(&cpu)?;
+        if self.host.stop {
+            return Err("fin de l'entrée : session arrêtée".into());
+        }
         Ok(None)
     }
 
