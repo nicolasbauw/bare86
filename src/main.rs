@@ -42,30 +42,30 @@ use host::Host;
 use machine::{Config, Pc};
 
 const USAGE: &str = "\
-usage : dosbox [options] [programme [arguments…]]
-  sans programme : shell interne sur le lecteur C:
-  --mount DIR    répertoire hôte monté en C: (par défaut : celui du
-                 programme, ou le répertoire courant pour le shell)
-  --mips N       bridage à N millions d'instructions par seconde
-  --mem MO       mémoire totale en Mo (16 par défaut)
-  --ems MO       mémoire EMS en Mo, en plus (4 par défaut, 0 à 32)
-  --trace-int    journal des interruptions servies par l'hôte
-  --trace-io     signale les ports d'E/S sans périphérique
-  --debug        débogueur (registres, mémoire, pas à pas)
-  --screen       affiche l'écran texte à la fin du programme
-  --term         affiche l'écran texte en direct dans le terminal
-  --shot F.png   capture de l'écran à la fin du programme
-  --wav F.wav    son enregistré dans un fichier (sans fenêtre)
-  --window       fenêtre SDL3 (vCPU sur son propre thread)
-  --stats        compteurs de la machine à la fin (sorties, VRAM émulée…)
-  --vbe1         carte VESA 1.2 : banques seules, sans framebuffer linéaire
-  --no-interp    sans rafales de l'interpréteur : une sortie de VM par accès
-                 à la VRAM émulée (pour mesurer son apport)
-  --limit S      arrêt au bout de S secondes, avec registres et code à CS:IP
-  --font F.psf   police PSF du mode texte (par défaut : Terminus 8×16 embarquée)
-  --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
-                 texte, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
-  --bench | --throttle | --remap   bancs de mesure de l'étape 0";
+usage: bare86 [options] [program [arguments…]]
+  without a program: built-in shell on drive C:
+  --mount DIR    host directory mounted as C: (default: the program's
+                 directory, or the current directory for the shell)
+  --mips N       throttle to N million instructions per second
+  --mem MB       total memory in MB (default 16)
+  --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
+  --trace-int    log of interrupts serviced by the host
+  --trace-io     report I/O ports with no device
+  --debug        debugger (registers, memory, single step)
+  --screen       print the text screen when the program ends
+  --term         show the text screen live in the terminal
+  --shot F.png   screenshot when the program ends
+  --wav F.wav    record the sound to a file (without a window)
+  --window       SDL3 window (vCPU on its own thread)
+  --stats        machine counters at the end (exits, emulated VRAM…)
+  --vbe1         VESA 1.2 card: banked windows only, no linear framebuffer
+  --no-interp    no interpreter bursts: one VM exit per emulated VRAM
+                 access (to measure what the interpreter brings)
+  --limit S      stop after S seconds, with registers and code at CS:IP
+  --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
+  --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
+                 text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
+  --bench | --throttle | --remap   step 0 measurement benches";
 
 fn main() -> ExitCode {
     let mut cfg = Config::default();
@@ -173,7 +173,7 @@ fn main() -> ExitCode {
     let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats };
     let result = if window {
         let host_keys = keys;
-        sdl::run("DOS sous KVM", move |mut host| {
+        sdl::run("Bare86", move |mut host| {
             if let Some(ev) = host_keys {
                 host.input = Box::new(host::ScriptedInput(ev.into()));
             }

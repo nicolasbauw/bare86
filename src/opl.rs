@@ -18,8 +18,8 @@ struct Chip {
 }
 
 unsafe extern "C" {
-    fn dosbox_opl3_new(samplerate: u32) -> *mut Chip;
-    fn dosbox_opl3_free(chip: *mut Chip);
+    fn bare86_opl3_new(samplerate: u32) -> *mut Chip;
+    fn bare86_opl3_free(chip: *mut Chip);
     fn OPL3_WriteRegBuffered(chip: *mut Chip, reg: u16, v: u8);
     fn OPL3_GenerateResampled(chip: *mut Chip, buf: *mut i16);
 }
@@ -126,7 +126,7 @@ unsafe impl Send for FmSynth {}
 impl FmSynth {
     pub fn new(rate: u32) -> Self {
         // SAFETY: allocation C vérifiée ; libérée par Drop.
-        let chip = unsafe { dosbox_opl3_new(rate) };
+        let chip = unsafe { bare86_opl3_new(rate) };
         assert!(!chip.is_null(), "OPL3 : allocation impossible");
         Self { chip, rate, pending: VecDeque::new(), used: false }
     }
@@ -163,8 +163,8 @@ impl FmSynth {
 
 impl Drop for FmSynth {
     fn drop(&mut self) {
-        // SAFETY: allouée par dosbox_opl3_new.
-        unsafe { dosbox_opl3_free(self.chip) };
+        // SAFETY: allouée par bare86_opl3_new.
+        unsafe { bare86_opl3_free(self.chip) };
     }
 }
 

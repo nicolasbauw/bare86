@@ -121,10 +121,10 @@ vbe_win_func:
     retf
     .org 0xE8E0, 0xFF
 vbe_oem:
-    .asciz "DOS sous KVM"
+    .asciz "Bare86"
     .org 0xE8F0, 0xFF
 vbe_vendor:
-    .asciz "dosbox-kvm"
+    .asciz "Bare86"
     .org 0xE900, 0xFF
 vbe_product:
     .asciz "SVGA VBE 2.0"

@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn short_names_and_resolution() {
-        let dir = std::env::temp_dir().join(format!("dosbox-fs-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bare86-fs-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("Sub Dir")).unwrap();
         for f in ["long file name.txt", "longfi~1.txt", "readme.txt", ".hidden"] {

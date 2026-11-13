@@ -215,7 +215,7 @@ fn watcom_text_program() {
 /// (fichiers, recherche, répertoires, mémoire, processus enfant).
 #[test]
 fn watcom_files_and_exec() {
-    let dir = std::env::temp_dir().join(format!("dosbox-c3-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("bare86-c3-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("files.exe"), include_bytes!("../c/tests/files.exe")).unwrap();
@@ -243,7 +243,7 @@ fn watcom_files_and_exec() {
 /// Shell interne : commandes internes et lancement d'un programme.
 #[test]
 fn shell_session() {
-    let dir = std::env::temp_dir().join(format!("dosbox-shell-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("bare86-shell-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("child.exe"), include_bytes!("../c/tests/child.exe")).unwrap();
@@ -266,7 +266,7 @@ fn shell_session() {
 
 #[test]
 fn fcb_files() {
-    let dir = std::env::temp_dir().join(format!("dosbox-fcb-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("bare86-fcb-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut pc = Pc::new(&Config::default(), Host::headless(Box::new(Capture::default()))).unwrap();

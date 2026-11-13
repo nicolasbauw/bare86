@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include "opl3.h"
 
-opl3_chip *dosbox_opl3_new(uint32_t samplerate) {
+opl3_chip *bare86_opl3_new(uint32_t samplerate) {
     opl3_chip *chip = calloc(1, sizeof(opl3_chip));
     if (chip) {
         OPL3_Reset(chip, samplerate);
@@ -11,6 +11,6 @@ opl3_chip *dosbox_opl3_new(uint32_t samplerate) {
     return chip;
 }
 
-void dosbox_opl3_free(opl3_chip *chip) {
+void bare86_opl3_free(opl3_chip *chip) {
     free(chip);
 }

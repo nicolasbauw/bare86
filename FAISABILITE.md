@@ -1,4 +1,4 @@
-# Étude de faisabilité — émulateur DOS sans émulation x86
+# Bare86 — étude de faisabilité d'un émulateur DOS sans émulation x86
 
 *Rédigée le 2026-11-09. Écrite de mémoire, sans recherche web : les détails techniques et les liens sont à vérifier.*
 
@@ -465,7 +465,7 @@ Avancement :
   - Les sorties de VM restantes sont presque toutes des scrutations du port 3DAh (≈ 226 000/s) : l'attente active du jeu, qui coûte aussi un cœur sur une vraie machine.
   - Piste notée sans être poursuivie : convertir cette attente en sommeil hôte. Mais pendant l'affichage, le bit 0 change à chaque ligne (25 µs), donc l'heuristique se déclencherait rarement.
 - **Point 5, mode 13h : SkyRoads (Bluemoon, gratuit).** Téléchargé depuis le site de Bluemoon, en HTTP simple car son certificat TLS est refusé ; aucune somme de contrôle n'est publiée, donc l'intégrité n'est pas vérifiable au-delà de la structure de l'archive. Stocké dans `~/Dev/dos-progs/skyroads`. Titre et partie rendus correctement, **avec zéro accès VRAM émulé** (`vram_emulated: 0`, `mmio_exits: 0`, un seul mappage de la fenêtre) : en mode chain4, toute la mémoire vidéo est accédée nativement, ce qui est l'objectif de la décision de l'étape 5.
-- **Critère de l'étape 5 tenu sur le fond** : un jeu en mode 13h (SkyRoads, en accès natifs) et un jeu en mode X (Wolfenstein 3D, démo 3D) tournent et s'affichent correctement. **Reste à confirmer** : la vitesse ressentie et le son, par un essai interactif dans la fenêtre par le propriétaire du projet (image, son, clavier, vitesse ressentie). Commande : `target/release/dosbox --window --mount ~/Dev/dos-progs/wolf3d/c/WOLF3D ~/Dev/dos-progs/wolf3d/c/WOLF3D/WOLF3D.EXE`, ou `--window` seul pour le shell.
+- **Critère de l'étape 5 tenu sur le fond** : un jeu en mode 13h (SkyRoads, en accès natifs) et un jeu en mode X (Wolfenstein 3D, démo 3D) tournent et s'affichent correctement. **Reste à confirmer** : la vitesse ressentie et le son, par un essai interactif dans la fenêtre par le propriétaire du projet (image, son, clavier, vitesse ressentie). Commande : `target/release/bare86 --window --mount ~/Dev/dos-progs/wolf3d/c/WOLF3D ~/Dev/dos-progs/wolf3d/c/WOLF3D/WOLF3D.EXE`, ou `--window` seul pour le shell.
 
 - **Essai interactif de Wolfenstein 3D par le propriétaire du projet : bon.** Seul défaut relevé : la souris n'était pas capturée. Corrigé : un clic dans la fenêtre la capture (mode relatif SDL, curseur masqué), le bouton central, Ctrl+F10 ou la perte du focus la libèrent ; le titre de la fenêtre l'indique. Son du haut-parleur confirmé sous Wolfenstein.
 - **Police : Terminus 8×16 (choix du propriétaire), embarquée.** `tools/terminus_cp437.py` extrait les 256 glyphes CP437 de `ter-u16n.bdf` (Terminus 4.49.1, source officielle) vers `fonts/terminus-cp437-8x16.bin` (4 Kio), licence dans `fonts/OFL-Terminus.txt`. Aucun glyphe manquant. `--font F.psf` reste possible.
