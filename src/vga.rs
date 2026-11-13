@@ -180,6 +180,11 @@ impl Vga {
         Ok(v)
     }
 
+    /// Registre de couleur CGA (3D9h) : fond, palette, intensité.
+    pub fn cga_color(&self) -> u8 {
+        self.cga_color
+    }
+
     /// Plan lu en mode de lecture 0.
     pub fn read_plane(&self) -> usize {
         usize::from(self.gc[4] & 3)
@@ -311,13 +316,11 @@ impl Vga {
     }
 
     /// Octet d'un plan (rendu, tests).
-    #[allow(dead_code)] // rendu : point 3 de l'étape 5
     pub fn plane_byte(&self, plane: usize, off: usize) -> u8 {
         self.vram.get(plane, off)
     }
 
     /// Octet du tampon linéaire chain4 (rendu du mode 13h, tests).
-    #[allow(dead_code)] // rendu : point 3 de l'étape 5
     pub fn linear_byte(&self, off: usize) -> u8 {
         self.vram.get(LINEAR, off)
     }
@@ -432,6 +435,13 @@ impl Vga {
         self.attr[..21].copy_from_slice(&p.attr);
         self.attr_data = false;
         self.dac = default_dac();
+        // Modes 16 couleurs et texte : palette EGA de 64 couleurs dans le DAC.
+        if mode != 0x13 {
+            for (i, c) in self.dac.iter_mut().enumerate().take(64) {
+                let comp = |hi: usize, lo: usize| ((i >> hi & 1) * 0x2A + (i >> lo & 1) * 0x15) as u8;
+                *c = [comp(2, 5), comp(1, 4), comp(0, 3)];
+            }
+        }
         self.dac_mask = 0xFF;
         self.chain4_was = self.chain4();
         self.epoch += 1;

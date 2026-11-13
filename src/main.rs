@@ -19,6 +19,7 @@ mod mem;
 mod mouse;
 mod pic;
 mod pit;
+mod render;
 mod rtc;
 mod term;
 mod throttle;
@@ -44,6 +45,7 @@ usage : dosbox [options] [programme [arguments…]]
   --debug        débogueur (registres, mémoire, pas à pas)
   --screen       affiche l'écran texte à la fin du programme
   --term         affiche l'écran texte en direct dans le terminal
+  --shot F.png   capture de l'écran graphique à la fin du programme
   --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
                  texte, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
   --bench | --throttle | --remap   bancs de mesure de l'étape 0";
@@ -53,6 +55,7 @@ fn main() -> ExitCode {
     let mut debug = false;
     let mut screen = false;
     let mut term = false;
+    let mut shot: Option<String> = None;
     let mut keys = None;
     let mut program = None;
     let mut mount: Option<std::path::PathBuf> = None;
@@ -95,6 +98,7 @@ fn main() -> ExitCode {
             "--debug" => debug = true,
             "--screen" => screen = true,
             "--term" => term = true,
+            "--shot" => shot = args.next(),
             "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
                 Some(Ok(ev)) => keys = Some(ev),
                 Some(Err(e)) => {
@@ -161,6 +165,16 @@ fn main() -> ExitCode {
         let code = if debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };
         if screen {
             println!("\n{}", pc.screen_text().join("\n").trim_end());
+        }
+        if let Some(path) = &shot {
+            match pc.frame() {
+                Some((w, h, px)) => {
+                    if let Err(e) = std::fs::write(path, render::png(w, h, &px)) {
+                        eprintln!("{path} : {e}");
+                    }
+                }
+                None => eprintln!("--shot : mode texte, pas d'image (police à choisir, cf. FAISABILITE)"),
+            }
         }
         code
     });

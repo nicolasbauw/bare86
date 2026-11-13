@@ -623,6 +623,13 @@ impl<B: Backend> Pc<B> {
         &self.unhandled
     }
 
+    /// Image du mode graphique courant ; `None` en mode texte.
+    pub fn frame(&self) -> Option<(usize, usize, Vec<u32>)> {
+        let mut px = Vec::new();
+        let (w, h) = crate::render::render(&self.vga.borrow(), self.vm.mem(), &mut px)?;
+        Some((w, h, px))
+    }
+
     /// Texte de la page active de l'écran.
     pub fn screen_text(&self) -> Vec<String> {
         bios::screen_text(self.vm.mem())

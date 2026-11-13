@@ -294,4 +294,31 @@ fn vram_mapping_strategy() {
     assert!(s.vram_maps >= 2 && s.vram_unmaps >= 1, "{s:?}");
 }
 
+fn frame_of(image: &[u8]) -> (usize, usize, Vec<u32>) {
+    let (code, _, pc) = run(image);
+    assert_eq!(code, 0);
+    pc.frame().expect("mode graphique")
+}
+
+#[test]
+fn render_mode_13h() {
+    let (w, h, px) = frame_of(program!("draw13"));
+    assert_eq!((w, h), (320, 200));
+    assert_eq!((px[5 * 320 + 10], px[5 * 320 + 11], px[5 * 320 + 12]), (0xAA0000, 0xFF8100, 0));
+}
+
+#[test]
+fn render_mode_12h() {
+    let (w, h, px) = frame_of(program!("draw12"));
+    assert_eq!((w, h), (640, 480));
+    assert_eq!((px[50 * 640 + 99], px[50 * 640 + 100], px[50 * 640 + 101]), (0, 0xFFFF55, 0));
+}
+
+#[test]
+fn render_mode_x() {
+    let (w, h, px) = frame_of(program!("drawx"));
+    assert_eq!((w, h), (320, 200));
+    assert_eq!((px[3 * 320 + 6], px[3 * 320 + 7]), (0, 0xAA0000));
+}
+
 use crate::backend::Backend;
