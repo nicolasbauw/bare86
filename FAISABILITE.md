@@ -460,6 +460,10 @@ Avancement :
   - Haut-parleur : le vCPU publie la fréquence (`Pit::speaker`) dans une variable atomique ; le thread de la fenêtre génère l'onde carrée (48 kHz, environ 40 ms d'avance) dans un flux audio SDL. Le son numérisé par modulation de largeur d'impulsion n'est pas rendu.
   - Le shell interne s'affiche maintenant en fenêtre : sa lecture de ligne rafraîchit l'affichage avant chaque attente.
   - Vérifié sans écran, avec les pilotes SDL `offscreen` et `dummy`.
+- **Optimisation de la souris faite.** L'INT 33h AX=0003h est servi en ROM (F000:E870), d'après un bloc d'état en ROM (F000:E890) que l'hôte réécrit à chaque changement ; l'invité ne peut que le lire.
+  - Sur 50 s de Wolfenstein, les appels hôte passent de 3 995 423 à 341.
+  - Les sorties de VM restantes sont presque toutes des scrutations du port 3DAh (≈ 226 000/s) : l'attente active du jeu, qui coûte aussi un cœur sur une vraie machine.
+  - Piste notée sans être poursuivie : convertir cette attente en sommeil hôte. Mais pendant l'affichage, le bit 0 change à chaque ligne (25 µs), donc l'heuristique se déclencherait rarement.
 - **Point 5, mode 13h : SkyRoads (Bluemoon, gratuit).** Téléchargé depuis le site de Bluemoon, en HTTP simple car son certificat TLS est refusé ; aucune somme de contrôle n'est publiée, donc l'intégrité n'est pas vérifiable au-delà de la structure de l'archive. Stocké dans `~/Dev/dos-progs/skyroads`. Titre et partie rendus correctement, **avec zéro accès VRAM émulé** (`vram_emulated: 0`, `mmio_exits: 0`, un seul mappage de la fenêtre) : en mode chain4, toute la mémoire vidéo est accédée nativement, ce qui est l'objectif de la décision de l'étape 5.
 - **Critère de l'étape 5 tenu sur le fond** : un jeu en mode 13h (SkyRoads, en accès natifs) et un jeu en mode X (Wolfenstein 3D, démo 3D) tournent et s'affichent correctement. **Reste à confirmer** : la vitesse ressentie et le son, par un essai interactif dans la fenêtre par le propriétaire du projet (image, son, clavier, vitesse ressentie). Commande : `target/release/dosbox --window --mount ~/Dev/dos-progs/wolf3d/c/WOLF3D ~/Dev/dos-progs/wolf3d/c/WOLF3D/WOLF3D.EXE`, ou `--window` seul pour le shell.
 
