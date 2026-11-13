@@ -335,3 +335,8 @@ fn render_mode_x() {
 }
 
 use crate::backend::Backend;
+
+#[test]
+fn flags_show_a_386() {
+    assert_eq!(run(program!("cpu386")).0, 7, "bits IOPL/NT de FLAGS relus après POPF");
+}

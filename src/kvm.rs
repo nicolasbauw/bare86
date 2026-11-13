@@ -65,6 +65,7 @@ impl KvmVm {
             unsafe { vm.set_user_memory_region(region)? };
         }
         let vcpu = vm.create_vcpu(0)?;
+        vcpu.set_cpuid2(&dos_era_cpuid(&kvm)?)?;
         Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false })
     }
 
@@ -206,4 +207,27 @@ impl Backend for KvmVm {
     fn request_irq_window(&mut self, on: bool) {
         self.vcpu.get_kvm_run().request_interrupt_window = u8::from(on);
     }
+}
+
+/// Table CPUID vue par l'invité : un Pentium MMX (famille 5, modèle 4),
+/// fabricant de l'hôte, fonctions de l'époque seulement (FPU, VME, DE, PSE,
+/// TSC, MSR, CX8, MMX), sans fonctions étendues. Sans table, KVM rendrait
+/// des zéros : famille 0, que DOS/32A ou PMODE/W prennent pour un 286.
+fn dos_era_cpuid(kvm: &Kvm) -> Result<kvm_bindings::CpuId> {
+    let host = kvm.get_supported_cpuid(kvm_bindings::KVM_MAX_CPUID_ENTRIES)?;
+    let leaf = |n: u32| host.as_slice().iter().find(|e| e.function == n && e.index == 0).copied();
+    let mut entries = Vec::new();
+    if let Some(mut e) = leaf(0) {
+        e.eax = 1;
+        entries.push(e);
+    }
+    if let Some(mut e) = leaf(1) {
+        const FEATURES: u32 = 1 << 0 | 1 << 1 | 1 << 2 | 1 << 3 | 1 << 4 | 1 << 5 | 1 << 8 | 1 << 23;
+        e.eax = 0x0543;
+        e.ebx = 0;
+        e.ecx = 0;
+        e.edx &= FEATURES;
+        entries.push(e);
+    }
+    Ok(kvm_bindings::CpuId::from_entries(&entries).map_err(|e| format!("CPUID : {e:?}"))?)
 }
