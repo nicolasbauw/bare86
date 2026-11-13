@@ -783,6 +783,40 @@ mod tests {
     }
 
     #[test]
+    fn vbe_direct_color_rendering() {
+        let mem = crate::mem::GuestMem::new(0x10_0000).unwrap();
+        let mut v = Vga::new().unwrap();
+        let poke = |v: &Vga, off: usize, b: &[u8]| {
+            for (i, x) in b.iter().enumerate() {
+                unsafe { v.vram.window.add(off + i).write_volatile(*x) };
+            }
+        };
+        // (bpp, octets du point 1, couleur attendue en 0xRRGGBB)
+        let cases: [(usize, &[u8], u32); 3] = [
+            (15, &[0x00, 0x7C], 0xFF0000), // rouge 5:5:5
+            (16, &[0xE0, 0x07], 0x00FF00), // vert 5:6:5
+            (24, &[0xFF, 0x00, 0x00], 0x0000FF), // bleu, ordre B, V, R
+        ];
+        for (bpp, bytes, want) in cases {
+            let mode = Vbe { mode: 0x111, width: 640, height: 480, bpp, pitch: 640 * bpp.div_ceil(8), start: 0, bank: 0, lfb: false };
+            v.set_vbe(mode, true);
+            v.point_window(v.access()).unwrap();
+            poke(&v, bytes.len(), bytes);
+            let mut out = Vec::new();
+            assert_eq!(crate::render::render(&v, &mem, &mut out), Some((640, 480)));
+            assert_eq!((out[0], out[1]), (0, want), "{bpp} bits");
+        }
+        // Début d'affichage : une ligne plus bas, le point 1 de la ligne 1 en tête.
+        if let Some(m) = &mut v.vbe {
+            m.start = m.pitch;
+        }
+        poke(&v, 1920 + 3, &[0x11, 0x22, 0x33]);
+        let mut out = Vec::new();
+        crate::render::render(&v, &mem, &mut out);
+        assert_eq!(out[1], 0x332211);
+    }
+
+    #[test]
     fn plane_stage_follows_window() {
         let mut v = Vga::new().unwrap();
         v.set_mode(0x12, true);

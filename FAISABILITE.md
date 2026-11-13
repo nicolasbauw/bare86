@@ -527,6 +527,19 @@ Avancement :
 
   Gain du déplacement : ≈ 4 % (1583 → 1521). L'écart restant avec `-nosound` (≈ 4 %) vient surtout du travail de l'invité lui-même : DMX mélange les effets en logiciel dans ses IRQ, comme sur une vraie machine. Celui avec la version d'avant le son (≈ 2 %) est le coût fixe des nouveaux périphériques à chaque sortie de VM.
 
+### Étape 8 : SVGA (VBE 2.0), terminée le 2026-11-13
+
+- **Framebuffer de 4 Mo** dans le memfd de la VRAM, après les régions VGA (`src/vga.rs`). **Fenêtre par banques** : la vue de 64 Ko en A0000 pointe sur la banque choisie (`Access::Bank`, toujours natif). **Framebuffer linéaire** : un slot KVM fixe à `E0000000h` (`src/kvm.rs`, `map_lfb`), mappé une fois pour toutes ; accès natifs, en mode protégé et avec pagination.
+- **INT 10h 4Fxxh** (`src/bios.rs`) : 00h (bloc VBE 2.0 de 512 octets si « VBE2 »), 01h, 02h (bit 14 : LFB, bit 15 : sans effacement), 03h, 05h, 06h, 07h, 08h (DAC fixe à 6 bits), 09h ; 04h et 0Ah absents. Modes 100h, 101h, 103h, 105h (8 bits), 110h–118h (15, 16, 24 bits). Fonction de fenêtre en ROM (F000:E8D0, appel lointain vers 4F05h), chaînes et liste des modes en ROM. Rendu 8 bits par la palette, 15/16/24 bits en couleurs directes, début d'affichage et ligne logique.
+- **`--vbe1`** : carte VESA 1.2, banques seules, sans LFB (cartes de 1994-1995 ; repli de compatibilité).
+- **PAT de l'invité en write-back** : sous AMD (NPT), la PAT de l'invité s'applique ; CWSDPMI mappe le LFB en non caché (PCD), et Quake en 640×480 tombait à 17,7 i/s. Avec une PAT tout en write-back (le Pentium MMX annoncé n'en a pas, Intel l'ignore) : 627 i/s.
+- **Critère tenu** :
+  - **Quake 1.06 en VESA** (LFB ; Quake exige VBE 2.0) : `+vid_mode 12` (640×480) et `14` (1024×768). Timedemo : 627 i/s en 640×480, 349 en 1024×768 (288 en 320×200 VGA).
+  - **Duke Nukem 3D 1.3D shareware** (archive.org `3dduke13`, MD5 `04e4ca70…`, `~/Dev/dos-progs/duke3d/c/DUKE3D`) en 640×480 : par banques avec `--vbe1` (≈ 2 500 changements de banque par seconde), par le LFB et 4F07h en VBE 2.0. Image correcte dans les deux cas.
+- **Compatibilité gagnée en route** (installeur de Duke) : `COMMAND.COM` virtuel — INT 21h 4300h le dit présent, l'EXEC de « COMMAND.COM /C commande » exécute une commande interne ou lance le programme à sa place (`system()` des bibliothèques C) ; commande interne `REN` ; le shell lance un programme désigné par son chemin. `--trace-int` affiche le nom de fichier (DS:DX) des fonctions DOS qui en prennent un, et la ligne de commande des EXEC.
+- Tests : `asm/tests/vbe.S` (bloc d'information, mode 101h, banques par 4F05h et par la fonction de fenêtre), `vbe_direct_color_rendering` ; 62 tests.
+- Restent hors critère : INT 10h 1Bh et EFh (demandés par l'installeur de Duke, non gérés, sans conséquence) ; `.BAT` et COMMAND.COM interactif.
+
 ### L'interpréteur est-il encore nécessaire ? (2026-11-13)
 
 Question du propriétaire du projet : KVM fournit un vCPU, l'interpréteur x86 sert-il encore ? Il ne sert plus qu'à un cas : les accès à la fenêtre VGA qu'aucun mappage ne peut exécuter, parce que la carte les transforme (write modes 1–3, latches, set/reset, masque de bits, plusieurs plans à la fois, lecture d'un autre plan). Sans lui, chacun coûte une sortie de VM (≈ 4,5 µs) ; avec lui, la première sortie est suivie d'une rafale côté hôte (≈ 73 ns par accès) jusqu'à ce que le code ne touche plus la VRAM.
