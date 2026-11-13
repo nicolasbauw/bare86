@@ -567,7 +567,15 @@ Avancement :
   - **Reste** : polices chargées par les programmes (rendu texte d'après le plan 2, comme le vrai matériel : DISPLAY/MODE CON CP, jeux en mode texte) et polices 8×8/8×14 (AX=1102h, 1101h) ; FDISK écrit la fin de partition en cylindre 520 au lieu de 519 (le noyau corrige d'après le LBA : sans conséquence).
 - **Reste ensuite**, dans l'ordre (choix du propriétaire du projet : le réseau avant le CD-ROM) :
   1. **Réseau** : carte NE2000 ISA émulée (ports d'E/S, IRQ ; packet driver libre `NE2000.COM` côté DOS), sortie par NAT en espace utilisateur (à la « user networking » de QEMU : libslirp ou pile Rust type smoltcp ; DHCP, DNS, TCP/UDP sortants, sans droits) ; TAP en option. Critère : mTCP sous FreeDOS (DHCP, ping, FTP ou HTGET) ; ensuite IPX des jeux (Doom, Duke3D) par un pont.
-  2. **CD-ROM** : MSCDEX en HLE, images ISO/CUE, pistes audio.
+  2. **CD-ROM** : MSCDEX en HLE, images ISO/CUE, pistes audio. Sous un vrai DOS, un MSCDEX de l'hôte ne serait pas joignable (le noyau FreeDOS ne renvoie pas l'INT 2Fh au BIOS) : y ajouter un lecteur ATAPI émulé, servi par les pilotes du DOS (UDVD2, OAKCDROM) et SHSUCDX/MSCDEX, utile aussi à Windows.
+  3. **Windows 95/98** (comme rust-dos ; copie de Windows fournie par le propriétaire du projet). Démarrage depuis un vrai DOS (acquis), puis WIN.COM et le VMM32 en mode protégé : c'est Windows qui pilote alors le matériel, avec ses propres pilotes. À prévoir :
+     - **contrôleur IDE/ATA** (ports 1F0h–1F7h, 3F6h, IRQ 14) sur l'image disque : sans lui, Windows reste en « mode de compatibilité MS-DOS » pour les disques (INT 13h en V86, lent mais fonctionnel, premier palier possible) ;
+     - **lecteur ATAPI** pour l'installation depuis le CD (ou copie préalable des CAB sur le disque) ;
+     - **8042 complet** : canal auxiliaire (souris PS/2 par les ports 60h/64h et l'IRQ 12, plus seulement par INT 15h C2h), car Windows lit le contrôleur directement ;
+     - **affichage** : VGA standard 640×480×16 d'abord (pilote de Windows), puis un pilote VBE (VBEMP, licence à vérifier) pour les modes SVGA ; le rendu planaire passe par l'interpréteur ;
+     - **son** : SB16 déjà conforme (pilote de Windows, configuration manuelle 220h/5/1/5) ;
+     - pièges connus sur processeur moderne : « Windows protection error » (boucles de calibrage trop rapides, correctif FIX95CPU ou bridage à `--mips`), limite de mémoire de 98 (≤ 512 Mo, sans souci avec nos 16–64 Mo), TLB et pagination du VMM sous KVM à surveiller ;
+     - critère : bureau de Windows 95 puis 98, souris, un jeu DirectX/WinG simple ; ensuite mode SVGA et son.
 
 ### Point de reprise (fin de session du 2026-11-13)
 
@@ -577,8 +585,9 @@ Essais commodes (clavier scripté) : `bare86 --hda COPIE.img --boot --keys "{unt
 
 À faire, dans l'ordre convenu :
 1. **Réseau** (avant le CD-ROM, choix du propriétaire du projet) : NE2000 ISA émulée + NAT en espace utilisateur ; critère mTCP sous FreeDOS (DHCP, ping, FTP/HTGET). Les paquets réseau de FreeDOS (mTCP, FDNET) ne sont sans doute pas sur l'édition disquette : prévoir de les récupérer (FullUSB ou paquets du dépôt FreeDOS).
-2. **CD-ROM** : MSCDEX en HLE, ISO/CUE, pistes audio.
-3. Restes mineurs : polices chargées par les programmes et 8×8/8×14 (rendu texte d'après le plan 2) ; Keen 4 sans EMS/XMS et rendu de 160 px de large ; Wolf3D scrute 201h sur « Press a key » ; essais en fenêtre par le propriétaire du projet (souris sous FreeDOS, Ctrl+F4).
+2. **CD-ROM** : MSCDEX en HLE, ISO/CUE, pistes audio ; lecteur ATAPI pour les vrais DOS (et Windows).
+3. **Windows 95/98** (comme rust-dos) : IDE/ATA, ATAPI, 8042 auxiliaire, VGA puis VBE ; détail dans « Reste ensuite » (étape 9).
+4. Restes mineurs : polices chargées par les programmes et 8×8/8×14 (rendu texte d'après le plan 2) ; Keen 4 sans EMS/XMS et rendu de 160 px de large ; Wolf3D scrute 201h sur « Press a key » ; essais en fenêtre par le propriétaire du projet (souris sous FreeDOS, Ctrl+F4).
 
 ### L'interpréteur est-il encore nécessaire ? (2026-11-13)
 
