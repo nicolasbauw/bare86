@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Assemble le code invité (ROM BIOS, programmes de test) avec GNU as.
 //! Chaque `asm/**/*.S` donne `$OUT_DIR/<nom>.bin` (binaire plat, section .text).
+//! Compile aussi Nuked-OPL3 (third_party/nuked-opl3).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,6 +28,13 @@ fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=asm");
     assemble(Path::new("asm/bios.S"), &out, 0);
+    println!("cargo:rerun-if-changed=third_party/nuked-opl3");
+    cc::Build::new()
+        .file("third_party/nuked-opl3/opl3.c")
+        .file("third_party/nuked-opl3/shim.c")
+        .opt_level(2)
+        .warnings(false)
+        .compile("nuked_opl3");
     for entry in std::fs::read_dir("asm/tests").unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|e| e == "S") {

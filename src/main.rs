@@ -21,6 +21,7 @@ mod kvm;
 mod machine;
 mod mem;
 mod mouse;
+mod opl;
 mod pic;
 mod pit;
 mod render;

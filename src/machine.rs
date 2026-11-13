@@ -212,6 +212,7 @@ pub struct Pc<B: Backend = KvmVm> {
     xms: crate::xms::Xms,
     dma: Rc<RefCell<crate::dma::Dma>>,
     sb: Rc<RefCell<crate::sb16::Sb16>>,
+    opl: Rc<RefCell<crate::opl::Opl>>,
     mixer: crate::audio::Mixer,
     ems: crate::ems::Ems,
     /// Scancodes en route vers le 8042, livrés au rythme d'une frappe.
@@ -289,7 +290,13 @@ impl<B: Backend> Pc<B> {
         io.map(0x81..=0x8F, Box::new(crate::dma::DmaPorts(dma.clone())));
         io.map(0xC0..=0xDF, Box::new(crate::dma::DmaPorts(dma.clone())));
         let sb = Rc::new(RefCell::new(crate::sb16::Sb16::new()));
-        io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));
+        // DSP et mixeur ; 228h–229h reviennent à la FM.
+        io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, Box::new(crate::sb16::Sb16Ports(sb.clone())));
+        io.map(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));
+        let opl = Rc::new(RefCell::new(crate::opl::Opl::new(crate::audio::RATE)));
+        for ports in [0x388..=0x38B, crate::sb16::BASE..=crate::sb16::BASE + 3, crate::sb16::BASE + 8..=crate::sb16::BASE + 9] {
+            io.map(ports, Box::new(crate::opl::OplPorts(opl.clone())));
+        }
         let mut pc = Self {
             vm,
             io,
@@ -307,6 +314,7 @@ impl<B: Backend> Pc<B> {
             xms: crate::xms::Xms::new(0x10_0000 + cfg.extended_kb * 1024),
             dma,
             sb,
+            opl,
             mixer: crate::audio::Mixer::new(),
             ems: crate::ems::Ems::new(cfg.ems_kb),
             keys: VecDeque::new(),
@@ -460,7 +468,15 @@ impl<B: Backend> Pc<B> {
         let speaker = pit.speaker();
         drop(pit);
         let mut sb = self.sb.borrow_mut();
-        self.mixer.advance(Instant::now(), &mut sb, &mut self.dma.borrow_mut(), self.vm.mem(), speaker, self.host.audio.as_mut());
+        self.mixer.advance(
+            Instant::now(),
+            &mut sb,
+            &mut self.opl.borrow_mut(),
+            &mut self.dma.borrow_mut(),
+            self.vm.mem(),
+            speaker,
+            self.host.audio.as_mut(),
+        );
         if sb.take_irq() {
             self.pic.borrow_mut().raise(crate::sb16::IRQ);
         }

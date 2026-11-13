@@ -96,15 +96,21 @@ impl Sb16 {
 
     fn reset_mixer(&mut self) {
         self.mixer = [0; 256];
-        // Volumes à 3/4 (SB16 : 5 bits en position haute ; SB Pro : 2 × 4 bits).
+        // Volumes au maximum (SB16 : 5 bits en position haute ; SB Pro :
+        // 2 × 4 bits) : les jeux règlent eux-mêmes le mixeur s'ils le veulent.
         for r in 0x30..=0x35 {
-            self.mixer[r] = 0xC0;
+            self.mixer[r] = 0xF8;
         }
-        self.mixer[0x22] = 0xCC;
-        self.mixer[0x04] = 0xCC;
-        self.mixer[0x26] = 0xCC;
+        self.mixer[0x22] = 0xFF;
+        self.mixer[0x04] = 0xFF;
+        self.mixer[0x26] = 0xFF;
         self.mixer[0x80] = 0x02; // IRQ 5
         self.mixer[0x81] = 0x22; // DMA 1 et 5
+    }
+
+    /// Gain de la FM : volumes maître et FM du mixeur (gauche, droite).
+    pub fn fm_gain(&self) -> [f32; 2] {
+        [volume(self.mixer[0x30]) * volume(self.mixer[0x34]), volume(self.mixer[0x31]) * volume(self.mixer[0x35])]
     }
 
     /// IRQ demandée depuis le dernier appel.
@@ -268,8 +274,7 @@ impl Sb16 {
     /// trames au taux `rate_out`, tirées du DMA.
     pub fn render(&mut self, dma: &mut Dma, mem: &GuestMem, rate_out: u32, out: &mut [f32]) {
         let step = f64::from(self.rate.max(1000)) / f64::from(rate_out);
-        let vol = |r: u8| f32::from(r >> 3) / 31.0;
-        let gain = [vol(self.mixer[0x30]) * vol(self.mixer[0x32]), vol(self.mixer[0x31]) * vol(self.mixer[0x33])];
+        let gain = [volume(self.mixer[0x30]) * volume(self.mixer[0x32]), volume(self.mixer[0x31]) * volume(self.mixer[0x33])];
         for frame in out.chunks_exact_mut(2) {
             if self.silence > 0 {
                 self.phase += step;
@@ -356,6 +361,12 @@ impl Sb16 {
             _ => {}
         }
     }
+}
+
+/// Volume d'un registre SB16 (5 bits hauts) : pas de 2 dB, 31 = 0 dB, 0 = muet.
+fn volume(r: u8) -> f32 {
+    let step = r >> 3;
+    if step == 0 { 0.0 } else { 10f32.powf((f32::from(step) - 31.0) * 2.0 / 20.0) }
 }
 
 /// Ports 224h–22Fh (la FM en 220h–223h, 228h–229h est à part).

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Mixeur, sur le thread du vCPU : à chaque passage (`advance`), produit les
 //! trames dues d'après l'horloge hôte (48 kHz, stéréo) — Sound Blaster
-//! (DMA), haut-parleur PC — et les confie à l'hôte (`AudioSink`). Sorties :
+//! (DMA), FM OPL3, haut-parleur PC — et les confie à l'hôte (`AudioSink`). Sorties :
 //! file vers la fenêtre SDL, fichier WAV (`--wav`), ou rien.
 
 use std::time::{Duration, Instant};
@@ -9,12 +9,15 @@ use std::time::{Duration, Instant};
 use crate::dma::Dma;
 use crate::host::AudioSink;
 use crate::mem::GuestMem;
+use crate::opl::Opl;
 use crate::sb16::Sb16;
 
 pub const RATE: u32 = 48_000;
 /// Au-delà de ce retard (pause, débogueur), le temps perdu est sauté.
 const MAX_LAG: Duration = Duration::from_millis(200);
 const SPEAKER_LEVEL: f32 = 0.15;
+/// Nuked-OPL3 sort environ 6 dB sous le son numérisé d'une vraie carte.
+const FM_LEVEL: f32 = 2.0;
 
 pub struct Mixer {
     start: Instant,
@@ -37,7 +40,17 @@ impl Mixer {
     }
 
     /// Produit les trames dues à `now`.
-    pub fn advance(&mut self, now: Instant, sb: &mut Sb16, dma: &mut Dma, mem: &GuestMem, speaker: Option<f64>, sink: &mut dyn AudioSink) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance(
+        &mut self,
+        now: Instant,
+        sb: &mut Sb16,
+        opl: &mut Opl,
+        dma: &mut Dma,
+        mem: &GuestMem,
+        speaker: Option<f64>,
+        sink: &mut dyn AudioSink,
+    ) {
         let elapsed = now.saturating_duration_since(self.start);
         let target = (elapsed.as_nanos() * u128::from(RATE) / 1_000_000_000) as u64;
         let lag = target.saturating_sub(self.produced);
@@ -49,10 +62,13 @@ impl Mixer {
             self.produced = target - max / 4;
         }
         let n = (target - self.produced) as usize;
+        let t0 = self.start + Duration::from_nanos(self.produced * 1_000_000_000 / u64::from(RATE));
         self.produced = target;
         self.buf.clear();
         self.buf.resize(n * 2, 0.0);
         sb.render(dma, mem, RATE, &mut self.buf);
+        let fm = sb.fm_gain().map(|g| g * FM_LEVEL);
+        opl.render(t0, fm, &mut self.buf);
         // Haut-parleur : onde carrée ; au-delà de 20 kHz (modulation de
         // largeur d'impulsion), silence.
         if let Some(f) = speaker.filter(|f| *f < 20_000.0) {

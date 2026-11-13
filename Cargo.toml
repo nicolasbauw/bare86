@@ -12,3 +12,6 @@ kvm-ioctls = "0.25.1"
 libc = "0.2.191"
 perf-event-open-sys = "7.1.0"
 sdl3 = "0.22.1"
+
+[build-dependencies]
+cc = "1"
