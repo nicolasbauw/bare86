@@ -4,11 +4,14 @@
 
 mod backend;
 mod bench;
+mod bios;
 mod debug;
 mod dos;
+mod hle;
 mod host;
 mod interp;
 mod io;
+mod keyboard;
 mod kvm;
 mod machine;
 mod mem;
@@ -18,7 +21,7 @@ mod tests;
 
 use std::process::ExitCode;
 
-use host::{Host, Stdout};
+use host::Host;
 use machine::{Config, Pc};
 
 /// Programme de démonstration intégré (asm/tests/hello.S).
@@ -31,11 +34,13 @@ usage : dosbox [options] [programme.com]
   --trace-int    journal des interruptions servies par l'hôte
   --trace-io     signale les ports d'E/S sans périphérique
   --debug        débogueur (registres, mémoire, pas à pas)
+  --screen       affiche l'écran texte à la fin du programme
   --bench | --throttle | --remap   bancs de mesure de l'étape 0";
 
 fn main() -> ExitCode {
     let mut cfg = Config::default();
     let mut debug = false;
+    let mut screen = false;
     let mut program = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -73,6 +78,7 @@ fn main() -> ExitCode {
             "--trace-int" => cfg.trace_int = true,
             "--trace-io" => cfg.trace_io = true,
             "--debug" => debug = true,
+            "--screen" => screen = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -94,9 +100,13 @@ fn main() -> ExitCode {
         },
         None => HELLO_COM.to_vec(),
     };
-    let result = Pc::new(&cfg, Host::headless(Box::new(Stdout))).and_then(|mut pc| {
+    let result = Pc::new(&cfg, Host::terminal()).and_then(|mut pc| {
         pc.load_com(&image)?;
-        if debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() }
+        let code = if debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };
+        if screen {
+            println!("\n{}", pc.screen_text().join("\n").trim_end());
+        }
+        code
     });
     match result {
         Ok(code) => ExitCode::from(code),

@@ -14,22 +14,17 @@
 use std::collections::BTreeSet;
 
 use crate::backend::{Backend, Error, Exit, Result};
-use crate::dos::{self, Flow};
+use crate::bios::{self, Bios, ROM, ROM_SEG};
+use crate::dos;
+use crate::hle::Flow;
 use crate::host::Host;
 use crate::interp::{self, Mmio};
 use crate::io::IoBus;
 use crate::kvm::{KvmVm, Region, VGA_WINDOW};
-use crate::mem::GuestMem;
 use crate::throttle::Throttle;
 
-/// Segment de la ROM BIOS ; les stubs d'interruption sont en F000:n*16.
-pub const ROM_SEG: u16 = 0xF000;
 /// Port d'appel hôte utilisé par les stubs.
 pub const HOST_CALL_PORT: u16 = 0xE0;
-
-const ROM: std::ops::Range<usize> = 0xF_0000..0x10_0000;
-/// ROM BIOS assemblée par build.rs (asm/bios.S).
-const BIOS_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bios.bin"));
 
 /// Instructions sans accès VRAM avant que l'interpréteur rende la main.
 const IDLE_LIMIT: u64 = 256;
@@ -96,6 +91,7 @@ pub struct Pc<B: Backend = KvmVm> {
     pub io: IoBus,
     pub host: Host,
     pub stats: Stats,
+    bios: Bios,
     vga: VgaWindow,
     throttle: Option<Throttle>,
     trace_int: bool,
@@ -120,7 +116,8 @@ impl Pc<KvmVm> {
 
 impl<B: Backend> Pc<B> {
     pub fn with_backend(vm: B, cfg: &Config, host: Host) -> Result<Self> {
-        install_bios(vm.mem());
+        let mut bios = Bios::new(cfg.extended_kb);
+        bios.install(vm.mem());
         let throttle = cfg.mips.map(Throttle::new).transpose()?;
         let mut io = IoBus::default();
         io.trace = cfg.trace_io;
@@ -131,6 +128,7 @@ impl<B: Backend> Pc<B> {
             io,
             host,
             stats: Stats::default(),
+            bios,
             vga: VgaWindow(vec![0; VGA_WINDOW.len()]),
             throttle,
             trace_int: cfg.trace_int,
@@ -179,6 +177,7 @@ impl<B: Backend> Pc<B> {
                     mmio = VGA_WINDOW.contains(&(addr as usize));
                 }
                 Exit::Interrupted => {
+                    self.bios.sync_ticks(self.vm.mem());
                     if let Some(t) = &mut self.throttle {
                         t.pace()?;
                     }
@@ -212,7 +211,6 @@ impl<B: Backend> Pc<B> {
         }
         self.stats.host_calls += 1;
         let vector = ((cpu.ip & 0xFFF) >> 4) as u8;
-        let ah = (cpu.gpr[0] >> 8) as u8;
         if self.trace_int {
             let mem = self.vm.mem();
             let sp = cpu.linear(2, cpu.gpr[4] & 0xFFFF) as usize;
@@ -225,20 +223,24 @@ impl<B: Backend> Pc<B> {
                 cpu.gpr[2] & 0xFFFF
             );
         }
+        let mem = self.vm.mem();
+        self.bios.sync_ticks(mem);
         let flow = match vector {
             0x20 => Flow::Exit(0),
-            0x21 => dos::int21(&mut cpu, self.vm.mem(), self.host.text.as_mut()),
-            _ => Flow::Unhandled(ah),
+            0x21 => dos::int21(&mut cpu, mem, &mut self.host),
+            _ => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
         };
         match flow {
             Flow::Exit(code) => return Ok(Some(code)),
+            // Le service a pu poser un code d'erreur (AH, CF) : on le transmet.
             Flow::Unhandled(ah) => {
                 if self.unhandled.insert((vector, ah)) {
                     eprintln!("[int] INT {vector:02X}h AH={ah:02X}h non géré");
                 }
             }
-            Flow::Continue => self.vm.set_state(&cpu)?,
+            Flow::Continue => {}
         }
+        self.vm.set_state(&cpu)?;
         Ok(None)
     }
 
@@ -248,18 +250,14 @@ impl<B: Backend> Pc<B> {
         &self.unhandled
     }
 
+    /// Texte de la page active de l'écran.
+    pub fn screen_text(&self) -> Vec<String> {
+        bios::screen_text(self.vm.mem())
+    }
+
     #[cfg(test)]
     pub fn vga_byte(&self, off: usize) -> u8 {
         self.vga.0[off]
-    }
-}
-
-/// ROM BIOS en F0000 et IVT : le vecteur n pointe sur F000:n*16.
-pub fn install_bios(mem: &GuestMem) {
-    mem.write(ROM.start, BIOS_IMAGE);
-    for n in 0..256u16 {
-        mem.write_u16(usize::from(n) * 4, n * 16);
-        mem.write_u16(usize::from(n) * 4 + 2, ROM_SEG);
     }
 }
 

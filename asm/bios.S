@@ -19,7 +19,16 @@ stubs:
     iret
     .endr
 
-    # Point d'entrée après réinitialisation (F000:FFF0), en attendant l'étape 2.
+    # Table de configuration (INT 15h AH=C0h), à son adresse traditionnelle.
+    .org 0xE6F5, 0xFF
+config_table:
+    .word 8                 # longueur
+    .byte 0xFC, 0x01, 0x00  # modèle AT, sous-modèle, révision
+    .byte 0x60              # 8259 esclave, RTC
+    .byte 0, 0, 0, 0
+
+    # Point d'entrée après réinitialisation (F000:FFF0) : pas de POST,
+    # l'hôte prépare la machine et charge le programme directement.
     .org 0xFFF0, 0xFF
 reset:
     hlt

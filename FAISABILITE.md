@@ -331,13 +331,30 @@ Comportements constatés sur ce processeur : ENTER 32 bits avec pile 16 bits cop
 - Test de bout en bout `asm/tests/pmode.S` : passage en mode protégé 32 bits, `rep stosb` de 1 000 octets en A0000h, retour en mode réel ; une sortie MMIO, le reste interprété.
 - Comportements constatés : ENTER fait #SS si le nouveau sommet de pile sort de la limite ; ROL/SHLD… mémoire avec compte nul contrôlent quand même l'écriture. Banc : après une triple faute, remettre le vCPU en `KVM_MP_STATE_RUNNABLE`, sinon `KVM_RUN` attend indéfiniment.
 
+### Étape 2 : BIOS en HLE, fait le 2026-11-13 (critère C en attente)
+
+État dans la BDA, comme un vrai BIOS (`src/bios.rs`) ; registres et drapeaux rendus par IRET dans `src/hle.rs`.
+
+| Service | Couvert |
+| --- | --- |
+| BDA | équipement, 640 Ko, tampon clavier, état vidéo (mode, colonnes, lignes, pages, curseurs), tics, drapeau de minuit, octets EGA/VGA |
+| INT 10h | modes texte 0–3 et 7 (graphiques : BDA seulement, affichage à l'étape 5), curseur, pages, défilement 06h/07h, 08h/09h/0Ah, télétype 0Eh, 0Fh, 13h, 1130h, 12h BL=10h, 1Ah ; palette acceptée sans effet ; VBE absent (AL ≠ 4Fh) |
+| INT 11h, 12h | équipement, mémoire conventionnelle |
+| INT 13h | minimal : aucun lecteur |
+| INT 15h | 2401h–2403h (A20 toujours ouverte), 86h, 87h, 88h, C0h (table en F000:E6F5), E801h, E820h ; sinon AH=86h, CF=1 |
+| INT 16h | 00h–03h, 05h, 10h–12h ; tampon de la BDA alimenté par `InputSource` (scancodes jeu 1, ou caractères du terminal) |
+| INT 1Ah | tics, RTC (heure locale hôte, BCD) |
+
+Provisoire jusqu'à l'étape 4 : tics recalculés d'après l'horloge hôte à chaque appel hôte (un programme qui scrute 0040:006C sans aucun appel ne les voit pas avancer) ; touches rangées dans le tampon par l'hôte, sans IRQ 1. INT 21h 02h/09h passent par le télétype du BIOS. En ligne de commande, le clavier du terminal est lu sans écho et `--screen` affiche l'écran texte à la fin. Tests : `asm/tests/bios_{text,info,kbd,tick}.S`, 21 tests au total.
+
+Critère « programme Turbo C ou Open Watcom en mode texte » : pas encore vérifié, faute de compilateur 16 bits installé ; il dépend aussi de l'INT 21h (étape 3).
+
 ### Prochaines étapes (vers Doom sous DOS/4GW)
 
-1. Étape 2 : BIOS en HLE (BDA, INT 10h texte, 11h, 12h, 15h dont 88h/E801h, 16h, 1Ah, tick INT 08h, 13h minimal).
-2. Étape 3 : DOS en HLE (PSP, MCB, chargeur MZ, fichiers sur répertoire hôte).
-3. Étape 4 : PIC, PIT, 8042, injection d'IRQ (et HLT).
-4. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
-5. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
+1. Étape 3 : DOS en HLE (PSP, MCB, chargeur MZ, fichiers sur répertoire hôte).
+2. Étape 4 : PIC, PIT, 8042, injection d'IRQ (et HLT) ; INT 08h et 09h réels à la place des tics et du clavier provisoires.
+3. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
+4. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
 
 ## Questions ouvertes
 

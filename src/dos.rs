@@ -2,23 +2,14 @@
 //! DOS en HLE, version minimale (étape 1) : chargeur .COM et quelques
 //! services INT 21h. Le DOS complet arrive à l'étape 3.
 
-use crate::host::TextSink;
+use crate::bios;
+use crate::hle::{DS, Flow, Regs, lin};
+use crate::host::Host;
 use crate::interp::Cpu;
 use crate::mem::GuestMem;
 
 /// Segment du PSP du programme chargé.
 pub const PSP_SEG: u16 = 0x1000;
-
-pub enum Flow {
-    Continue,
-    Exit(u8),
-    /// Service non géré : AH du service.
-    Unhandled(u8),
-}
-
-fn lin(seg: u16, off: u16) -> usize {
-    (usize::from(seg) << 4) + usize::from(off)
-}
 
 /// Charge un .COM derrière un PSP minimal ; renvoie l'état initial du CPU.
 pub fn load_com(mem: &GuestMem, image: &[u8]) -> Result<Cpu, String> {
@@ -34,14 +25,22 @@ pub fn load_com(mem: &GuestMem, image: &[u8]) -> Result<Cpu, String> {
     Ok(Cpu::real_mode(PSP_SEG, 0x100, 0xFFFE))
 }
 
-pub fn int21(cpu: &mut Cpu, mem: &GuestMem, text: &mut dyn TextSink) -> Flow {
+/// Sortie console : télétype du BIOS sur la page active.
+fn con_out(mem: &GuestMem, host: &mut Host, bytes: &[u8]) {
+    let page = bios::active_page(mem);
+    for &c in bytes {
+        bios::tty(mem, host.text.as_mut(), page, c, None);
+    }
+}
+
+pub fn int21(cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Flow {
     let ax = cpu.gpr[0];
     let ah = (ax >> 8) as u8;
     let al = ax as u8;
-    let ds = cpu.seg[3].selector;
+    let ds = cpu.sreg(DS);
     let dx = cpu.gpr[2] as u16;
     match ah {
-        0x02 => text.write(&[cpu.gpr[2] as u8]),
+        0x02 => con_out(mem, host, &[cpu.gpr[2] as u8]),
         0x09 => {
             let mut s = Vec::new();
             let mut off = dx;
@@ -53,7 +52,7 @@ pub fn int21(cpu: &mut Cpu, mem: &GuestMem, text: &mut dyn TextSink) -> Flow {
                 s.push(c);
                 off = off.wrapping_add(1);
             }
-            text.write(&s);
+            con_out(mem, host, &s);
         }
         // Détourner un vecteur : AL = n°, DS:DX = gestionnaire.
         0x25 => {

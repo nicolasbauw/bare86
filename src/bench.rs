@@ -9,14 +9,15 @@ use crate::throttle::InstrCounter;
 use crate::interp::{Mmio, continue_in_host};
 use crate::backend::Backend;
 use crate::kvm::{KvmVm as Machine, VGA_WINDOW};
-use crate::machine::{HOST_CALL_PORT, ROM_SEG};
+use crate::bios::ROM_SEG;
+use crate::machine::HOST_CALL_PORT;
 use crate::mem::GuestMem;
 
 /// 1 Mo + HMA.
 const MEM_SIZE: usize = 0x11_0000;
 
 fn install_ivt(m: &Machine) {
-    crate::machine::install_bios(&m.mem);
+    crate::bios::install_rom(&m.mem);
 }
 
 fn load_com(m: &mut Machine, image: &[u8]) -> crate::backend::Result<()> {

@@ -15,7 +15,8 @@ use kvm_ioctls::VcpuExit;
 use super::alu::*;
 use super::{Cpu, Mmio, Seg, step_once};
 use crate::kvm::KvmVm;
-use crate::machine::{HOST_CALL_PORT, ROM_SEG};
+use crate::bios::ROM_SEG;
+use crate::machine::HOST_CALL_PORT;
 use crate::mem::GuestMem;
 
 /// 1 Mo + HMA.

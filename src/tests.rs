@@ -3,7 +3,8 @@
 //! (asm/tests/*.S), exécutés sans fenêtre.
 
 use crate::debug;
-use crate::host::{Capture, Host};
+use crate::bios;
+use crate::host::{Capture, Host, InputEvent, ScriptedInput};
 use crate::machine::{Config, Pc};
 
 macro_rules! program {
@@ -13,8 +14,14 @@ macro_rules! program {
 }
 
 fn machine(cfg: &Config, image: &[u8]) -> (Pc, Capture) {
+    machine_with_input(cfg, image, &[])
+}
+
+fn machine_with_input(cfg: &Config, image: &[u8], input: &[InputEvent]) -> (Pc, Capture) {
     let out = Capture::default();
-    let mut pc = Pc::new(cfg, Host::headless(Box::new(out.clone()))).expect("machine");
+    let mut host = Host::headless(Box::new(out.clone()));
+    host.input = Box::new(ScriptedInput(input.iter().copied().collect()));
+    let mut pc = Pc::new(cfg, host).expect("machine");
     pc.load_com(image).expect("chargement");
     (pc, out)
 }
@@ -101,6 +108,58 @@ fn throttled_run_completes() {
     let cfg = Config { mips: Some(50.0), ..Config::default() };
     let (mut pc, _) = machine(&cfg, program!("exit42"));
     assert_eq!(pc.run().unwrap(), 42);
+}
+
+#[test]
+fn hello_reaches_text_screen() {
+    let (_, _, pc) = run(program!("hello"));
+    assert_eq!(pc.screen_text()[0], "Hello from KVM!");
+}
+
+#[test]
+fn bios_text_mode() {
+    let (code, text, pc) = run(program!("bios_text"));
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/bios_text.S)");
+    assert_eq!(text, "L1\r\nL2Hi");
+    let screen = pc.screen_text();
+    // Après défilement d'une ligne : L1 disparaît, tout remonte.
+    assert_eq!(screen[0], "L2");
+    assert_eq!(screen[9], "     XXX");
+    assert_eq!(screen[11], "Hi");
+    assert_eq!(screen[24], "");
+    let mem = pc.vm.mem();
+    assert_eq!(bios::screen_attr(mem, 9, 5), 0x1E);
+    assert_eq!(bios::screen_attr(mem, 11, 1), 0x70);
+    assert_eq!(bios::screen_attr(mem, 24, 0), 0x07);
+    // 13h avec AL=1 : curseur après la chaîne (avant défilement).
+    assert_eq!(mem.read_u16(0x450), 0x0C02);
+}
+
+#[test]
+fn bios_info() {
+    assert_eq!(run(program!("bios_info")).0, 0, "n° du contrôle en échec (voir asm/tests/bios_info.S)");
+}
+
+#[test]
+fn bios_keyboard() {
+    // Maj + h, puis « i » tapé au terminal.
+    let keys = [InputEvent::Key(0x2A), InputEvent::Key(0x23), InputEvent::Key(0xA3), InputEvent::Key(0xAA), InputEvent::Text(b'i')];
+    let (mut pc, out) = machine_with_input(&Config::default(), program!("bios_kbd"), &keys);
+    assert_eq!(pc.run().unwrap(), 0, "n° du contrôle en échec (voir asm/tests/bios_kbd.S)");
+    assert_eq!(&*out.0.borrow(), b"Hi");
+}
+
+#[test]
+fn bios_keyboard_without_input_fails_cleanly() {
+    let (mut pc, _) = machine(&Config::default(), program!("bios_kbd"));
+    let err = pc.run().unwrap_err();
+    assert!(err.0.contains("INT 16h"), "{err}");
+}
+
+#[test]
+fn bios_ticks_follow_host_clock() {
+    let ticks = run(program!("bios_tick")).0;
+    assert!((1..=3).contains(&ticks), "{ticks} tics pour 110 ms");
 }
 
 use crate::backend::Backend;

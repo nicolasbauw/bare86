@@ -62,6 +62,24 @@ impl GuestMem {
     pub fn write_u16(&self, addr: usize, v: u16) {
         self.write(addr, &v.to_le_bytes());
     }
+
+    pub fn write_u8(&self, addr: usize, v: u8) {
+        self.write(addr, &[v]);
+    }
+
+    pub fn read_u32(&self, addr: usize) -> u32 {
+        let mut b = [0; 4];
+        self.read(addr, &mut b);
+        u32::from_le_bytes(b)
+    }
+
+    pub fn write_u32(&self, addr: usize, v: u32) {
+        self.write(addr, &v.to_le_bytes());
+    }
+
+    pub fn fill(&self, addr: usize, len: usize, v: u8) {
+        self.write(addr, &vec![v; len]);
+    }
 }
 
 impl Drop for GuestMem {
