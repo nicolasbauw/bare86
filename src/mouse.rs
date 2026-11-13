@@ -9,6 +9,9 @@ use crate::hle::{AX, BX, CX, DX, ES, Flow, Regs};
 use crate::interp::Cpu;
 use crate::mem::GuestMem;
 
+/// Taille de l'état du pilote pour AX=0015h–0017h.
+const STATE_SIZE: usize = 24;
+
 #[derive(Clone, Copy, Default)]
 struct ButtonLog {
     count: u16,
@@ -121,6 +124,25 @@ impl Mouse {
         self.drawn = Some((at, attr));
     }
 
+    /// État sauvegardé par AX=0016h, en mots de 16 bits.
+    fn state(&self) -> [u16; STATE_SIZE / 2] {
+        let v = [self.x, self.y, self.shown, self.min.0, self.min.1, self.max.0, self.max.1, self.ratio.0, self.ratio.1];
+        let mut out = [0u16; STATE_SIZE / 2];
+        for (o, x) in out.iter_mut().zip(v) {
+            *o = x as u16;
+        }
+        (out[9], out[10], out[11]) = self.handler;
+        out
+    }
+
+    fn set_state(&mut self, s: &[u16]) {
+        let i = |k: usize| i32::from(s[k] as i16);
+        (self.x, self.y, self.shown) = (i(0), i(1), i(2).min(0));
+        (self.min, self.max, self.ratio) = ((i(3), i(4)), (i(5), i(6)), (i(7).max(1), i(8).max(1)));
+        self.handler = (s[9], s[10], s[11]);
+        self.clamp();
+    }
+
     pub fn int33(&mut self, cpu: &mut Cpu, mem: &GuestMem) -> Flow {
         let ax = cpu.w(AX);
         match ax {
@@ -204,6 +226,20 @@ impl Mouse {
                 cpu.set_w(DX, 50);
             }
             0x001E => cpu.set_w(BX, 0),
+            // Taille, sauvegarde et restauration de l'état du pilote (ES:DX).
+            0x0015 => cpu.set_w(BX, STATE_SIZE as u16),
+            0x0016 | 0x0017 => {
+                let at = (usize::from(cpu.sreg(ES)) << 4) + usize::from(cpu.w(DX));
+                if ax == 0x16 {
+                    for (i, w) in self.state().into_iter().enumerate() {
+                        mem.write_u16(at + 2 * i, w);
+                    }
+                } else {
+                    let s: Vec<u16> = (0..STATE_SIZE / 2).map(|i| mem.read_u16(at + 2 * i)).collect();
+                    self.set_state(&s);
+                    self.redraw(mem);
+                }
+            }
             // Version 8.05, souris PS/2.
             0x0024 => {
                 cpu.set_w(BX, 0x0805);

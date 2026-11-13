@@ -66,7 +66,7 @@ impl Kbc {
         irq
     }
 
-    #[allow(dead_code)] // porte A20 : étape 6
+    #[allow(dead_code)] // A20 toujours ouverte en mémoire (FAISABILITE, étape 6)
     pub fn a20(&self) -> bool {
         self.output_port & 2 != 0
     }
@@ -153,12 +153,22 @@ pub struct KbcPorts(pub Rc<RefCell<Kbc>>);
 impl IoDevice for KbcPorts {
     fn read(&mut self, port: u16, _: u8) -> u32 {
         let mut k = self.0.borrow_mut();
-        u32::from(if port == 0x60 { k.read_data() } else { k.status() })
+        u32::from(match port {
+            0x60 => k.read_data(),
+            // Port de contrôle système A (« fast A20 ») : bit 1 = A20.
+            0x92 => k.output_port & 2,
+            _ => k.status(),
+        })
     }
 
     fn write(&mut self, port: u16, _: u8, value: u32) {
         let mut k = self.0.borrow_mut();
-        if port == 0x60 { k.write_data(value as u8) } else { k.controller_command(value as u8) }
+        match port {
+            0x60 => k.write_data(value as u8),
+            // Bit 0 (réinitialisation rapide) ignoré.
+            0x92 => k.output_port = (k.output_port & !2) | (value as u8 & 2),
+            _ => k.controller_command(value as u8),
+        }
     }
 }
 

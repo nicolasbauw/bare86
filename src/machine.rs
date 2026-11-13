@@ -244,6 +244,7 @@ impl<B: Backend> Pc<B> {
         let kbc = Kbc::new().shared();
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
+        io.map(0x92..=0x92, Box::new(KbcPorts(kbc.clone())));
         Ok(Self {
             vm,
             io,
