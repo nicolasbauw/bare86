@@ -298,12 +298,7 @@ impl Bios {
             set_ret_flag(cpu, mem, CF, false);
         };
         match (ah, cpu.lo(AX)) {
-            // Porte A20 : toujours ouverte (fermeture gérée à l'étape 6).
-            (0x24, 0x01) => ok(cpu, 0),
-            (0x24, 0x02) => {
-                cpu.set_lo(AX, 1);
-                ok(cpu, 0);
-            }
+            // Porte A20 : AX=2400h–2402h servis par la machine (8042).
             (0x24, 0x03) => {
                 cpu.set_w(BX, 0x0003);
                 ok(cpu, 0);

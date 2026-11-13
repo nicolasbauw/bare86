@@ -87,4 +87,6 @@ pub trait Backend {
     /// natifs), ou la démappe (`None` : accès MMIO). L'adresse est toujours
     /// la même : la vue hôte est remappée par la carte VGA elle-même.
     fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()>;
+    /// Porte A20 : fermée, la HMA (100000h–10FFEFh) se replie sur 0.
+    fn set_a20(&mut self, open: bool) -> Result<()>;
 }

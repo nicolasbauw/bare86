@@ -27,7 +27,10 @@
     mov al, 4
     cmp word ptr es:[0], 0x1F41
     jne fail
-    # 5. Mémoire étendue (A20 active) : FFFF:0010 = 100000h.
+    # 5. Mémoire étendue (A20 ouverte par le port 92h) : FFFF:0010 = 100000h.
+    in al, 0x92
+    or al, 2
+    out 0x92, al
     mov ax, 0xFFFF
     mov es, ax
     mov byte ptr es:[0x10], 0xA5

@@ -32,7 +32,7 @@ enum Pending {
 
 impl Kbc {
     pub fn new() -> Self {
-        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCF, pending: None, irq: false }
+        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCD, pending: None, irq: false }
     }
 
     pub fn shared(self) -> Rc<RefCell<Self>> {
@@ -66,9 +66,14 @@ impl Kbc {
         irq
     }
 
-    #[allow(dead_code)] // A20 toujours ouverte en mémoire (FAISABILITE, étape 6)
+    /// Porte A20 (bit 1 du port de sortie), fermée au démarrage comme
+    /// après le POST d'un AT. Le port 92h, XMS et l'INT 15h passent par là.
     pub fn a20(&self) -> bool {
         self.output_port & 2 != 0
+    }
+
+    pub fn set_a20(&mut self, open: bool) {
+        self.output_port = (self.output_port & !2) | if open { 2 } else { 0 };
     }
 
     fn status(&self) -> u8 {

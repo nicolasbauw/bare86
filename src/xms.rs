@@ -26,11 +26,14 @@ pub struct Xms {
     blocks: Vec<Block>,
     hma_used: bool,
     next_handle: u16,
+    /// A20 : ouverture globale (03h/04h) et compteur local (05h/06h).
+    global_a20: bool,
+    local_a20: u32,
 }
 
 impl Xms {
     pub fn new(mem_size: usize) -> Self {
-        Self { pool_end: mem_size.max(POOL_START), blocks: Vec::new(), hma_used: false, next_handle: 1 }
+        Self { pool_end: mem_size.max(POOL_START), blocks: Vec::new(), hma_used: false, next_handle: 1, global_a20: false, local_a20: 0 }
     }
 
     /// INT 2Fh, fonctions 43h ; `None` pour les autres.
@@ -146,8 +149,9 @@ impl Xms {
     }
 
     /// Point d'entrée XMS (appel lointain) : AX=1 en cas de succès, sinon
-    /// AX=0 et BL = code d'erreur.
-    pub fn call(&mut self, cpu: &mut Cpu, mem: &GuestMem) -> Flow {
+    /// AX=0 et BL = code d'erreur. `a20` : état réel de la porte, que les
+    /// fonctions 03h à 06h modifient.
+    pub fn call(&mut self, cpu: &mut Cpu, mem: &GuestMem, a20: &mut bool) -> Flow {
         let ah = cpu.hi(AX);
         let r: Result<(), u8> = match ah {
             // Version 3.00, révision 3.95, HMA présente.
@@ -167,10 +171,19 @@ impl Xms {
                 self.hma_used = false;
                 Ok(())
             }
-            // A20 : toujours ouverte.
-            0x03..=0x06 => Ok(()),
+            // A20 : ouverte tant que l'ouverture globale ou locale tient.
+            0x03..=0x06 => {
+                match ah {
+                    0x03 => self.global_a20 = true,
+                    0x04 => self.global_a20 = false,
+                    0x05 => self.local_a20 += 1,
+                    _ => self.local_a20 = self.local_a20.saturating_sub(1),
+                }
+                *a20 = self.global_a20 || self.local_a20 > 0;
+                Ok(())
+            }
             0x07 => {
-                cpu.set_w(AX, 1);
+                cpu.set_w(AX, u16::from(*a20));
                 cpu.set_lo(BX, 0);
                 return Flow::Continue;
             }
@@ -264,7 +277,7 @@ mod tests {
 
     fn call(x: &mut Xms, cpu: &mut Cpu, mem: &GuestMem, ax: u16) -> u16 {
         cpu.set_w(AX, ax);
-        x.call(cpu, mem);
+        x.call(cpu, mem, &mut false);
         cpu.w(AX)
     }
 

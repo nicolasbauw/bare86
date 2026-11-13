@@ -32,7 +32,9 @@
     jc fail
     cmp byte ptr es:[bx+2], 0xFC
     jne fail
-    mov ax, 0x2402              # 6. A20 ouverte
+    mov ax, 0x2401              # 6. A20 ouverte à la demande
+    int 0x15
+    mov ax, 0x2402
     int 0x15
     mov di, 6
     jc fail

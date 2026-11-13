@@ -24,6 +24,10 @@ pub struct Region {
 
 /// Slot KVM réservé à la fenêtre VGA quand elle est mappée (bancs).
 const VGA_SLOT: u32 = 31;
+/// Slot de la HMA (100000h–10FFFFh) : la mémoire de 1 Mo, ou les 64
+/// premiers Ko quand la porte A20 est fermée (repliement).
+const HMA_SLOT: u32 = 30;
+pub const HMA: std::ops::Range<usize> = 0x10_0000..0x11_0000;
 
 pub struct KvmVm {
     _kvm: Kvm,
@@ -107,6 +111,25 @@ impl KvmVm {
         // SAFETY: la mémoire doit rester mappée tant que la VM vit (à la charge de l'appelant).
         unsafe { self.vm.set_user_memory_region(region)? };
         self.vga_mapped.set(true);
+        Ok(())
+    }
+
+    /// Porte A20 : HMA sur la mémoire de 1 Mo (ouverte) ou repliée sur 0.
+    pub fn set_a20_slot(&self, open: bool) -> Result<()> {
+        assert!(self.mem.size() >= HMA.end);
+        let mut region = kvm_userspace_memory_region {
+            slot: HMA_SLOT,
+            flags: 0,
+            guest_phys_addr: HMA.start as u64,
+            memory_size: 0,
+            userspace_addr: 0,
+        };
+        // SAFETY: taille 0 = suppression (sans effet si le slot n'existe pas encore).
+        let _ = unsafe { self.vm.set_user_memory_region(region) };
+        region.memory_size = HMA.len() as u64;
+        // SAFETY: dans notre mappage, vivant autant que la VM.
+        region.userspace_addr = unsafe { self.mem.ptr.add(if open { HMA.start } else { 0 }) } as u64;
+        unsafe { self.vm.set_user_memory_region(region)? };
         Ok(())
     }
 
@@ -195,6 +218,10 @@ impl Backend for KvmVm {
             return Err(std::io::Error::last_os_error().into());
         }
         Ok(())
+    }
+
+    fn set_a20(&mut self, open: bool) -> Result<()> {
+        self.set_a20_slot(open)
     }
 
     fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()> {

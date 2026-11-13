@@ -340,3 +340,8 @@ use crate::backend::Backend;
 fn flags_show_a_386() {
     assert_eq!(run(program!("cpu386")).0, 7, "bits IOPL/NT de FLAGS relus après POPF");
 }
+
+#[test]
+fn a20_gate() {
+    assert_eq!(run(program!("a20")).0, 0, "n° du contrôle en échec (voir asm/tests/a20.S)");
+}

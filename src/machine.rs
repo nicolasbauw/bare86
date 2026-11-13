@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::backend::{Backend, Error, Exit, Result};
 use crate::bios::{self, Bios, ROM, ROM_SEG};
 use crate::dos;
-use crate::hle::Flow;
+use crate::hle::{AX, CF, Flow, Regs, set_ret_flag};
 use crate::host::Host;
 use crate::interp::{self, Mmio};
 use crate::io::IoBus;
@@ -206,6 +206,8 @@ pub struct Pc<B: Backend = KvmVm> {
     trace_int: bool,
     /// Services non gérés déjà signalés (vecteur, AH).
     unhandled: BTreeSet<(u8, u8)>,
+    /// État de la porte A20 appliqué aux slots mémoire.
+    a20: Option<bool>,
 }
 
 impl Pc<KvmVm> {
@@ -216,7 +218,8 @@ impl Pc<KvmVm> {
             r(0, VGA_WINDOW.start, false),
             r(VGA_WINDOW.end, ROM.start, false),
             r(ROM.start, ROM.end, true),
-            r(ROM.end, size, false),
+            // La HMA a son propre slot (porte A20, `Backend::set_a20`).
+            r(crate::kvm::HMA.end, size, false),
         ];
         let vm = KvmVm::with_layout(size, &layout)?;
         Self::with_backend(vm, cfg, host)
@@ -249,7 +252,7 @@ impl<B: Backend> Pc<B> {
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
         io.map(0x92..=0x92, Box::new(KbcPorts(kbc.clone())));
-        Ok(Self {
+        let mut pc = Self {
             vm,
             io,
             host,
@@ -280,7 +283,10 @@ impl<B: Backend> Pc<B> {
             stepping: false,
             trace_int: cfg.trace_int,
             unhandled: BTreeSet::new(),
-        })
+            a20: None,
+        };
+        pc.sync_a20()?;
+        Ok(pc)
     }
 
     /// Monte un répertoire hôte comme lecteur (0 = A:).
@@ -354,6 +360,16 @@ impl<B: Backend> Pc<B> {
         self.stepping = on;
         self.vm.request_irq_window(false);
         self.vm.set_single_step(on)
+    }
+
+    /// Applique aux slots mémoire l'état de la porte A20 tenu par le 8042.
+    fn sync_a20(&mut self) -> Result<()> {
+        let open = self.kbc.borrow().a20();
+        if self.a20 != Some(open) {
+            self.vm.set_a20(open)?;
+            self.a20 = Some(open);
+        }
+        Ok(())
     }
 
     /// Mappe, remappe ou démappe la fenêtre A0000 selon la configuration VGA.
@@ -552,7 +568,12 @@ impl<B: Backend> Pc<B> {
                     let code = data[0];
                     self.bios.scancode(self.vm.mem(), code);
                 }
-                Exit::IoOut { port, data } => self.io.write(port, data),
+                Exit::IoOut { port, data } => {
+                    self.io.write(port, data);
+                    if matches!(port, 0x60 | 0x92) {
+                        self.sync_a20()?;
+                    }
+                }
                 Exit::IoIn { port, data } => self.io.read(port, data),
                 Exit::MmioRead { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
@@ -619,7 +640,10 @@ impl<B: Backend> Pc<B> {
         if xms_entry {
             self.stats.host_calls += 1;
             let mut cpu = cpu;
-            self.xms.call(&mut cpu, self.vm.mem());
+            let mut a20 = self.kbc.borrow().a20();
+            self.xms.call(&mut cpu, self.vm.mem(), &mut a20);
+            self.kbc.borrow_mut().set_a20(a20);
+            self.sync_a20()?;
             self.vm.set_state(&cpu)?;
             return Ok(None);
         }
@@ -648,6 +672,16 @@ impl<B: Backend> Pc<B> {
         let driver = match vector {
             0x2F => self.xms.int2f(&mut cpu, (ROM_SEG, bios::XMS_ENTRY)),
             0x67 => Some(self.ems.int67(&mut cpu, mem)),
+            0x15 if ah == 0x24 && cpu.lo(AX) <= 2 => {
+                let mut kbc = self.kbc.borrow_mut();
+                match cpu.lo(AX) {
+                    2 => cpu.set_lo(AX, u8::from(kbc.a20())),
+                    al => kbc.set_a20(al == 1),
+                }
+                cpu.set_hi(AX, 0);
+                set_ret_flag(&cpu, mem, CF, false);
+                Some(Flow::Continue)
+            }
             _ => None,
         };
         let flow = match driver {
@@ -688,6 +722,7 @@ impl<B: Backend> Pc<B> {
                 flags & 1
             );
         }
+        self.sync_a20()?;
         self.vm.set_state(&cpu)?;
         Ok(None)
     }
