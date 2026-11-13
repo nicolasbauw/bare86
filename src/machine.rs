@@ -384,6 +384,10 @@ impl<B: Backend> Pc<B> {
             self.pic.borrow_mut().raise(0);
         }
         self.heartbeat.set_period(heartbeat_period(pit.irq0_period()))?;
+        if let Some(sp) = &self.host.speaker {
+            let f = pit.speaker().map_or(0, |f| (f * 100.0) as u32);
+            sp.store(f, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(())
     }
 

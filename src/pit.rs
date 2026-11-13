@@ -268,7 +268,6 @@ impl Pit {
     }
 
     /// Haut-parleur : fréquence en Hz s'il sonne (porte, données, onde carrée).
-    #[allow(dead_code)] // branché à la sortie son (étape 5)
     pub fn speaker(&self) -> Option<f64> {
         let c = &self.ch[2];
         (self.port61 & 3 == 3 && c.armed && matches!(c.mode, 3 | 7)).then(|| PIT_HZ as f64 / f64::from(c.reload))
