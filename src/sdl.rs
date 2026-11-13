@@ -200,18 +200,21 @@ where
         .map_err(|e| e.to_string())?;
 
     let mut texture = None;
+    let mut upscaled: Option<((u32, u32), sdl3::render::Texture)> = None;
     let mut size = (0, 0);
     let mut shown = 0u64;
     let mut buttons = 0u8;
     // Souris capturée (mode relatif, curseur masqué) : un clic dans la
-    // fenêtre la capture, Ctrl+F10 ou la perte du focus la libère.
+    // fenêtre la capture, le bouton central, Ctrl+F10 ou la perte du focus
+    // la libèrent.
     let mouse = sdl.mouse();
     let mut captured = false;
     let mut swallow_f10 = false;
+    let mut swallow_middle = false;
     let set_capture = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, on: bool, captured: &mut bool| {
         *captured = on;
         mouse.set_relative_mouse_mode(canvas.window(), on);
-        let hint = if on { "Ctrl+F10 libère la souris" } else { "cliquer pour capturer la souris" };
+        let hint = if on { "bouton central ou Ctrl+F10 libère la souris" } else { "cliquer pour capturer la souris" };
         let _ = canvas.window_mut().set_title(&format!("{title} — {hint}"));
     };
     set_capture(&mut canvas, false, &mut captured);
@@ -229,6 +232,13 @@ where
                     set_capture(&mut canvas, false, &mut captured);
                 }
                 Event::KeyUp { scancode: Some(Scancode::F10), .. } if swallow_f10 => swallow_f10 = false,
+                Event::MouseButtonDown { mouse_btn: sdl3::mouse::MouseButton::Middle, .. } if captured => {
+                    swallow_middle = true;
+                    set_capture(&mut canvas, false, &mut captured);
+                }
+                Event::MouseButtonUp { mouse_btn: sdl3::mouse::MouseButton::Middle, .. } if swallow_middle => {
+                    swallow_middle = false;
+                }
                 Event::MouseButtonDown { .. } if !captured => set_capture(&mut canvas, true, &mut captured),
                 Event::MouseMotion { .. } | Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } if !captured => {}
                 Event::KeyDown { scancode, repeat, .. } => {
@@ -285,9 +295,27 @@ where
             let (ww, wh) = canvas.output_size().map_err(|e| e.to_string())?;
             let (ww, wh) = (ww as f32, wh as f32);
             let (dw, dh) = if ww * 3.0 > wh * 4.0 { (wh * 4.0 / 3.0, wh) } else { (ww, ww * 3.0 / 4.0) };
+            // Mise à l'échelle nette : agrandissement entier sans lissage
+            // (chaque ligne répétée le même nombre de fois), puis réduction
+            // lissée à la taille finale. Un étirement direct au plus proche
+            // voisin doublerait certaines lignes et pas d'autres.
+            let kx = ((dw / w as f32).ceil() as usize).max(1);
+            let ky = ((dh / h as f32).ceil() as usize).max(1);
+            let up_size = ((w * kx) as u32, (h * ky) as u32);
+            if upscaled.as_ref().is_none_or(|(sz, _)| *sz != up_size) {
+                let mut u = creator.create_texture_target(PixelFormat::XRGB8888, up_size.0, up_size.1).map_err(|e| e.to_string())?;
+                u.set_scale_mode(sdl3::render::ScaleMode::Linear);
+                upscaled = Some((up_size, u));
+            }
+            let (_, up) = upscaled.as_mut().expect("texture agrandie");
+            let mut copied = Ok(());
+            canvas
+                .with_texture_canvas(up, |c| copied = c.copy(t, None, None))
+                .map_err(|e| e.to_string())?;
+            copied.map_err(|e| e.to_string())?;
             canvas.set_draw_color(sdl3::pixels::Color::RGB(0, 0, 0));
             canvas.clear();
-            canvas.copy(t, None, FRect::new((ww - dw) / 2.0, (wh - dh) / 2.0, dw, dh)).map_err(|e| e.to_string())?;
+            canvas.copy(up, None, FRect::new((ww - dw) / 2.0, (wh - dh) / 2.0, dw, dh)).map_err(|e| e.to_string())?;
             canvas.present();
         } else {
             std::thread::sleep(Duration::from_millis(2));
