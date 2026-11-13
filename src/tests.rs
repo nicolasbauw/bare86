@@ -231,4 +231,18 @@ fn shell_session() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn fcb_files() {
+    let dir = std::env::temp_dir().join(format!("dosbox-fcb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut pc = Pc::new(&Config::default(), Host::headless(Box::new(Capture::default()))).unwrap();
+    pc.mount(2, dir.clone());
+    pc.load_com(program!("fcb")).unwrap();
+    assert_eq!(pc.run().unwrap(), 0, "n° du contrôle en échec (voir asm/tests/fcb.S)");
+    assert!(pc.unhandled().is_empty(), "{:?}", pc.unhandled());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 use crate::backend::Backend;

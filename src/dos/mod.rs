@@ -6,6 +6,7 @@
 //! Lists. Le reste (SFT, recherches en cours, lecteurs) est tenu par l'hôte.
 //! Les fichiers sont ceux de répertoires hôtes montés comme lecteurs.
 
+mod fcb;
 mod fs;
 mod handles;
 mod memory;
@@ -616,13 +617,8 @@ impl Dos {
             if results.is_empty() {
                 return Err(fs::ERR_FILE_NOT_FOUND);
             }
-            let id = self.next_search;
-            self.next_search = self.next_search.wrapping_add(1).max(1);
-            if self.searches.len() >= MAX_SEARCHES {
-                self.searches.pop_front();
-            }
             results.reverse();
-            self.searches.push_back(Search { id, results });
+            let id = self.new_search(results);
             // Zone réservée de la DTA : lecteur, motif, attributs, puis notre n°.
             mem.write_u8(dta, self.drives.current + 1);
             mem.write(dta + 1, &pattern);
@@ -640,6 +636,17 @@ impl Dos {
         name[..f.name.len()].copy_from_slice(&f.name);
         mem.write(dta + 0x1E, &name);
         Ok(())
+    }
+
+    /// Enregistre une recherche (résultats en ordre inverse) ; renvoie son n°.
+    fn new_search(&mut self, results: Vec<Found>) -> u16 {
+        let id = self.next_search;
+        self.next_search = self.next_search.wrapping_add(1).max(1);
+        if self.searches.len() >= MAX_SEARCHES {
+            self.searches.pop_front();
+        }
+        self.searches.push_back(Search { id, results });
+        id
     }
 
     fn path_arg(&self, mem: &GuestMem, seg: u16, off: u16) -> std::result::Result<(PathBuf, bool), u16> {
@@ -746,6 +753,10 @@ impl Dos {
                     self.drives.current = cpu.lo(DX);
                 }
                 cpu.set_lo(AX, 26);
+                Out::Keep
+            }
+            0x0F..=0x17 | 0x21..=0x24 | 0x27 | 0x28 => {
+                self.int21_fcb(cpu, mem);
                 Out::Keep
             }
             0x19 => {
