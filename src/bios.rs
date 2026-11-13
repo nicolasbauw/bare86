@@ -29,7 +29,7 @@ pub const DBCS_TABLE: u16 = 0xE700;
 pub const CASE_MAP: u16 = 0xE710;
 
 /// Adresses dans la BDA.
-mod bda {
+pub mod bda {
     pub const EQUIPMENT: usize = 0x410;
     pub const HARD_DISKS: usize = 0x475;
     pub const MEM_KB: usize = 0x413;
@@ -78,6 +78,10 @@ pub const INT09: u16 = 0xE987;
 /// Table des paramètres de disquette (asm/bios.S, vecteur 1Eh).
 pub const DISKETTE_PARAMS: u16 = 0xEFC7;
 pub const XMS_ENTRY: u16 = 0xE8A0;
+/// Souris PS/2 (asm/bios.S) : routine du pilote, INT 74h, appel hôte.
+pub const PS2_HANDLER: usize = 0xF_E938;
+const INT74: u16 = 0xE940;
+pub const PS2_FETCH: u16 = 0xE948;
 /// VBE (asm/bios.S) : fonction de fenêtre, chaînes, liste des modes.
 const VBE_WIN_FUNC: u16 = 0xE8D0;
 const VBE_OEM: u16 = 0xE8E0;
@@ -181,6 +185,7 @@ pub fn install_rom(mem: &GuestMem) {
         set(n, IRQ_SLAVE_DEFAULT);
     }
     set(0x1C, DUMMY_IRET);
+    set(0x74, INT74);
     // Vecteur 1Eh : données (paramètres de disquette), pas du code.
     set(0x1E, DISKETTE_PARAMS);
 }

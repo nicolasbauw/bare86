@@ -99,6 +99,16 @@ impl Pic {
         Self { master: Chip::new(0x08, 0xF8), slave: Chip::new(0x70, 0xFF) }
     }
 
+    /// Ouvre l'IRQ 0–15 (et la cascade pour une IRQ de l'esclave).
+    pub fn unmask(&mut self, irq: u8) {
+        if irq < 8 {
+            self.master.imr &= !(1 << irq);
+        } else {
+            self.slave.imr &= !(1 << (irq - 8));
+            self.master.imr &= !(1 << 2);
+        }
+    }
+
     /// Front montant sur l'IRQ 0–15.
     pub fn raise(&mut self, irq: u8) {
         if irq < 8 {

@@ -137,6 +137,37 @@ vbe_modes:
     .word 0x110, 0x111, 0x112, 0x113, 0x114, 0x115, 0x116, 0x117, 0x118
     .word 0xFFFF
 
+    # Souris PS/2 (INT 15h AX=C2xxh) : routine du pilote (déposée par l'hôte)
+    # et INT 74h (IRQ 12), qui demande un paquet à l'hôte (AX ≠ 0 : état en
+    # BX, X en CX, Y en DX) et le passe à la routine en pile : état, X, Y, 0.
+    .org 0xE938, 0xFF
+ps2_handler:
+    .word 0, 0
+    .org 0xE940, 0xFF
+int74:
+    pusha
+    push ds
+    push es
+    xor ax, ax
+    .org 0xE948, 0x90
+ps2_fetch:
+    out HOST_CALL, al
+    test ax, ax
+    jz 1f
+    push bx
+    push cx
+    push dx
+    push 0
+    call dword ptr cs:[ps2_handler]
+    add sp, 8
+1:  mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop es
+    pop ds
+    popa
+    iret
+
     # INT 09h, IRQ 1 (adresse de l'IBM AT) : scancode lu au 8042, proposé à
     # INT 15h AH=4Fh, puis confié à l'hôte (port E1h) qui tient la BDA.
     .org 0xE987, 0xFF

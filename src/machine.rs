@@ -272,6 +272,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Scrutation du clavier à vide (INT 16h AH=01h/11h sans touche) : début
     /// de la série et dernier appel.
     idle_polls: Option<(Instant, Instant)>,
+    /// Souris PS/2 de l'interface du BIOS (vrai DOS).
+    ps2: crate::mouse::Ps2,
     /// DOS fourni par l'hôte ; faux après un démarrage sur image disque.
     dos_hle: bool,
     /// Lecteur de démarrage (redémarrages à chaud).
@@ -384,6 +386,7 @@ impl<B: Backend> Pc<B> {
             unhandled: BTreeSet::new(),
             a20: None,
             idle_polls: None,
+            ps2: Default::default(),
             dos_hle: true,
             boot_drive: 0,
             mem_size: 0x10_0000 + cfg.extended_kb * 1024,
@@ -436,6 +439,8 @@ impl<B: Backend> Pc<B> {
         let mem = self.vm.mem();
         mem.write_u16(0x67 * 4, 0x67 * 16);
         mem.write_u16(0x67 * 4 + 2, ROM_SEG);
+        // Souris PS/2 annoncée (bit 2 du mot d'équipement) : INT 15h AH=C2h.
+        mem.write_u16(bios::bda::EQUIPMENT, mem.read_u16(bios::bda::EQUIPMENT) | 4);
         mem.fill(0x500, 0xA_0000 - 0x500, 0);
         mem.write(0x7C00, &sector);
         let mut cpu = crate::interp::Cpu::real_mode(0, 0x7C00, 0x7C00);
@@ -460,6 +465,7 @@ impl<B: Backend> Pc<B> {
         self.ems = crate::ems::Ems::new(self.ems_kb);
         *self.pic.borrow_mut() = Pic::new();
         *self.pit.borrow_mut() = Pit::new();
+        self.ps2 = Default::default();
         self.kbc.borrow_mut().set_a20(false);
         self.sync_a20()?;
         self.boot_disk(self.boot_drive)?;
@@ -629,9 +635,13 @@ impl<B: Backend> Pc<B> {
                 }
                 Some(InputEvent::Key(code)) => self.keys.push_back(code),
                 Some(InputEvent::Text(c)) => self.keys.extend(keyboard::text_scancodes(c)),
+                Some(InputEvent::Mouse { dx, dy, buttons }) if !self.dos_hle => self.ps2.event(dx, dy, buttons),
                 Some(InputEvent::Mouse { dx, dy, buttons }) => self.bios.mouse.event(self.vm.mem(), dx, dy, buttons),
                 None => break,
             }
+        }
+        if self.ps2.take_irq() {
+            self.pic.borrow_mut().raise(12);
         }
         let now = Instant::now();
         // Une touche reste enfoncée KEY_HOLD avant son relâchement : les jeux
@@ -857,7 +867,21 @@ impl<B: Backend> Pc<B> {
     fn host_call(&mut self) -> Result<Option<u8>> {
         let mut cpu = self.vm.state()?;
         let xms_entry = (u32::from(bios::XMS_ENTRY)..u32::from(bios::XMS_ENTRY) + 16).contains(&cpu.ip);
-        if cpu.seg[1].selector != ROM_SEG || (cpu.ip >= 0x1000 && !xms_entry) {
+        let ps2_fetch = (u32::from(bios::PS2_FETCH)..u32::from(bios::PS2_FETCH) + 3).contains(&cpu.ip);
+        if cpu.seg[1].selector != ROM_SEG || (cpu.ip >= 0x1000 && !xms_entry && !ps2_fetch) {
+            return Ok(None);
+        }
+        if ps2_fetch {
+            let mut cpu = cpu;
+            let (ax, (bx, cx, dx)) = match self.ps2.packet() {
+                Some(p) => (1, p),
+                None => (0, (0, 0, 0)),
+            };
+            cpu.set_w(AX, ax);
+            cpu.set_w(crate::hle::BX, bx);
+            cpu.set_w(crate::hle::CX, cx);
+            cpu.set_w(crate::hle::DX, dx);
+            self.vm.set_state(&cpu)?;
             return Ok(None);
         }
         if xms_entry {
@@ -937,6 +961,13 @@ impl<B: Backend> Pc<B> {
                     }
                 }
                 set_ret_flag(&cpu, mem, CF, false);
+                Some(Flow::Continue)
+            }
+            // Souris PS/2 du BIOS (sous un vrai DOS ; le DOS de l'hôte a son INT 33h).
+            0x15 if ah == 0xC2 && !self.dos_hle => {
+                let r = ps2_bios(&mut self.ps2, &self.pic, &mut cpu, mem);
+                cpu.set_hi(AX, r);
+                set_ret_flag(&cpu, mem, CF, r != 0);
                 Some(Flow::Continue)
             }
             0x15 if ah == 0x24 && cpu.lo(AX) <= 2 => {
@@ -1062,5 +1093,62 @@ impl<B: Backend> Pc<B> {
 impl From<Error> for String {
     fn from(e: Error) -> Self {
         e.0
+    }
+}
+
+/// INT 15h AH=C2h (souris PS/2) : AL = fonction ; rend le statut (AH).
+fn ps2_bios(ps2: &mut crate::mouse::Ps2, pic: &RefCell<Pic>, cpu: &mut crate::interp::Cpu, mem: &crate::mem::GuestMem) -> u8 {
+    use crate::hle::{BX, CX, DX, ES};
+    match cpu.lo(AX) {
+        // Activation (BH=1) ou arrêt : il faut une routine.
+        0x00 => {
+            let on = cpu.hi(BX) == 1;
+            if on && !ps2.handler {
+                return 0x05;
+            }
+            ps2.enabled = on;
+            if on {
+                pic.borrow_mut().unmask(12);
+            }
+            0
+        }
+        // Réinitialisation : identifiant 00h, arrêtée.
+        0x01 => {
+            ps2.enabled = false;
+            cpu.set_w(BX, 0x00AA);
+            0
+        }
+        // Fréquence, résolution, échelle : acceptées.
+        0x02 | 0x03 => 0,
+        0x04 => {
+            cpu.set_hi(BX, 0);
+            0
+        }
+        // Initialisation (BH = taille du paquet) : 3 octets seulement.
+        0x05 => {
+            ps2.enabled = false;
+            if cpu.hi(BX) == 3 { 0 } else { 0x02 }
+        }
+        0x06 => {
+            if cpu.hi(BX) == 0 {
+                // État : activée, résolution 4 points/mm, 100 échantillons/s.
+                cpu.set_lo(BX, if ps2.enabled { 0x20 } else { 0 });
+                cpu.set_lo(CX, 2);
+                cpu.set_lo(DX, 100);
+            }
+            0
+        }
+        // Routine du pilote en ES:BX (0:0 : retirée).
+        0x07 => {
+            let (seg, off) = (cpu.sreg(ES), cpu.w(BX));
+            mem.write_u16(bios::PS2_HANDLER, off);
+            mem.write_u16(bios::PS2_HANDLER + 2, seg);
+            ps2.handler = seg != 0 || off != 0;
+            if !ps2.handler {
+                ps2.enabled = false;
+            }
+            0
+        }
+        _ => 0x01,
     }
 }

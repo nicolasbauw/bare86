@@ -119,7 +119,8 @@ pub fn text_scancodes(c: u8) -> Vec<u8> {
 /// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
 /// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
 /// `{ctrl+c}`…), pauses (`{wait:500}`, en ms), vitesse (`{speed:25}` en
-/// MIPS, `{speed:max}`), disquette suivante (`{disk}`), attente
+/// MIPS, `{speed:max}`), disquette suivante (`{disk}`), souris
+/// (`{mouse:dx,dy,boutons}`), attente
 /// d'un texte à l'écran (`{until:Press a key}`), `{{` pour une accolade. Une
 /// fin de session suit le script.
 pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> {
@@ -145,6 +146,12 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
         }
         if name.starts_with("until:") {
             out.push(crate::host::InputEvent::Until(raw["until:".len()..].to_string()));
+            continue;
+        }
+        if let Some(v) = name.strip_prefix("mouse:") {
+            let n: Vec<i32> = v.split(',').map(|x| x.trim().parse().map_err(|_| format!("souris : {v}"))).collect::<Result<_, _>>()?;
+            let [dx, dy, buttons] = n[..] else { return Err(format!("souris : dx,dy,boutons attendus ({v})")) };
+            out.push(crate::host::InputEvent::Mouse { dx, dy, buttons: buttons as u8 });
             continue;
         }
         if name == "disk" {

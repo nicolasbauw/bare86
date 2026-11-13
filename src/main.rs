@@ -84,7 +84,7 @@ usage: bare86 [options] [program [arguments…]]
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
                  {wait:MS} pause, {speed:MIPS} or {speed:max} speed change,
                  {disk} next floppy in A:, {until:TEXT} wait for TEXT on
-                 the text screen
+                 the text screen, {mouse:DX,DY,BUTTONS} mouse motion
   --bench | --throttle | --remap   step 0 measurement benches";
 
 fn main() -> ExitCode {

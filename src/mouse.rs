@@ -288,3 +288,70 @@ mod tests {
         assert_eq!(mem.read_u8(at), 0x07);
     }
 }
+
+/// Souris PS/2 vue par l'interface du BIOS (INT 15h AX=C2xxh), pour les
+/// pilotes d'un vrai DOS (CuteMouse) : mouvements cumulés, puis un paquet
+/// par IRQ 12, que le gestionnaire INT 74h de la ROM remet à la routine
+/// enregistrée par le pilote (AL=07h).
+#[derive(Default)]
+pub struct Ps2 {
+    pub enabled: bool,
+    pub handler: bool,
+    dx: i32,
+    dy: i32,
+    buttons: u8,
+    /// Mouvement ou boutons non encore livrés.
+    dirty: bool,
+    /// IRQ 12 levée, paquet pas encore lu par la ROM.
+    in_flight: bool,
+}
+
+impl Ps2 {
+    pub fn event(&mut self, dx: i32, dy: i32, buttons: u8) {
+        self.dx += dx;
+        self.dy += dy;
+        self.dirty |= dx != 0 || dy != 0 || buttons != self.buttons;
+        self.buttons = buttons;
+    }
+
+    /// Un paquet attend et le pilote l'accepte : vrai une fois par paquet.
+    pub fn take_irq(&mut self) -> bool {
+        let go = self.enabled && self.handler && self.dirty && !self.in_flight;
+        self.in_flight |= go;
+        go
+    }
+
+    /// Paquet pour la ROM : (état, X, Y) au format PS/2 (Y vers le haut,
+    /// signes dans l'octet d'état), ou `None` si rien n'est à livrer.
+    pub fn packet(&mut self) -> Option<(u16, u16, u16)> {
+        self.in_flight = false;
+        if !self.dirty || !self.enabled || !self.handler {
+            return None;
+        }
+        let x = self.dx.clamp(-256, 255);
+        let y = (-self.dy).clamp(-256, 255);
+        self.dx -= x;
+        self.dy += y;
+        self.dirty = self.dx != 0 || self.dy != 0;
+        let status = (self.buttons & 7) | 0x08 | (u8::from(x < 0) << 4) | (u8::from(y < 0) << 5);
+        Some((u16::from(status), (x & 0xFF) as u16, (y & 0xFF) as u16))
+    }
+}
+
+#[cfg(test)]
+mod ps2_tests {
+    use super::Ps2;
+
+    #[test]
+    fn packets() {
+        let mut p = Ps2 { enabled: true, handler: true, ..Ps2::default() };
+        p.event(300, 5, 1);
+        assert!(p.take_irq());
+        assert!(!p.take_irq());
+        // X saturé à 255, Y vers le haut (−5 : signe en bit 5).
+        assert_eq!(p.packet(), Some((0x29, 255, 0xFB)));
+        assert!(p.take_irq());
+        assert_eq!(p.packet(), Some((0x09, 45, 0)));
+        assert_eq!(p.packet(), None);
+    }
+}
