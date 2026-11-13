@@ -2,7 +2,9 @@
 //! Pilote XMS 3.0 en HLE (comme HIMEM.SYS) : détection par INT 2Fh
 //! AX=4300h / 4310h, point d'entrée en ROM (`out E0h, al ; retf`, précédé du
 //! saut court que l'on peut détourner). HMA, porte A20 (toujours ouverte),
-//! blocs de mémoire étendue (EMB) au-dessus de la HMA ; pas d'UMB.
+//! blocs de mémoire étendue (EMB) au-dessus de la HMA, blocs de mémoire
+//! supérieure (UMB) en C800h–DFFFh (le DOS ne les relie pas encore à sa
+//! chaîne de MCB : ils servent aux programmes qui les demandent à XMS).
 
 use crate::hle::{AX, BX, CX, DX, DS, ES, Flow, Regs, SI, lin};
 use crate::interp::Cpu;
@@ -11,6 +13,9 @@ use crate::mem::GuestMem;
 /// Début de la mémoire gérée : après la HMA (1 Mo + 64 Ko - 16).
 const POOL_START: usize = 0x11_0000;
 const MAX_HANDLES: usize = 64;
+/// Mémoire supérieure, en paragraphes : après une éventuelle ROM VGA
+/// (C000h–C7FFh), avant la page frame EMS (E000h).
+const UMB: std::ops::Range<u16> = 0xC800..0xE000;
 
 #[derive(Clone, Copy)]
 struct Block {
@@ -29,11 +34,13 @@ pub struct Xms {
     /// A20 : ouverture globale (03h/04h) et compteur local (05h/06h).
     global_a20: bool,
     local_a20: u32,
+    /// UMB alloués : (segment, paragraphes), triés.
+    umbs: Vec<(u16, u16)>,
 }
 
 impl Xms {
     pub fn new(mem_size: usize) -> Self {
-        Self { pool_end: mem_size.max(POOL_START), blocks: Vec::new(), hma_used: false, next_handle: 1, global_a20: false, local_a20: 0 }
+        Self { pool_end: mem_size.max(POOL_START), blocks: Vec::new(), hma_used: false, next_handle: 1, global_a20: false, local_a20: 0, umbs: Vec::new() }
     }
 
     /// INT 2Fh, fonctions 43h ; `None` pour les autres.
@@ -73,6 +80,52 @@ impl Xms {
             out.push((at, self.pool_end));
         }
         out
+    }
+
+    /// Trous de la mémoire supérieure : (segment, paragraphes).
+    fn umb_gaps(&self) -> Vec<(u16, u16)> {
+        let mut out = Vec::new();
+        let mut at = UMB.start;
+        for &(seg, len) in &self.umbs {
+            if seg > at {
+                out.push((at, seg - at));
+            }
+            at = seg + len;
+        }
+        if UMB.end > at {
+            out.push((at, UMB.end - at));
+        }
+        out
+    }
+
+    /// AH=10h–12h : (DX, BX) en sortie, ou (code d'erreur, plus grand bloc).
+    fn umb(&mut self, ah: u8, dx: u16, bx: u16) -> Result<(u16, u16), (u8, u16)> {
+        let largest = |x: &Self| x.umb_gaps().iter().map(|g| g.1).max().unwrap_or(0);
+        match ah {
+            0x10 => {
+                let Some(&(seg, _)) = self.umb_gaps().iter().find(|g| g.1 >= dx && dx > 0) else {
+                    let l = largest(self);
+                    return Err((if l == 0 { 0xB1 } else { 0xB0 }, l));
+                };
+                let at = self.umbs.partition_point(|u| u.0 < seg);
+                self.umbs.insert(at, (seg, dx));
+                Ok((dx, seg))
+            }
+            0x11 => {
+                let i = self.umbs.iter().position(|u| u.0 == dx).ok_or((0xB2, 0))?;
+                self.umbs.remove(i);
+                Ok((0, 0))
+            }
+            _ => {
+                let i = self.umbs.iter().position(|u| u.0 == dx).ok_or((0xB2, 0))?;
+                let limit = self.umbs.get(i + 1).map_or(UMB.end, |n| n.0);
+                if dx + bx > limit {
+                    return Err((0xB0, limit - dx));
+                }
+                self.umbs[i].1 = bx;
+                Ok((dx, bx))
+            }
+        }
     }
 
     fn find(&self, handle: u16) -> Option<usize> {
@@ -252,12 +305,19 @@ impl Xms {
                 let kb = if ah == 0x0F { usize::from(cpu.w(BX)) } else { cpu.gpr[BX] as usize };
                 self.realloc(mem, cpu.w(DX), kb)
             }
-            // Pas d'UMB.
-            0x10 => {
-                cpu.set_w(DX, 0);
-                Err(0xB1)
-            }
-            0x11 | 0x12 => Err(0xB2),
+            0x10..=0x12 => match self.umb(ah, cpu.w(DX), cpu.w(BX)) {
+                Ok((dx, bx)) => {
+                    if ah == 0x10 {
+                        cpu.set_w(DX, dx);
+                        cpu.set_w(BX, bx);
+                    }
+                    Ok(())
+                }
+                Err((e, largest)) => {
+                    cpu.set_w(DX, largest);
+                    Err(e)
+                }
+            },
             _ => Err(0x80),
         };
         match r {
@@ -325,5 +385,24 @@ mod tests {
         assert_eq!((b.start, b.len), (POOL_START + 110 * 1024, 200 * 1024));
         mem.read(b.start + 8, &mut buf);
         assert_eq!(&buf, b"XMS!");
+    }
+
+    #[test]
+    fn upper_memory_blocks() {
+        let mem = GuestMem::new(0x20_0000).unwrap();
+        let mut x = Xms::new(mem.size());
+        let mut cpu = Cpu::real_mode(0, 0, 0);
+        cpu.set_w(DX, 0x1000);
+        assert_eq!(call(&mut x, &mut cpu, &mem, 0x1000), 1);
+        assert_eq!((cpu.w(BX), cpu.w(DX)), (0xC800, 0x1000));
+        // Trop grand : le plus grand bloc restant (0D800h–0DFFFh) est rendu.
+        cpu.set_w(DX, 0x1000);
+        assert_eq!(call(&mut x, &mut cpu, &mem, 0x1000), 0);
+        assert_eq!((cpu.lo(BX), cpu.w(DX)), (0xB0, 0x800));
+        cpu.set_w(DX, 0xC800);
+        assert_eq!(call(&mut x, &mut cpu, &mem, 0x1100), 1);
+        cpu.set_w(DX, 0x1800);
+        assert_eq!(call(&mut x, &mut cpu, &mem, 0x1000), 1);
+        assert_eq!(cpu.w(BX), 0xC800);
     }
 }
