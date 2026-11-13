@@ -374,15 +374,36 @@ Critère, avec des binaires d'époque rangés hors du dépôt dans `~/Dev/dos-pr
 | PKUNZIP 2.04g | test et extraction ; fichiers identiques aux originaux |
 | FreeDOS EDIT 0.9a | saisie, menus, enregistrement (Ctrl+S), sortie par le menu ; pilotée par `--keys` |
 | TPC 5.5 | compile un programme Crt + Dos |
-| Programme Turbo Pascal | **bloqué** : l'initialisation de Crt calibre `Delay` en scrutant 0040:006C sans aucun appel ; le compteur ne peut avancer qu'avec l'IRQ 0 réelle (étape 4) |
+| Programme Turbo Pascal | tourne depuis l'étape 4 (Crt, fichiers, `Delay`) ; bloqué avant : l'initialisation de Crt calibre `Delay` en scrutant 0040:006C sans aucun appel |
 
 Le pilotage d'EDIT a demandé un clavier scripté réaliste : `--keys` (texte et touches nommées, puis fin de session), touches livrées une à une (la suivante attend que la précédente soit lue ; les boucles d'événements comme DFlat inversaient sinon raccourcis et texte), AH=02h sans lecture de l'entrée (l'état des modificateurs reste celui de la frappe), délai de grâce de 300 ms après la fin du script pour un programme qui scrute le clavier. La trace `--trace-int` montre aussi les registres et CF au retour.
 
+### Étape 4 : périphériques de base, terminée le 2026-11-13
+
+| Élément | Fichier | État |
+| --- | --- | --- |
+| Injection d'interruptions | `src/backend.rs`, `src/kvm.rs` | KVM_INTERRUPT (ioctl direct), fenêtre d'interruption ; passe par l'IDT en mode protégé |
+| PIC 8259 maître + esclave | `src/pic.rs` | ICW1–4, OCW1–3, EOI, cascade, priorités ; vecteurs 08h et 70h |
+| PIT 8254 + port 61h | `src/pit.rs` | modes 0–5, verrouillage, relecture, accès lo/hi ; IRQ 0 au rythme programmé ; bascule de rafraîchissement ; canal 2 (haut-parleur : fréquence prête pour le son de l'étape 5) |
+| Battement | `src/timer.rs` | minuterie POSIX périodique vers le thread du vCPU (EINTR), période = IRQ 0 bornée entre 50 µs et 10 ms |
+| HLT | `src/machine.rs` | attente jusqu'à la prochaine IRQ 0 (10 ms au plus) |
+| ROM | `asm/bios.S` | INT 08h (F000:FEA5 : tics, minuit, INT 1Ch, EOI), INT 09h (F000:E987 : port 60h, INT 15h/4Fh, scancode à l'hôte par le port E1h), IRQ par défaut, INT 1Ch en IRET, tremplins `sti; hlt` de reprise |
+| 8042 | `src/kbc.rs` | tampon, IRQ 1, octet de commande, tests, port de sortie (A20, pour l'étape 6), commandes clavier (LED, identification, reset) |
+| Clavier | `src/bios.rs`, `src/machine.rs` | scancodes jeu 1 (préfixe E0h), BDA tenue par l'INT 09h ; une frappe à la fois (2 ms, appui suivant après lecture de la précédente sauf INT 09h détournée) |
+| Attentes de touche | `src/machine.rs`, `src/dos/` | plus aucune attente bloquante côté hôte : INT 16h et DOS rendent `Flow::Wait`, registres d'entrée rétablis, reprise après HLT ; saisie de ligne par morceaux |
+| RTC CMOS | `src/rtc.rs` | heure locale BCD, UIP, état A–D, mémoire et équipement, somme de contrôle |
+| Souris | `src/mouse.rs` | INT 33h : reset, position, boutons, plages, mickeys, curseur texte ; gestionnaire utilisateur (0Ch) enregistré, pas encore appelé |
+| VGA minimal | `src/vga.rs` | état 3DAh/3BAh (retours de trame à 70 Hz et de ligne), CRTC et CGA conservés ; INT 10h 12h BL=30h–36h |
+| Terminal | `src/term.rs`, `src/host.rs` | `--term` : écran texte en direct (couleurs CGA 24 bits, CP437 complet, curseur), flèches, Origine/Fin, Pg, Inser/Suppr, F1–F12 et Alt+lettre décodés ; `--keys` gagne `{wait:ms}` |
+
+Critère tenu : ZZT 3.2 (Epic MegaGames, gratuit depuis 1997, Museum of ZZT, MD5 conforme), jouable au clavier : configuration, menu, partie dans la ville de ZZT, déplacements ; vérifié par `--keys` et dans un pseudo-terminal avec `--term` et de vraies séquences de flèches. Le programme Turbo Pascal de l'étape 3 tourne aussi (dernier point de son critère). Tests : `asm/tests/{irq,int9,mouse}.S` et tests unitaires (PIC, PIT, 8042, RTC, souris, VGA) ; 40 tests.
+
+Constaté en route : ZZT attend le retour de trame VGA sur le port 3DAh (sans lui, boucle infinie) ; DFlat (EDIT) lit l'état des modificateurs juste après la touche.
+
 ### Prochaines étapes (vers Doom sous DOS/4GW)
 
-1. Étape 4 : PIC, PIT, 8042, injection d'IRQ (et HLT) ; INT 08h et 09h réels à la place des tics et du clavier provisoires. Puis vérifier le programme Turbo Pascal (dernier point du critère de l'étape 3).
-2. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
-3. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
+1. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
+2. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
 
 ## Questions ouvertes
 
