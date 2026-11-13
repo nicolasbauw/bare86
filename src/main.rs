@@ -27,6 +27,7 @@ mod term;
 mod throttle;
 mod timer;
 mod vga;
+mod xms;
 #[cfg(test)]
 mod tests;
 

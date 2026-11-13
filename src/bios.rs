@@ -72,6 +72,8 @@ const DUMMY_IRET: u16 = 0xE840;
 /// INT 09h (IRQ 1), à l'adresse de l'IBM AT.
 pub const INT09: u16 = 0xE987;
 /// Reprises après HLT d'un appel qui attend une touche (asm/bios.S).
+/// Point d'entrée XMS (saut court, NOP, `out E0h, al`, `retf`).
+pub const XMS_ENTRY: u16 = 0xE8A0;
 pub const WAIT16: u16 = 0xE850;
 pub const WAIT21: u16 = 0xE860;
 /// INT 33h en ROM (AX=0003h sans sortie) et son bloc d'état (asm/bios.S).
@@ -315,9 +317,10 @@ impl Bios {
                 set_ret_flag(cpu, mem, CF, status != 0);
                 set_ret_flag(cpu, mem, ZF, status == 0);
             }
-            // Mémoire étendue en Ko (plafonnée à 63 Mo par le registre 16 bits).
+            // Mémoire étendue libre en Ko : aucune, comme sous HIMEM.SYS (le
+            // pilote XMS la gère ; E801h et E820h restent la carte physique).
             (0x88, _) => {
-                cpu.set_w(AX, self.extended_kb.min(0xFC00) as u16);
+                cpu.set_w(AX, 0);
                 set_ret_flag(cpu, mem, CF, false);
             }
             // Attente / fin d'attente de périphérique : rien à attendre.

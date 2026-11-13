@@ -1,4 +1,4 @@
-# INT 11h, 12h, 15h (88h, E801h, C0h, 87h, 2402h), 1Ah/02h, BDA.
+# INT 11h, 12h, 15h (88h = 0 sous XMS, E801h, C0h, 87h, 2402h), 1Ah/02h, BDA.
 # Code de sortie : 0, ou n° du contrôle en échec. Mémoire étendue : 15 Mo.
     .code16
     .intel_syntax noprefix
@@ -12,11 +12,11 @@
     cmp ax, 0x20
     mov di, 2
     jne fail
-    mov ah, 0x88                # 3. mémoire étendue en Ko
+    mov ah, 0x88                # 3. mémoire étendue en Ko : 0, prise par XMS
     int 0x15
     mov di, 3
     jc fail
-    cmp ax, 15360
+    cmp ax, 0
     jne fail
     mov ax, 0xE801              # 4. E801h : 15 Mo sous 16 Mo, rien au-delà
     int 0x15

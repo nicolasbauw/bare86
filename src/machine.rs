@@ -178,6 +178,7 @@ pub struct Pc<B: Backend = KvmVm> {
     pit: Rc<RefCell<Pit>>,
     heartbeat: Heartbeat,
     kbc: Rc<RefCell<Kbc>>,
+    xms: crate::xms::Xms,
     /// Scancodes en route vers le 8042, livrés au rythme d'une frappe.
     keys: VecDeque<u8>,
     last_scancode: Option<Instant>,
@@ -259,6 +260,7 @@ impl<B: Backend> Pc<B> {
             pit,
             heartbeat,
             kbc,
+            xms: crate::xms::Xms::new(0x10_0000 + cfg.extended_kb * 1024),
             keys: VecDeque::new(),
             last_scancode: None,
             last_made: None,
@@ -606,7 +608,15 @@ impl<B: Backend> Pc<B> {
     /// de la ROM ; sinon le programme a simplement écrit sur le port E0h.
     fn host_call(&mut self) -> Result<Option<u8>> {
         let mut cpu = self.vm.state()?;
-        if cpu.seg[1].selector != ROM_SEG || cpu.ip >= 0x1000 {
+        let xms_entry = (u32::from(bios::XMS_ENTRY)..u32::from(bios::XMS_ENTRY) + 16).contains(&cpu.ip);
+        if cpu.seg[1].selector != ROM_SEG || (cpu.ip >= 0x1000 && !xms_entry) {
+            return Ok(None);
+        }
+        if xms_entry {
+            self.stats.host_calls += 1;
+            let mut cpu = cpu;
+            self.xms.call(&mut cpu, self.vm.mem());
+            self.vm.set_state(&cpu)?;
             return Ok(None);
         }
         self.stats.host_calls += 1;
@@ -631,9 +641,13 @@ impl<B: Backend> Pc<B> {
         if self.drained_at.is_some() && matches!((vector, ah), (0x16, 0x01 | 0x11) | (0x21, 0x06 | 0x0B)) {
             self.polled_after_drain = true;
         }
-        let flow = match self.dos.call(vector, &mut cpu, mem, &mut self.host)? {
+        let xms = if vector == 0x2F { self.xms.int2f(&mut cpu, (ROM_SEG, bios::XMS_ENTRY)) } else { None };
+        let flow = match xms {
             Some(flow) => flow,
-            None => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
+            None => match self.dos.call(vector, &mut cpu, mem, &mut self.host)? {
+                Some(flow) => flow,
+                None => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
+            },
         };
         match flow {
             Flow::Exit(code) => return Ok(Some(code)),

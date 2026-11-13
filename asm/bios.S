@@ -92,6 +92,14 @@ int33:
 mouse_state:
     .word 0, 320, 100
 
+    # Point d'entrée XMS (INT 2Fh AX=4310h) : saut court suivi de trois NOP,
+    # que la norme permet de détourner, puis appel hôte et retour lointain.
+    .org 0xE8A0, 0xFF
+xms_entry:
+    .byte 0xEB, 0x03, 0x90, 0x90, 0x90
+    out HOST_CALL, al
+    retf
+
     # INT 09h, IRQ 1 (adresse de l'IBM AT) : scancode lu au 8042, proposé à
     # INT 15h AH=4Fh, puis confié à l'hôte (port E1h) qui tient la BDA.
     .org 0xE987, 0xFF
