@@ -197,11 +197,14 @@ pub struct Bios {
     vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>,
     /// Images de disquette et de disque dur (INT 13h).
     pub disks: crate::disk::Disks,
+    /// XMS et EMS fournies par l'hôte (sinon, démarrage d'un vrai DOS : ses
+    /// propres gestionnaires prennent la mémoire étendue).
+    pub host_memory: bool,
 }
 
 impl Bios {
     pub fn new(extended_kb: usize, vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>) -> Self {
-        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vbe2: true, vga, disks: Default::default() }
+        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vbe2: true, vga, disks: Default::default(), host_memory: true }
     }
 
     /// ROM, IVT, BDA, écran texte effacé.
@@ -551,10 +554,11 @@ impl Bios {
                 set_ret_flag(cpu, mem, CF, status != 0);
                 set_ret_flag(cpu, mem, ZF, status == 0);
             }
-            // Mémoire étendue libre en Ko : aucune, comme sous HIMEM.SYS (le
-            // pilote XMS la gère ; E801h et E820h restent la carte physique).
+            // Mémoire étendue libre en Ko : aucune sous la XMS de l'hôte, comme
+            // sous HIMEM.SYS (E801h et E820h restent la carte physique) ; toute
+            // sous un vrai DOS.
             (0x88, _) => {
-                cpu.set_w(AX, 0);
+                cpu.set_w(AX, if self.host_memory { 0 } else { self.extended_kb.min(0xFFFF) as u16 });
                 set_ret_flag(cpu, mem, CF, false);
             }
             // Attente / fin d'attente de périphérique : rien à attendre.
