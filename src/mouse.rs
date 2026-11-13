@@ -240,6 +240,9 @@ impl Mouse {
                     self.redraw(mem);
                 }
             }
+            // Extensions SWIFT de Logitech (CyberMan, sondées par Doom) :
+            // absentes, AX inchangé comme sous un pilote qui les ignore.
+            0x53C1 => {}
             // Version 8.05, souris PS/2.
             0x0024 => {
                 cpu.set_w(BX, 0x0805);

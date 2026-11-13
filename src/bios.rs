@@ -346,6 +346,11 @@ impl Bios {
                 set_ret_flag(cpu, mem, CF, false);
             }
             (0xE8, 0x20) if cpu.gpr[DX] == SMAP => self.e820(cpu, mem),
+            // Détection de DOS/16M (faite par DOS/4GW) : absent, sans message.
+            (0xBF, _) => {
+                cpu.set_hi(AX, 0x86);
+                set_ret_flag(cpu, mem, CF, true);
+            }
             _ => {
                 // Fonction non prise en charge : AH=86h, CF=1.
                 cpu.set_hi(AX, 0x86);
