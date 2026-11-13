@@ -351,9 +351,26 @@ Critère tenu : `c/tests/textdemo.c`, compilé en `.COM` (modèle tiny) par Open
 
 Le runtime Watcom a demandé, en avance sur l'étape 3, une petite partie de l'INT 21h : 01h, 07h, 08h, 0Bh (console par le clavier du BIOS, touches étendues en deux appels), 40h sur les handles 1 et 2, 4400h, 4Ah (sans MCB : tout jusqu'à A000h), 6300h (table DBCS vide en F000:E700), 6601h (page de codes 437). L'état du DOS vit dans `dos::Dos`.
 
+### Étape 3 : DOS en HLE, en cours (2026-11-13)
+
+`src/dos/` : `memory.rs` (MCB), `process.rs` (PSP, environnement, chargeurs), `handles.rs` (JFT et SFT), `fs.rs` (lecteurs, noms 8.3, motifs), `fcb.rs`, `shell.rs`, `mod.rs` (INT 21h).
+
+| Domaine | Couvert |
+| --- | --- |
+| Mémoire | chaîne de MCB en mémoire invitée à partir de 0100h (premier, meilleur, dernier bloc), 48h, 49h, 4Ah, 58h ; pas d'UMB avant l'étape 6 |
+| Processus | PSP complet (JFT, vecteurs 22h–24h, FCB 1 et 2, ligne de commande), environnement hérité + chemin du programme, chargeurs .COM et MZ (relocations, chargement en haut), 4B00h (exec, état du parent rétabli à la fin de l'enfant), 4B03h (overlay), 00h/4Ch/31h, INT 20h/27h, 4Dh, 50h/51h/62h ; shell racine avec PSP et environnement maître |
+| Fichiers | répertoire hôte monté (`--mount`, par défaut celui du programme) ; noms 8.3 générés pour les noms longs (`LONGFI~1.TXT`) ; handles par la JFT du PSP vers une SFT hôte (héritage, 45h/46h, 67h) ; 3Ch–43h, 56h, 57h, 5Ah, 5Bh, 6Ch ; périphériques CON, NUL, AUX, PRN ; 4Eh/4Fh (DTA), 39h–3Bh, 47h, 60h ; 44h (00h, 01h, 06h–0Ah, 0Eh) |
+| FCB | 0Fh–17h, 21h–24h, 27h, 28h, 29h |
+| Divers | console 01h–0Ch, date et heure, 25h/35h, 30h (5.00), 33h, 34h, 37h, 38h/65h (États-Unis, page de codes 437), 52h (List of Lists avec en-tête NUL), 59h, 63h, 66h ; LFN (71h) refusé comme MS-DOS 5 |
+| Shell | invite, DIR, CD, X:, TYPE, CLS, ECHO, SET, VER, MD, RD, DEL, EXIT ; programmes cherchés dans le répertoire courant puis C:\ (.COM puis .EXE) ; pas de .BAT |
+
+Tests : `c/tests/files.c` (exécutable MZ Watcom small : argv, environnement, fichiers, recherche, répertoires, renommage, malloc, `spawnl` d'un enfant), `asm/tests/fcb.S`, session de shell scriptée ; 28 tests. Corrigé en route : le tampon clavier du BIOS perdait les touches au-delà de 15 quand l'entrée arrivait d'un bloc (texte collé, tube).
+
+Reste pour le critère : pkunzip, edit et des programmes Turbo Pascal (binaires à se procurer).
+
 ### Prochaines étapes (vers Doom sous DOS/4GW)
 
-1. Étape 3 : DOS en HLE (PSP, MCB, chargeur MZ, fichiers sur répertoire hôte).
+1. Étape 3 : critère (pkunzip, edit, Turbo Pascal).
 2. Étape 4 : PIC, PIT, 8042, injection d'IRQ (et HLT) ; INT 08h et 09h réels à la place des tics et du clavier provisoires.
 3. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
 4. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
