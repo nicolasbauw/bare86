@@ -472,7 +472,7 @@ Avancement :
 - **Dune (Cryo, 1992, copie du propriétaire)** : `DUNEPRG.EXE ENG VGA` (sans EMS, étape 6) tourne : logo Virgin, intro spatiale, puis le jeu (salle du trône, curseur souris), en mode 13h natif (`vram_emulated: 0`). Stocké dans `~/Dev/dos-progs/dune`.
 - **Mise à l'échelle nette** : l'étirement direct au plus proche voisin (200 → 720 lignes, facteur 3,6) doublait certaines lignes, visible sur le texte de Dune. Désormais : agrandissement entier sans lissage vers une texture intermédiaire, puis réduction lissée à la taille de la fenêtre. Vérifié sur une capture de la vraie fenêtre (logo Virgin).
 
-### Étape 6 : mémoire étendue et extendeurs, en cours (2026-11-13)
+### Étape 6 : mémoire étendue et extendeurs, terminée le 2026-11-13
 
 **Doom 1.9 shareware tourne** (DOS/4GW 1.95, démo, jeu). Archive `doom19s.zip` de l'archive idgames, installée dans l'émulateur par son `DEICE.EXE` puis l'auto-extracteur ; `DOOM1.WAD` a le MD5 connu de la 1.9 shareware (`f0cefca49926d00903cf57551d901abe`). Stocké hors dépôt dans `~/Dev/dos-progs/doom/c/DOOMS`.
 
@@ -493,7 +493,12 @@ Avancement :
 - **Divers** : port 92h (A20 rapide, reflète le port de sortie du 8042), INT 33h AX=0015h–0017h (état du pilote souris, demandé par DOS/4GW).
 - Tests : `asm/tests/{xms,ems,cpu386}.S`, tests unitaires XMS, EMS, scène VGA ; 54 tests.
 
-**Restent pour l'étape 6** : UMB (XMS 10h, DOS 58h) ; A20 réellement fermable (repliement à 1 Mo, pour les .EXE compressés par EXEPACK chargés sous 64 Ko) ; CWSDPMI / DJGPP (aucun programme de test pour l'instant) ; essai interactif de Doom dans la fenêtre par le propriétaire du projet. Le son de Doom (Sound Blaster, OPL) relève de l'étape 7.
+- **Porte A20 réelle** : la HMA (100000h–10FFFFh) a son propre slot KVM, qui pointe sur la mémoire de 1 Mo (porte ouverte) ou sur les 64 premiers Ko (fermée : repliement de FFFF:0010 sur 0000:0000). Le port de sortie du 8042 fait foi ; port 92h, XMS 03h–07h (globale et compteur local) et INT 15h 2400h–2402h passent par lui. Fermée au démarrage, comme après le POST d'un AT : les .EXE compressés par EXEPACK chargés sous 64 Ko ne voient plus la mémoire au-delà de 1 Mo. Test `asm/tests/a20.S`.
+- **UMB** : XMS 10h–12h, en C800h–DFFFh (96 Ko ; C000h–C7FFh réservé à une ROM VGA, E000h à la page frame EMS). Le DOS ne les relie pas encore à sa chaîne de MCB (INT 21h 5803h) : ils servent aux programmes qui les demandent à XMS.
+- **DJGPP et CWSDPMI : Quake 1.06 shareware** (archive idgames `quake106.zip`, installée par son `DEICE.EXE` ; `PAK0.PAK` au MD5 connu `5906e5998fc3d896ddaf5e6a62e03abb` ; `~/Dev/dos-progs/quake/c/QUAKE_SW`). CWSDPMI s'installe (avec pagination), Quake alloue 14 Mo, charge son PAK, passe en mode 13h et joue ses démos. `QUAKE -nosound -nocdaudio +timedemo demo1` : **969 images en 3,4 s, 288 i/s**, sans accès VRAM émulé. Sa boucle de temps lit le compteur 0 du PIT (≈ 75 000 lectures/s) : correcte, mais c'est l'essentiel des sorties de VM.
+- `--stats` donne aussi les ports d'E/S les plus sollicités.
+
+**Critère de l'étape 6 tenu** (Doom tourne, ainsi que Quake, Dune avec EMS, DOS/4GW, DOS/32A, PMODE/W, CWSDPMI). Reste hors critère : relier les UMB à la chaîne de MCB du DOS (`DOS=UMB`, `LOADHIGH`), un hôte DPMI en HLE seulement si un programme l'exige.
 
 ## Questions ouvertes
 
