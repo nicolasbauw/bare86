@@ -569,6 +569,17 @@ Avancement :
   1. **Réseau** : carte NE2000 ISA émulée (ports d'E/S, IRQ ; packet driver libre `NE2000.COM` côté DOS), sortie par NAT en espace utilisateur (à la « user networking » de QEMU : libslirp ou pile Rust type smoltcp ; DHCP, DNS, TCP/UDP sortants, sans droits) ; TAP en option. Critère : mTCP sous FreeDOS (DHCP, ping, FTP ou HTGET) ; ensuite IPX des jeux (Doom, Duke3D) par un pont.
   2. **CD-ROM** : MSCDEX en HLE, images ISO/CUE, pistes audio.
 
+### Point de reprise (fin de session du 2026-11-13)
+
+État : dernier commit « Interpréteur en mode V86 », 68 tests. Étape 9, volet « vrai DOS » terminé : FreeDOS 1.3 installé par son installateur officiel (20 s), démarré depuis C:, Doom sous FreeDOS + JEMMEX ≈ 115 i/s, Wolf3D et Keen 4 accélérés en V86. Images : `~/Dev/dos-progs/freedos/fd13-hd.img` (FreeDOS seul), `fd13-hd-doom.img` (+ `C:\DOOMS`) ; toujours travailler sur une copie (Bare86 écrit dans l'image). Copie de fichiers : `mcopy -s -i IMAGE@@32256 SOURCE ::/` (mtools installé).
+
+Essais commodes (clavier scripté) : `bare86 --hda COPIE.img --boot --keys "{until:C:\>}cd \DOOMS{enter}doom -timedemo demo1{enter}{until:timed}" --wav /dev/null` ; `--limit S` affiche registres, compteurs et écran ; `--shot F.png` capture à la fin. En zsh, passer les listes d'options par un tableau (`F=(…)` puis `"${F[@]}"`).
+
+À faire, dans l'ordre convenu :
+1. **Réseau** (avant le CD-ROM, choix du propriétaire du projet) : NE2000 ISA émulée + NAT en espace utilisateur ; critère mTCP sous FreeDOS (DHCP, ping, FTP/HTGET). Les paquets réseau de FreeDOS (mTCP, FDNET) ne sont sans doute pas sur l'édition disquette : prévoir de les récupérer (FullUSB ou paquets du dépôt FreeDOS).
+2. **CD-ROM** : MSCDEX en HLE, ISO/CUE, pistes audio.
+3. Restes mineurs : polices chargées par les programmes et 8×8/8×14 (rendu texte d'après le plan 2) ; Keen 4 sans EMS/XMS et rendu de 160 px de large ; Wolf3D scrute 201h sur « Press a key » ; essais en fenêtre par le propriétaire du projet (souris sous FreeDOS, Ctrl+F4).
+
 ### L'interpréteur est-il encore nécessaire ? (2026-11-13)
 
 Question du propriétaire du projet : KVM fournit un vCPU, l'interpréteur x86 sert-il encore ? Il ne sert plus qu'à un cas : les accès à la fenêtre VGA qu'aucun mappage ne peut exécuter, parce que la carte les transforme (write modes 1–3, latches, set/reset, masque de bits, plusieurs plans à la fois, lecture d'un autre plan). Sans lui, chacun coûte une sortie de VM (≈ 4,5 µs) ; avec lui, la première sortie est suivie d'une rafale côté hôte (≈ 73 ns par accès) jusqu'à ce que le code ne touche plus la VRAM.
