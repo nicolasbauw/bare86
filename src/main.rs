@@ -8,7 +8,6 @@ mod bench;
 mod bios;
 mod config;
 mod debug;
-#[allow(dead_code)] // démarrage sur image : en cours (étape 9)
 mod disk;
 mod dma;
 mod dos;
@@ -54,6 +53,11 @@ usage: bare86 [options] [program [arguments…]]
                  \"program = …\" and \"args = …\" give the program to run
   --mount DIR    host directory mounted as C: (default: the program's
                  directory, or the current directory for the shell)
+  --fda IMG      floppy image for drive A: (also --fdb for B:); repeat
+                 --fda for a set of floppies, swapped with Ctrl+F4
+  --hda IMG      hard disk image for drive C:
+  --boot         boot from the disk images (A: if present, else C:)
+                 instead of the built-in DOS
   --mips N       throttle to N million instructions per second
   --mem MB       total memory in MB (default 16)
   --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
@@ -73,11 +77,14 @@ usage: bare86 [options] [program [arguments…]]
   --limit S      stop after S seconds, with registers and code at CS:IP
   window keys:   Alt+Enter full screen, Ctrl+F5 screenshot,
                  Ctrl+F11 slower, Ctrl+Shift+F11 (or Ctrl+F12) faster,
-                 Ctrl+F10 or middle button releases the mouse
+                 Ctrl+F10 or middle button releases the mouse,
+                 Ctrl+F4 next floppy in A:
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
-                 {wait:MS} pause, {speed:MIPS} or {speed:max} speed change
+                 {wait:MS} pause, {speed:MIPS} or {speed:max} speed change,
+                 {disk} next floppy in A:, {until:TEXT} wait for TEXT on
+                 the text screen
   --bench | --throttle | --remap   step 0 measurement benches";
 
 fn main() -> ExitCode {
@@ -95,6 +102,7 @@ fn main() -> ExitCode {
     let mut mount: Option<std::path::PathBuf> = None;
     let mut tail = Vec::new();
     let mut fullscreen = false;
+    let mut boot = false;
     let cli: Vec<String> = std::env::args().skip(1).collect();
     let conf = match config::load(&cli) {
         Ok(c) => c,
@@ -149,6 +157,21 @@ fn main() -> ExitCode {
                 _ => return ExitCode::from(2),
             },
             "--trace-io" => cfg.trace_io = true,
+            "--fda" | "--fdb" | "--hda" => match args.next() {
+                Some(p) => {
+                    let list = &mut cfg.disks[match a.as_str() { "--fda" => 0, "--fdb" => 1, _ => 2 }];
+                    // Seule A: accepte plusieurs images ; ailleurs, la dernière l'emporte.
+                    if a != "--fda" {
+                        list.clear();
+                    }
+                    list.push(p.into());
+                }
+                None => {
+                    eprintln!("{a} : image attendue");
+                    return ExitCode::from(2);
+                }
+            },
+            "--boot" => boot = true,
             "--no-interp" => cfg.interp = false,
             "--vbe1" => cfg.vbe2 = false,
             "--debug" => debug = true,
@@ -208,7 +231,7 @@ fn main() -> ExitCode {
             tail.extend_from_slice(a.as_bytes());
         }
     }
-    let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats };
+    let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats, boot };
     let result = if window {
         let host_keys = keys;
         let mips = opts.cfg.mips;
@@ -252,6 +275,7 @@ struct RunOptions {
     shot: Option<String>,
     font: Option<std::path::PathBuf>,
     stats: bool,
+    boot: bool,
 }
 
 fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
@@ -261,6 +285,10 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
         None => font::Font::builtin(),
     });
     match &o.program {
+        _ if o.boot => {
+            let drive = if !o.cfg.disks[0].is_empty() { 0 } else if !o.cfg.disks[2].is_empty() { 0x80 } else { 1 };
+            pc.boot_disk(drive)?;
+        }
         Some(path) => {
             let path = std::path::Path::new(path);
             let root = match &o.mount {

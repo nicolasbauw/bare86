@@ -31,6 +31,7 @@ pub const CASE_MAP: u16 = 0xE710;
 /// Adresses dans la BDA.
 mod bda {
     pub const EQUIPMENT: usize = 0x410;
+    pub const HARD_DISKS: usize = 0x475;
     pub const MEM_KB: usize = 0x413;
     pub const SHIFT: usize = 0x417;
     pub const KB_HEAD: usize = 0x41A;
@@ -58,7 +59,8 @@ mod bda {
     pub const DCC: usize = 0x48A;
 }
 
-/// Équipement (INT 11h) : coprocesseur, 80×25 couleur, pas de lecteur.
+/// Équipement (INT 11h) : coprocesseur, 80×25 couleur ; les disquettes
+/// s'y ajoutent (bit 0, nombre − 1 en bits 6–7).
 const EQUIPMENT: u16 = 0x0022;
 /// Tics par jour à 1 193 182 / 65 536 Hz.
 const TICKS_PER_DAY: u64 = 0x1800B0;
@@ -74,7 +76,6 @@ pub const INT09: u16 = 0xE987;
 /// Reprises après HLT d'un appel qui attend une touche (asm/bios.S).
 /// Point d'entrée XMS (saut court, NOP, `out E0h, al`, `retf`).
 /// Table des paramètres de disquette (asm/bios.S, vecteur 1Eh).
-#[allow(dead_code)] // démarrage sur image : en cours (étape 9)
 pub const DISKETTE_PARAMS: u16 = 0xEFC7;
 pub const XMS_ENTRY: u16 = 0xE8A0;
 /// VBE (asm/bios.S) : fonction de fenêtre, chaînes, liste des modes.
@@ -180,6 +181,8 @@ pub fn install_rom(mem: &GuestMem) {
         set(n, IRQ_SLAVE_DEFAULT);
     }
     set(0x1C, DUMMY_IRET);
+    // Vecteur 1Eh : données (paramètres de disquette), pas du code.
+    set(0x1E, DISKETTE_PARAMS);
 }
 
 pub struct Bios {
@@ -192,18 +195,23 @@ pub struct Bios {
     /// VBE 2.0 avec framebuffer linéaire ; sinon VBE 1.2, banques seules (`--vbe1`).
     pub vbe2: bool,
     vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>,
+    /// Images de disquette et de disque dur (INT 13h).
+    pub disks: crate::disk::Disks,
 }
 
 impl Bios {
     pub fn new(extended_kb: usize, vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>) -> Self {
-        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vbe2: true, vga }
+        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vbe2: true, vga, disks: Default::default() }
     }
 
     /// ROM, IVT, BDA, écran texte effacé.
     pub fn install(&mut self, mem: &GuestMem) {
         install_rom(mem);
         mem.fill(0x400, 0x100, 0);
-        mem.write_u16(bda::EQUIPMENT, EQUIPMENT);
+        let floppies = u16::from(self.disks.floppy_count());
+        let drives = if floppies > 0 { 1 | ((floppies - 1) << 6) } else { 0 };
+        mem.write_u16(bda::EQUIPMENT, EQUIPMENT | drives);
+        mem.write_u8(bda::HARD_DISKS, u8::from(self.disks.hard.is_some()));
         mem.write_u16(bda::MEM_KB, 640);
         mem.write_u16(bda::KB_START, 0x1E);
         mem.write_u16(bda::KB_END, 0x3E);
@@ -233,7 +241,10 @@ impl Bios {
                 cpu.set_w(AX, mem.read_u16(bda::MEM_KB));
                 Flow::Continue
             }
-            0x13 => int13(cpu, mem),
+            0x13 => {
+                self.disks.int13(cpu, mem);
+                Flow::Continue
+            }
             0x15 => self.int15(cpu, mem),
             0x16 => int16(cpu, mem),
             0x1A => self.int1a(cpu, mem),
@@ -860,16 +871,6 @@ pub fn text_snapshot(mem: &GuestMem) -> Option<TextSnapshot> {
 pub fn screen_attr(mem: &GuestMem, row: u8, col: u8) -> u8 {
     let s = Screen::of(mem);
     mem.read_u8(s.cell(mem.read_u8(bda::PAGE), row, col) + 1)
-}
-
-// ---- Disque ----
-
-/// INT 13h minimal : aucun lecteur avant le DOS sur images disque (étape 9).
-fn int13(cpu: &mut Cpu, mem: &GuestMem) -> Flow {
-    let ok = matches!(cpu.hi(AX), 0x00 | 0x15);
-    cpu.set_hi(AX, if ok { 0x00 } else { 0x01 });
-    set_ret_flag(cpu, mem, CF, !ok);
-    Flow::Continue
 }
 
 // ---- Mémoire étendue ----

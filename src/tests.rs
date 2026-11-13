@@ -20,7 +20,7 @@ fn machine(cfg: &Config, image: &[u8]) -> (Pc, Capture) {
 fn machine_with_input(cfg: &Config, image: &[u8], input: &[InputEvent]) -> (Pc, Capture) {
     let out = Capture::default();
     let mut host = Host::headless(Box::new(out.clone()));
-    host.input = Box::new(ScriptedInput(input.iter().copied().collect()));
+    host.input = Box::new(ScriptedInput(input.iter().cloned().collect()));
     let mut pc = Pc::new(cfg, host).expect("machine");
     pc.load_com(image).expect("chargement");
     (pc, out)

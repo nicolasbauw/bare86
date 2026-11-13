@@ -24,7 +24,7 @@ pub trait AudioSink {
     fn push(&mut self, samples: &[i16]);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
     /// Scancode PC (jeu 1), relâchement = bit 7.
     Key(u8),
@@ -35,6 +35,10 @@ pub enum InputEvent {
     Wait(u32),
     /// Vitesse réglée à chaud (MIPS ; `None` : sans bridage).
     Speed(Option<f64>),
+    /// Disquette suivante dans A: (Ctrl+F4, `{disk}`).
+    NextDisk,
+    /// Script : l'entrée suivante attend que l'écran texte affiche ce texte.
+    Until(String),
     /// Joystick : manches branchés (0, 1 ou 2), axe (n°, valeur SDL), bouton.
     JoyPresent(u8),
     JoyAxis(u8, i16),

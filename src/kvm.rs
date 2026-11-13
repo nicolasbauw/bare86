@@ -39,6 +39,8 @@ pub struct KvmVm {
     pub mem: GuestMem,
     vga_mapped: std::cell::Cell<bool>,
     single_step: bool,
+    /// Registres système à la création du vCPU (réinitialisation).
+    reset_sregs: kvm_bindings::kvm_sregs,
 }
 
 impl KvmVm {
@@ -85,7 +87,8 @@ impl KvmVm {
         }])
         .map_err(|e| format!("MSR PAT : {e:?}"))?;
         vcpu.set_msrs(&pat)?;
-        Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false })
+        let reset_sregs = vcpu.get_sregs()?;
+        Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false, reset_sregs })
     }
 
     /// Mappe `plane` (64 Ko) sur la fenêtre VGA, ou la démappe (`None`).
@@ -210,6 +213,11 @@ impl Backend for KvmVm {
             self.vcpu.set_sregs(&sregs)?;
         }
         self.vcpu.set_regs(&regs)?;
+        Ok(())
+    }
+
+    fn reset_cpu(&mut self) -> Result<()> {
+        self.vcpu.set_sregs(&self.reset_sregs)?;
         Ok(())
     }
 

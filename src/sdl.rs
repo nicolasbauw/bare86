@@ -276,7 +276,7 @@ where
                 Event::Window { win_event: sdl3::event::WindowEvent::FocusLost, .. } if captured => {
                     set_capture(&mut canvas, false, &mut captured, speed);
                 }
-                Event::KeyDown { scancode: Some(sc @ (Scancode::F5 | Scancode::F10 | Scancode::F11 | Scancode::F12)), keymod, repeat, .. }
+                Event::KeyDown { scancode: Some(sc @ (Scancode::F4 | Scancode::F5 | Scancode::F10 | Scancode::F11 | Scancode::F12)), keymod, repeat, .. }
                     if keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD)
                         && (sc != Scancode::F10 || captured) =>
                 {
@@ -284,6 +284,9 @@ where
                     match sc {
                         Scancode::F10 => set_capture(&mut canvas, false, &mut captured, speed),
                         Scancode::F5 if !repeat => screenshot(&frame),
+                        Scancode::F4 if !repeat => {
+                            let _ = tx.send(InputEvent::NextDisk);
+                        }
                         // Ctrl+F11 : plus lent ; Ctrl+Maj+F11 (ou Ctrl+F12, souvent pris
                         // par le bureau, KDE par exemple) : plus vite.
                         Scancode::F11 | Scancode::F12 => {

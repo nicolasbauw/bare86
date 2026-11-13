@@ -20,6 +20,9 @@ pub struct Kbc {
     pending: Option<Pending>,
     /// Nouvel octet dans le tampon : IRQ 1 à lever.
     irq: bool,
+    /// Réinitialisation du processeur demandée (impulsion FEh, bit 0 du
+    /// port de sortie ou du port 92h).
+    pub reset: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -32,7 +35,7 @@ enum Pending {
 
 impl Kbc {
     pub fn new() -> Self {
-        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCD, pending: None, irq: false }
+        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCD, pending: None, irq: false, reset: false }
     }
 
     pub fn shared(self) -> Rc<RefCell<Self>> {
@@ -106,6 +109,8 @@ impl Kbc {
             // A20 rapide (contrôleurs récents).
             0xDD => self.output_port &= !2,
             0xDF => self.output_port |= 2,
+            // Impulsions sur le port de sortie : bit 0 = réinitialisation.
+            0xF0..=0xFF if cmd & 1 == 0 => self.reset = true,
             _ => {}
         }
     }
@@ -146,6 +151,7 @@ impl Kbc {
             Some(Pending::OutputPort) => {
                 self.pending = None;
                 self.output_port = b;
+                self.reset |= b & 1 == 0;
             }
             _ => self.keyboard_command(b),
         }
@@ -170,8 +176,11 @@ impl IoDevice for KbcPorts {
         let mut k = self.0.borrow_mut();
         match port {
             0x60 => k.write_data(value as u8),
-            // Bit 0 (réinitialisation rapide) ignoré.
-            0x92 => k.output_port = (k.output_port & !2) | (value as u8 & 2),
+            // Bit 0 : réinitialisation rapide.
+            0x92 => {
+                k.output_port = (k.output_port & !2) | (value as u8 & 2);
+                k.reset |= value & 1 != 0;
+            }
             _ => k.controller_command(value as u8),
         }
     }

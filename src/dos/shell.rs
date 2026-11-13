@@ -68,6 +68,8 @@ impl Dos {
                 // Vitesse : sans objet au shell (aucun programme ne tourne).
                 InputEvent::Mouse { .. }
                 | InputEvent::Speed(_)
+                | InputEvent::NextDisk
+                | InputEvent::Until(_)
                 | InputEvent::JoyPresent(_)
                 | InputEvent::JoyAxis(..)
                 | InputEvent::JoyButton(..) => None,

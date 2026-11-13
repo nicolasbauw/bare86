@@ -184,12 +184,10 @@ int08:
     pop ds
     iret
 
-    # Point d'entrée après réinitialisation (F000:FFF0) : pas de POST,
-    # l'hôte prépare la machine et charge le programme directement.
+    # Point d'entrée après réinitialisation (F000:FFF0) : pas de POST.
+    # Un saut ici (redémarrage à chaud) devient un INT 19h servi par l'hôte.
     .org 0xFFF0, 0xFF
-reset:
-    hlt
-    jmp reset
+    jmp 0xF000:0x0190
 
     .org 0xFFF5, 0xFF
     .ascii "11/12/26"       # date du BIOS (F000:FFF5)

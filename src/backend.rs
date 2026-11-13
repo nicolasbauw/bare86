@@ -74,6 +74,9 @@ pub trait Backend {
     fn complete_pending(&mut self, mmio: &mut dyn FnMut(u64, &mut [u8], bool)) -> Result<()>;
     fn state(&self) -> Result<Cpu>;
     fn set_state(&mut self, cpu: &Cpu) -> Result<()>;
+    /// Registres système de la mise sous tension (mode réel, CR0, CR3,
+    /// GDT, IDT), pour une réinitialisation de la machine.
+    fn reset_cpu(&mut self) -> Result<()>;
     /// Pas à pas : chaque `run` s'arrête après une instruction (`Exit::Step`).
     fn set_single_step(&mut self, on: bool) -> Result<()>;
     /// L'invité accepte une interruption externe maintenant (IF = 1, pas

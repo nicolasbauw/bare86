@@ -98,6 +98,11 @@ pub struct Disks {
     pub floppies: [Option<Disk>; 2],
     pub hard: Option<Disk>,
     last_status: u8,
+    /// Images de A: à faire défiler (`--fda` répété), et la courante.
+    a_images: Vec<std::path::PathBuf>,
+    a_index: usize,
+    /// Disquette changée depuis la dernière consultation (INT 13h AH=16h).
+    changed: [bool; 2],
 }
 
 impl Disks {
@@ -107,6 +112,52 @@ impl Disks {
             0x80 => self.hard.as_mut(),
             _ => None,
         }
+    }
+
+    /// Ouvre les images de A:, B: et C: (la première de chaque liste ;
+    /// celles de A: défilent ensuite avec `next_floppy`).
+    pub fn open(paths: &[Vec<std::path::PathBuf>; 3]) -> Result<Self, String> {
+        let mut d = Self::default();
+        for (i, list) in paths.iter().enumerate() {
+            for p in list {
+                Disk::open(p, i < 2)?;
+            }
+            if let Some(p) = list.first() {
+                let disk = Disk::open(p, i < 2)?;
+                if i < 2 { d.floppies[i] = Some(disk) } else { d.hard = Some(disk) }
+            }
+        }
+        d.a_images = paths[0].clone();
+        Ok(d)
+    }
+
+    /// Change la disquette de A: pour l'image suivante de la liste.
+    pub fn next_floppy(&mut self) {
+        if self.a_images.len() < 2 {
+            eprintln!("[disque] une seule image pour A: (--fda répété pour en donner plusieurs)");
+            return;
+        }
+        self.a_index = (self.a_index + 1) % self.a_images.len();
+        let path = &self.a_images[self.a_index];
+        match Disk::open(path, true) {
+            Ok(d) => {
+                self.floppies[0] = Some(d);
+                self.changed[0] = true;
+                eprintln!("[disque] A: = {}", path.display());
+            }
+            Err(e) => eprintln!("[disque] {e}"),
+        }
+    }
+
+    /// Secteur d'amorce du lecteur (signature 55AAh vérifiée).
+    pub fn boot_sector(&mut self, drive: u8) -> Result<[u8; SECTOR], String> {
+        let d = self.get(drive).ok_or(format!("lecteur {drive:02X}h absent"))?;
+        let mut s = [0u8; SECTOR];
+        d.read(0, &mut s).map_err(|e| format!("secteur d'amorce : {e}"))?;
+        if s[510..] != [0x55, 0xAA] {
+            return Err(format!("lecteur {drive:02X}h non amorçable (pas de signature 55AAh)"));
+        }
+        Ok(s)
     }
 
     pub fn floppy_count(&self) -> u8 {
@@ -208,8 +259,11 @@ impl Disks {
                     return;
                 }
             },
-            // Ligne de changement de disquette : pas de changement.
-            0x16 => Ok(()),
+            // Ligne de changement de disquette : 06h une fois après un changement.
+            0x16 => match drive {
+                0 | 1 if std::mem::take(&mut self.changed[usize::from(drive)]) => Err(0x06),
+                _ => Ok(()),
+            },
             // Extensions (disque dur) : version 2.1, accès étendus.
             0x41 if cpu.w(BX) == 0x55AA && drive >= 0x80 && self.hard.is_some() => {
                 cpu.set_w(BX, 0xAA55);

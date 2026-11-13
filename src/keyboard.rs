@@ -119,7 +119,8 @@ pub fn text_scancodes(c: u8) -> Vec<u8> {
 /// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
 /// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
 /// `{ctrl+c}`…), pauses (`{wait:500}`, en ms), vitesse (`{speed:25}` en
-/// MIPS, `{speed:max}`), `{{` pour une accolade. Une
+/// MIPS, `{speed:max}`), disquette suivante (`{disk}`), attente
+/// d'un texte à l'écran (`{until:Press a key}`), `{{` pour une accolade. Une
 /// fin de session suit le script.
 pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> {
     use crate::host::InputEvent::{Key, Quit, Text};
@@ -135,10 +136,19 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
             continue;
         }
         let end = rest.iter().position(|&c| c == b'}').ok_or("« { » sans « } »")?;
-        let name = String::from_utf8_lossy(&rest[..end]).to_ascii_lowercase();
+        let raw = String::from_utf8_lossy(&rest[..end]).into_owned();
+        let name = raw.to_ascii_lowercase();
         rest = &rest[end + 1..];
         if let Some(ms) = name.strip_prefix("wait:") {
             out.push(crate::host::InputEvent::Wait(ms.parse().map_err(|_| format!("durée invalide : {ms}"))?));
+            continue;
+        }
+        if name.starts_with("until:") {
+            out.push(crate::host::InputEvent::Until(raw["until:".len()..].to_string()));
+            continue;
+        }
+        if name == "disk" {
+            out.push(crate::host::InputEvent::NextDisk);
             continue;
         }
         if let Some(v) = name.strip_prefix("speed:") {

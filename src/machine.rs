@@ -106,11 +106,14 @@ pub struct Config {
     pub vbe2: bool,
     /// Durée maximale d'exécution (diagnostic : registres affichés à l'arrêt).
     pub limit: Option<Duration>,
+    /// Images de A:, B: et C: (`--fda`, `--fdb`, `--hda`) ; plusieurs pour
+    /// A: (changement de disquette).
+    pub disks: [Vec<std::path::PathBuf>; 3],
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default() }
     }
 }
 
@@ -247,6 +250,8 @@ pub struct Pc<B: Backend = KvmVm> {
     polled_after_drain: bool,
     /// Pause d'un script en cours : pas de nouvelle entrée avant.
     input_paused_until: Option<Instant>,
+    /// Script en attente d'un texte à l'écran (`{until:…}`), et dernier examen.
+    until_text: Option<(String, Instant)>,
     font: Option<crate::font::Font>,
     started: Instant,
     limit: Option<Duration>,
@@ -264,6 +269,13 @@ pub struct Pc<B: Backend = KvmVm> {
     unhandled: BTreeSet<(u8, u8)>,
     /// État de la porte A20 appliqué aux slots mémoire.
     a20: Option<bool>,
+    /// DOS fourni par l'hôte ; faux après un démarrage sur image disque.
+    dos_hle: bool,
+    /// Lecteur de démarrage (redémarrages à chaud).
+    boot_drive: u8,
+    /// Tailles de la mémoire (octets) et de l'EMS (Ko), pour un redémarrage.
+    mem_size: usize,
+    ems_kb: usize,
 }
 
 impl Pc<KvmVm> {
@@ -288,6 +300,7 @@ impl<B: Backend> Pc<B> {
         let vga = Rc::new(RefCell::new(Vga::new()?));
         let mut bios = Bios::new(cfg.extended_kb, vga.clone());
         bios.vbe2 = cfg.vbe2;
+        bios.disks = crate::disk::Disks::open(&cfg.disks)?;
         bios.install(vm.mem());
         let mut dos = dos::Dos::new();
         dos.boot(vm.mem());
@@ -357,12 +370,17 @@ impl<B: Backend> Pc<B> {
             limit: cfg.limit,
             last_frame: None,
             input_paused_until: None,
+            until_text: None,
             stepping: false,
             irq_steps: None,
             trace_int: cfg.trace_int,
             interp: cfg.interp,
             unhandled: BTreeSet::new(),
             a20: None,
+            dos_hle: true,
+            boot_drive: 0,
+            mem_size: 0x10_0000 + cfg.extended_kb * 1024,
+            ems_kb: cfg.ems_kb,
         };
         pc.sync_a20()?;
         let fb = pc.vga.borrow().fb_host_addr();
@@ -396,6 +414,44 @@ impl<B: Backend> Pc<B> {
     pub fn load_program(&mut self, path: &[u8], tail: &[u8]) -> Result<()> {
         let cpu = self.dos.start(self.vm.mem(), path, tail)?;
         self.vm.set_state(&cpu)
+    }
+
+    /// Démarre sur l'image du lecteur `drive` (00h = A:, 80h = C:) comme un
+    /// BIOS : secteur d'amorce en 0000:7C00, DL = lecteur. Le DOS de l'hôte
+    /// s'efface ; XMS, EMS, souris, VBE et son restent servis par l'hôte.
+    pub fn boot_disk(&mut self, drive: u8) -> Result<()> {
+        let sector = self.bios.disks.boot_sector(drive)?;
+        self.dos_hle = false;
+        self.boot_drive = drive;
+        let mem = self.vm.mem();
+        mem.fill(0x500, 0xA_0000 - 0x500, 0);
+        mem.write(0x7C00, &sector);
+        let mut cpu = crate::interp::Cpu::real_mode(0, 0x7C00, 0x7C00);
+        cpu.set_lo(crate::hle::DX, drive);
+        self.vm.set_state(&cpu)
+    }
+
+    /// Redémarrage (INT 19h, saut en FFFF:0000, 8042, port 92h, triple
+    /// faute) : machine remise à neuf, puis amorçage sur le même lecteur.
+    /// Sous le DOS de l'hôte, la session s'arrête.
+    fn reboot(&mut self) -> Result<Option<u8>> {
+        self.kbc.borrow_mut().reset = false;
+        if self.dos_hle {
+            return Ok(Some(0));
+        }
+        eprintln!("[boot] redémarrage");
+        self.vm.reset_cpu()?;
+        let mem = self.vm.mem();
+        mem.fill(0, 0xA_0000, 0);
+        self.bios.install(mem);
+        self.xms = crate::xms::Xms::new(self.mem_size);
+        self.ems = crate::ems::Ems::new(self.ems_kb);
+        *self.pic.borrow_mut() = Pic::new();
+        *self.pit.borrow_mut() = Pit::new();
+        self.kbc.borrow_mut().set_a20(false);
+        self.sync_a20()?;
+        self.boot_disk(self.boot_drive)?;
+        Ok(None)
     }
 
     /// Shell interne : invite, commandes, programmes lancés tour à tour.
@@ -527,7 +583,17 @@ impl<B: Backend> Pc<B> {
     /// d'événements (DFlat) gardent ainsi l'ordre des raccourcis et du texte,
     /// et lisent l'état des modificateurs de la frappe (AH=02h).
     fn service_input(&mut self) {
-        let paused = self.input_paused_until.is_some_and(|t| Instant::now() < t);
+        let mut paused = self.input_paused_until.is_some_and(|t| Instant::now() < t);
+        if let Some((text, last)) = &mut self.until_text {
+            // L'écran est examiné toutes les 50 ms au plus.
+            if last.elapsed() >= Duration::from_millis(50) {
+                *last = Instant::now();
+                if bios::screen_text(self.vm.mem()).iter().any(|l| l.contains(text.as_str())) {
+                    self.until_text = None;
+                }
+            }
+            paused |= self.until_text.is_some();
+        }
         while self.keys.is_empty() && !self.host.quit && !paused {
             match self.host.input.poll() {
                 Some(InputEvent::Wait(ms)) => {
@@ -544,6 +610,11 @@ impl<B: Backend> Pc<B> {
                     Ok(t) => self.throttle = t,
                     Err(e) => eprintln!("bridage : {e}"),
                 },
+                Some(InputEvent::NextDisk) => self.bios.disks.next_floppy(),
+                Some(InputEvent::Until(text)) => {
+                    self.until_text = Some((text, Instant::now() - Duration::from_secs(1)));
+                    break;
+                }
                 Some(InputEvent::Key(code)) => self.keys.push_back(code),
                 Some(InputEvent::Text(c)) => self.keys.extend(keyboard::text_scancodes(c)),
                 Some(InputEvent::Mouse { dx, dy, buttons }) => self.bios.mouse.event(self.vm.mem(), dx, dy, buttons),
@@ -646,11 +717,13 @@ impl<B: Backend> Pc<B> {
             if self.limit.is_some_and(|l| self.started.elapsed() >= l) {
                 let cpu = self.vm.state()?;
                 let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);
+                let screen = bios::screen_text(self.vm.mem()).join("\n");
                 return Err(format!(
-                    "limite de temps atteinte\n{}\n{}\n{:?}",
+                    "limite de temps atteinte\n{}\n{}\n{:?}\nécran :\n{}",
                     crate::debug::format_regs(&cpu),
                     code.join("\n"),
-                    self.stats
+                    self.stats,
+                    screen.trim_end()
                 )
                 .into());
             }
@@ -682,8 +755,13 @@ impl<B: Backend> Pc<B> {
                 Exit::IoOut { port, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
                     self.io.write(port, data);
-                    if matches!(port, 0x60 | 0x92) {
+                    if matches!(port, 0x60 | 0x64 | 0x92) {
                         self.sync_a20()?;
+                        if self.kbc.borrow().reset
+                            && let Some(code) = self.reboot()?
+                        {
+                            return Ok(Event::Exit(code));
+                        }
                     }
                     if matches!(port, 0x3D4 | 0x3D5) {
                         self.stats.page_flips = self.vga.borrow().start_writes;
@@ -734,6 +812,10 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::Step => return Ok(Event::Step),
                 Exit::Hlt => self.halt()?,
+                Exit::Shutdown if !self.dos_hle => {
+                    self.vm.reset_cpu()?;
+                    self.reboot()?;
+                }
                 Exit::Shutdown => return Err("arrêt du processeur (triple faute ?)".into()),
                 Exit::Other(e) => return Err(format!("sortie de VM inattendue : {e}").into()),
             }
@@ -778,6 +860,9 @@ impl<B: Backend> Pc<B> {
         }
         self.stats.host_calls += 1;
         let vector = ((cpu.ip & 0xFFF) >> 4) as u8;
+        if vector == 0x19 {
+            return self.reboot();
+        }
         if self.trace_int {
             let mem = self.vm.mem();
             let sp = cpu.linear(2, cpu.gpr[4] & 0xFFFF) as usize;
@@ -853,7 +938,7 @@ impl<B: Backend> Pc<B> {
         };
         let flow = match driver {
             Some(flow) => flow,
-            None => match self.dos.call(vector, &mut cpu, mem, &mut self.host)? {
+            None => match if self.dos_hle { self.dos.call(vector, &mut cpu, mem, &mut self.host)? } else { None } {
                 Some(flow) => flow,
                 None => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
             },
