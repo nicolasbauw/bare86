@@ -931,8 +931,13 @@ impl<B: Backend> Pc<B> {
         let entry = cpu.clone();
         self.waiting_key = false;
         let ah = (cpu.gpr[0] >> 8) as u8;
-        if vector == 0x16 && matches!(ah, 0x01 | 0x11) {
-            self.idle_poll();
+        match (vector, ah) {
+            (0x16, 0x01 | 0x11) => self.idle_poll(),
+            // Compatibles avec une boucle d'attente : curseur, horloge, veille.
+            (0x10, 0x02 | 0x03) | (0x1A, 0x00) | (0x28, _) | (0x2F, 0x16) => {}
+            // Autre travail (disque, texte…) : ce n'est pas une attente. Le
+            // noyau FreeDOS scrute le clavier (Ctrl-C) à chaque appel DOS.
+            _ => self.idle_polls = None,
         }
         let mem = self.vm.mem();
         if self.drained_at.is_some() && matches!((vector, ah), (0x16, 0x01 | 0x11) | (0x21, 0x06 | 0x0B)) {
@@ -1027,8 +1032,9 @@ impl<B: Backend> Pc<B> {
 
     /// Boucle d'attente d'une touche par scrutation (FreeCOM à l'invite) :
     /// au-delà de 20 ms d'appels rapprochés (moins de 200 µs entre deux) sans
-    /// touche, chaque appel cède 1 ms à l'hôte au lieu d'occuper un cœur. Un
-    /// jeu qui scrute une fois par image n'est pas concerné.
+    /// touche ni autre service entre eux, chaque appel cède 1 ms à l'hôte au
+    /// lieu d'occuper un cœur. Un jeu qui scrute une fois par image n'est pas
+    /// concerné.
     fn idle_poll(&mut self) {
         let now = Instant::now();
         if !self.keys.is_empty() || bios::peek_key(self.vm.mem()).is_some() {

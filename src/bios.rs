@@ -358,6 +358,10 @@ impl Bios {
             }
             // Palette, DAC : écritures acceptées, gérées à l'étape 5.
             0x10 if matches!(al, 0x00..=0x03 | 0x10 | 0x12) => {}
+            // Police ROM 8×16 dans un bloc (AL=04h, 14h) : c'est déjà celle
+            // du rendu texte. Les polices chargées par le programme (plan 2)
+            // ne sont pas encore affichées.
+            0x11 if matches!(al, 0x04 | 0x14) => {}
             // Informations sur la police (pas encore de police en ROM).
             0x11 if al == 0x30 => {
                 cpu.set_w(CX, u16::from(mem.read_u8(bda::CHAR_HEIGHT)));
@@ -570,6 +574,11 @@ impl Bios {
             (0x90 | 0x91, _) => ok(cpu, 0),
             // Interception clavier (appelée par INT 09h) : touche à traiter.
             (0x4F, _) => set_ret_flag(cpu, mem, CF, true),
+            // APM absente : « fonction non prise en charge ».
+            (0x53, _) => {
+                cpu.set_hi(AX, 0x86);
+                set_ret_flag(cpu, mem, CF, true);
+            }
             (0xC0, _) => {
                 cpu.set_sreg(ES, ROM_SEG);
                 cpu.set_w(BX, CONFIG_TABLE);
@@ -649,6 +658,9 @@ impl Bios {
                 cpu.set_lo(DX, 0);
                 set_ret_flag(cpu, mem, CF, false);
             }
+            // BIOS PCI absent (AH=B1h) : CF levé, AH inchangé (convention des
+            // BIOS sans PCI, que les pilotes testent).
+            0xB1 => set_ret_flag(cpu, mem, CF, true),
             0x04 => {
                 let t = local_time();
                 let year = t.tm_year + 1900;
