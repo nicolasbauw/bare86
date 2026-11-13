@@ -51,7 +51,7 @@ usage : dosbox [options] [programme [arguments…]]
   --window       fenêtre SDL3 (vCPU sur son propre thread)
   --stats        compteurs de la machine à la fin (sorties, VRAM émulée…)
   --limit S      arrêt au bout de S secondes, avec registres et code à CS:IP
-  --font F.psf   police PSF du mode texte (par défaut : celle de la console)
+  --font F.psf   police PSF du mode texte (par défaut : Terminus 8×16 embarquée)
   --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
                  texte, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
   --bench | --throttle | --remap   bancs de mesure de l'étape 0";
@@ -195,13 +195,10 @@ struct RunOptions {
 
 fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
     let mut pc = Pc::new(&o.cfg, host)?;
-    let font = match &o.font {
-        Some(p) => Some(font::Font::load(p)?),
-        None => font::Font::default_font(),
-    };
-    if let Some(f) = font {
-        pc.set_font(f);
-    }
+    pc.set_font(match &o.font {
+        Some(p) => font::Font::load(p)?,
+        None => font::Font::builtin(),
+    });
     match &o.program {
         Some(path) => {
             let path = std::path::Path::new(path);

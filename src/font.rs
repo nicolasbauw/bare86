@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Police du mode texte, chargée à l'exécution depuis un fichier PSF1 ou
 //! PSF2 (éventuellement compressé gzip), par exemple une police de la
-//! console Linux. Rien n'est embarqué : le choix d'une police libre à
-//! intégrer reste une question ouverte (FAISABILITE.md). Les 256 caractères
-//! CP437 sont retrouvés par la table Unicode de la police.
+//! console Linux ; les 256 caractères CP437 sont retrouvés par la table
+//! Unicode de la police. Par défaut, police embarquée tirée de Terminus 8×16
+//! (OFL 1.1, voir fonts/ et tools/terminus_cp437.py).
 
 use std::io::Read;
 use std::path::Path;
 
-/// Police installée par le paquet kbd, essayée par défaut.
-pub const DEFAULT_PATHS: &[&str] = &["/usr/share/kbd/consolefonts/default8x16.psfu.gz"];
+/// Glyphes CP437 8×16 tirés de Terminus, 16 octets par caractère.
+const BUILTIN: &[u8; 4096] = include_bytes!("../fonts/terminus-cp437-8x16.bin");
 
 pub struct Font {
     pub width: usize,
@@ -32,9 +32,17 @@ impl Font {
         Self::parse(&data).ok_or_else(|| format!("{} : police PSF illisible", path.display()))
     }
 
-    /// Première police par défaut disponible.
-    pub fn default_font() -> Option<Self> {
-        DEFAULT_PATHS.iter().find_map(|p| Self::load(Path::new(p)).ok())
+    /// Police embarquée (Terminus 8×16).
+    pub fn builtin() -> Self {
+        let glyphs = BUILTIN
+            .chunks_exact(16)
+            .map(|g| {
+                let mut out = [0u8; 32];
+                out[..16].copy_from_slice(g);
+                out
+            })
+            .collect();
+        Self { width: 8, height: 16, glyphs }
     }
 
     fn parse(d: &[u8]) -> Option<Self> {
@@ -163,12 +171,12 @@ mod tests {
     }
 
     #[test]
-    fn system_font_if_present() {
-        if let Some(f) = Font::default_font() {
-            assert_eq!((f.width, f.height), (8, 16));
-            // « █ » (DBh) est plein, l'espace est vide.
-            assert_eq!(f.row(0xDB, 8), 0xFF);
-            assert_eq!(f.row(b' ', 8), 0x00);
-        }
+    fn builtin_font() {
+        let f = Font::builtin();
+        assert_eq!((f.width, f.height), (8, 16));
+        // « █ » (DBh) est plein, l'espace est vide, « ─ » (C4h) a un trait.
+        assert_eq!(f.row(0xDB, 8), 0xFF);
+        assert_eq!(f.row(b' ', 8), 0x00);
+        assert!((0..16).any(|y| f.row(0xC4, y) == 0xFF));
     }
 }
