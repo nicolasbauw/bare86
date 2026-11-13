@@ -117,11 +117,11 @@ fn vbe_mode(mode: u16) -> Option<VbeMode> {
 }
 
 /// Bloc d'information d'un mode (INT 10h AX=4F01h), 256 octets.
-fn write_mode_info(mem: &GuestMem, at: usize, m: &VbeMode) {
+fn write_mode_info(mem: &GuestMem, at: usize, m: &VbeMode, lfb: bool) {
     let pitch = m.width * m.bytes();
     mem.fill(at, 256, 0);
     // Supporté, informations étendues, couleur, graphique, sans télétype, LFB.
-    mem.write_u16(at, 0x009B);
+    mem.write_u16(at, if lfb { 0x009B } else { 0x001B });
     mem.write_u8(at + 2, 0x07); // fenêtre A : présente, lecture, écriture
     mem.write_u16(at + 4, 64); // granularité (Ko)
     mem.write_u16(at + 6, 64); // taille (Ko)
@@ -143,7 +143,9 @@ fn write_mode_info(mem: &GuestMem, at: usize, m: &VbeMode) {
         _ => [0; 8],
     };
     mem.write(at + 0x1F, &masks);
-    mem.write_u32(at + 0x28, crate::kvm::LFB_ADDR as u32);
+    if lfb {
+        mem.write_u32(at + 0x28, crate::kvm::LFB_ADDR as u32);
+    }
 }
 pub const WAIT16: u16 = 0xE850;
 pub const WAIT21: u16 = 0xE860;
@@ -184,12 +186,14 @@ pub struct Bios {
     /// Modes vidéo graphiques déjà signalés.
     warned_modes: BTreeSet<u8>,
     pub mouse: crate::mouse::Mouse,
+    /// VBE 2.0 avec framebuffer linéaire ; sinon VBE 1.2, banques seules (`--vbe1`).
+    pub vbe2: bool,
     vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>,
 }
 
 impl Bios {
     pub fn new(extended_kb: usize, vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>) -> Self {
-        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vga }
+        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vbe2: true, vga }
     }
 
     /// ROM, IVT, BDA, écran texte effacé.
@@ -370,10 +374,10 @@ impl Bios {
             // Information sur le contrôleur ; bloc VBE 2.0 de 512 octets si
             // l'appelant a écrit « VBE2 ».
             0x00 => {
-                let vbe2 = mem.read_u32(es_di) == u32::from_le_bytes(*b"VBE2");
+                let vbe2 = mem.read_u32(es_di) == u32::from_le_bytes(*b"VBE2") && self.vbe2;
                 mem.fill(es_di, if vbe2 { 512 } else { 256 }, 0);
                 mem.write(es_di, b"VESA");
-                mem.write_u16(es_di + 4, 0x0200);
+                mem.write_u16(es_di + 4, if self.vbe2 { 0x0200 } else { 0x0102 });
                 mem.write_u32(es_di + 6, rom(VBE_OEM));
                 mem.write_u32(es_di + 14, rom(VBE_MODES));
                 mem.write_u16(es_di + 18, (crate::vga::FB_SIZE >> 16) as u16);
@@ -387,7 +391,7 @@ impl Bios {
             }
             0x01 => match vbe_mode(cpu.w(CX) & 0x1FF) {
                 Some(m) => {
-                    write_mode_info(mem, es_di, &m);
+                    write_mode_info(mem, es_di, &m, self.vbe2);
                     true
                 }
                 None => false,
@@ -398,6 +402,8 @@ impl Bios {
                 if bx & 0x1FF < 0x100 {
                     let _ = self.set_mode(mem, (bx as u8 & 0x7F) | if keep { 0x80 } else { 0 });
                     true
+                } else if bx & 0x4000 != 0 && !self.vbe2 {
+                    false
                 } else if let Some(m) = vbe_mode(bx & 0x1FF) {
                     let _ = self.set_mode(mem, 0x13 | 0x80);
                     let v = crate::vga::Vbe {

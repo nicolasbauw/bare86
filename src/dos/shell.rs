@@ -155,6 +155,24 @@ impl Dos {
                 Ok(Target::Path { host: h, exists: true, .. }) if h.is_file() && std::fs::remove_file(&h).is_ok() => {}
                 _ => out(b"Fichier introuvable\r\n"),
             },
+            // REN source nouveau-nom : le nouveau nom reste dans le répertoire de la source.
+            _ if eq(cmd, "REN") || eq(cmd, "RENAME") => {
+                let mut words = arg.split(|&c| c == b' ').filter(|w| !w.is_empty());
+                let renamed = match (words.next(), words.next()) {
+                    (Some(from), Some(to)) => match self.drives.resolve(from) {
+                        Ok(Target::Path { host: h, exists: true, .. }) => {
+                            let name = String::from_utf8_lossy(to).to_ascii_uppercase();
+                            let dest = h.with_file_name(name);
+                            !dest.exists() && std::fs::rename(&h, dest).is_ok()
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                if !renamed {
+                    out(b"Fichier introuvable ou nom en double\r\n");
+                }
+            }
             _ if eq(cmd, "TYPE") => match self.drives.resolve(arg) {
                 Ok(Target::Path { host: h, exists: true, .. }) if h.is_file() => {
                     let data = std::fs::read(h).unwrap_or_default();
@@ -166,8 +184,11 @@ impl Dos {
             },
             _ if eq(cmd, "DIR") => self.dir(mem, host, arg),
             _ => {
-                return Ok(match self.find_program(cmd) {
-                    Some(path) => Action::Run(path, rest.to_vec()),
+                // Programme : tout le premier mot, chemin compris (« C:\JEU\X.EXE »).
+                let end = line.iter().position(|&c| c == b' ' || c == b'\t').unwrap_or(line.len());
+                let (word, args) = line.split_at(end);
+                return Ok(match self.find_program(word) {
+                    Some(path) => Action::Run(path, args.to_vec()),
                     None => {
                         out(BAD_COMMAND);
                         Action::Continue

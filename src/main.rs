@@ -58,6 +58,7 @@ usage : dosbox [options] [programme [arguments…]]
   --wav F.wav    son enregistré dans un fichier (sans fenêtre)
   --window       fenêtre SDL3 (vCPU sur son propre thread)
   --stats        compteurs de la machine à la fin (sorties, VRAM émulée…)
+  --vbe1         carte VESA 1.2 : banques seules, sans framebuffer linéaire
   --no-interp    sans rafales de l'interpréteur : une sortie de VM par accès
                  à la VRAM émulée (pour mesurer son apport)
   --limit S      arrêt au bout de S secondes, avec registres et code à CS:IP
@@ -124,6 +125,7 @@ fn main() -> ExitCode {
             },
             "--trace-io" => cfg.trace_io = true,
             "--no-interp" => cfg.interp = false,
+            "--vbe1" => cfg.vbe2 = false,
             "--debug" => debug = true,
             "--screen" => screen = true,
             "--term" => term = true,

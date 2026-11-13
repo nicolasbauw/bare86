@@ -932,6 +932,11 @@ impl Dos {
                 std::fs::remove_file(h).map_err(|e| io_err(&e))
             })),
             0x42 => Out::from(self.seek(cpu, mem)),
+            // COMMAND.COM virtuel (voir `virtual_comspec`) : présent, archive.
+            0x43 if al == 0 && self.virtual_comspec(&read_asciiz(mem, lin(ds, dx))) => {
+                cpu.set_w(CX, 0x20);
+                Out::Ok
+            }
             0x43 => {
                 let r = self.path_arg(mem, ds, dx).and_then(|(h, exists)| {
                     if !exists {
@@ -1009,7 +1014,7 @@ impl Dos {
                     Out::Err(e)
                 }
             },
-            0x4B => self.int21_exec(cpu, mem),
+            0x4B => self.int21_exec(cpu, mem, host)?,
             0x4C => self.terminate(cpu, mem, al, 0),
             0x4D => {
                 cpu.set_w(AX, self.last_return);
@@ -1116,13 +1121,48 @@ impl Dos {
     }
 
     /// AH=4Bh : AL=00h charger et exécuter, 03h charger un overlay.
-    fn int21_exec(&mut self, cpu: &mut Cpu, mem: &GuestMem) -> Out {
+    /// `COMMAND.COM` absent du disque : le shell est interne, mais les
+    /// programmes le cherchent (COMSPEC) et le lancent avec « /C commande »
+    /// (`system()` des bibliothèques C, installeurs).
+    fn virtual_comspec(&self, path: &[u8]) -> bool {
+        let name = path.rsplit(|&c| c == b'\\' || c == b'/' || c == b':').next().unwrap_or(b"");
+        name.eq_ignore_ascii_case(b"COMMAND.COM")
+            && !matches!(self.drives.resolve(path), Ok(Target::Path { exists: true, .. }))
+    }
+
+    fn int21_exec(&mut self, cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Out> {
         let path = read_asciiz(mem, lin(cpu.sreg(DS), cpu.w(DX)));
         let block = lin(cpu.sreg(ES), cpu.w(BX));
+        let (path, override_tail) = if cpu.lo(AX) == 0 && self.virtual_comspec(&path) {
+            // « /C commande arguments » : commande interne exécutée ici,
+            // programme lancé à la place de COMMAND.COM.
+            let far = |at: usize| lin(mem.read_u16(at + 2), mem.read_u16(at));
+            let tail_at = far(block + 2);
+            let mut tail = vec![0u8; usize::from(mem.read_u8(tail_at)).min(126)];
+            mem.read(tail_at + 1, &mut tail);
+            let t = tail.trim_ascii();
+            let Some(line) = t.strip_prefix(b"/C").or_else(|| t.strip_prefix(b"/c")) else {
+                return Ok(Out::Err(fs::ERR_FILE_NOT_FOUND));
+            };
+            match self.shell_command(mem, host, line)? {
+                shell::Action::Run(prog, args) => (prog, Some(args)),
+                _ => {
+                    self.last_return = 0;
+                    return Ok(Out::Ok);
+                }
+            }
+        } else {
+            (path, None)
+        };
         let (image, dos) = match self.read_program(&path) {
             Ok(r) => r,
-            Err(e) => return Out::Err(e),
+            Err(e) => return Ok(Out::Err(e)),
         };
+        Ok(self.exec_loaded(cpu, mem, block, &image, &dos, override_tail))
+    }
+
+    fn exec_loaded(&mut self, cpu: &mut Cpu, mem: &GuestMem, block: usize, image: &[u8], dos: &[u8], override_tail: Option<Vec<u8>>) -> Out {
+        let (image, dos) = (image.to_vec(), dos.to_vec());
         match cpu.lo(AX) {
             0x00 => {
                 let far = |at: usize| lin(mem.read_u16(at + 2), mem.read_u16(at));
@@ -1134,10 +1174,19 @@ impl Dos {
                 let mut fcb2 = [0u8; 16];
                 mem.read(far(block + 6), &mut fcb1);
                 mem.read(far(block + 10), &mut fcb2);
+                // Programme lancé à la place de COMMAND.COM : sa ligne de
+                // commande et ses FCB viennent des arguments de « /C ».
+                let fcbs = match override_tail {
+                    Some(args) => {
+                        tail = args;
+                        None
+                    }
+                    None => Some((fcb1, fcb2)),
+                };
                 let mut parent = cpu.clone();
                 parent.seg_dirty = true;
                 let env = mem.read_u16(block);
-                match self.exec(mem, &image, &dos, &tail, env, Some((fcb1, fcb2)), Some(parent)) {
+                match self.exec(mem, &image, &dos, &tail, env, fcbs, Some(parent)) {
                     Ok(child) => {
                         *cpu = child;
                         Out::Keep

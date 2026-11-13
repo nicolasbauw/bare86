@@ -102,13 +102,15 @@ pub struct Config {
     /// Rafales de l'interpréteur après une sortie MMIO (sinon : une sortie
     /// de VM par accès à la VRAM émulée ; `--no-interp`, pour mesurer).
     pub interp: bool,
+    /// VBE 2.0 avec framebuffer linéaire (sinon VBE 1.2, `--vbe1`).
+    pub vbe2: bool,
     /// Durée maximale d'exécution (diagnostic : registres affichés à l'arrêt).
     pub limit: Option<Duration>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, limit: None }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None }
     }
 }
 
@@ -284,6 +286,7 @@ impl<B: Backend> Pc<B> {
         let mixer = crate::audio::Mixer::new(std::mem::replace(&mut host.audio, Box::new(crate::host::NullAudio::default())));
         let vga = Rc::new(RefCell::new(Vga::new()?));
         let mut bios = Bios::new(cfg.extended_kb, vga.clone());
+        bios.vbe2 = cfg.vbe2;
         bios.install(vm.mem());
         let mut dos = dos::Dos::new();
         dos.boot(vm.mem());
@@ -771,6 +774,22 @@ impl<B: Backend> Pc<B> {
                 cpu.gpr[2] & 0xFFFF,
                 cpu.seg[0].selector
             );
+            // Nom de fichier en DS:DX des fonctions DOS qui en prennent un.
+            let ah = (cpu.gpr[0] >> 8) as u8;
+            if vector == 0x21 && matches!(ah, 0x39..=0x3D | 0x41 | 0x43 | 0x4B | 0x4E | 0x56 | 0x5A | 0x5B | 0x6C) {
+                let mem = self.vm.mem();
+                let at = cpu.linear(3, if ah == 0x6C { cpu.gpr[6] } else { cpu.gpr[2] } & 0xFFFF) as usize;
+                let name: Vec<u8> = (0..128).map(|i| mem.read_u8(at + i)).take_while(|&b| b != 0).collect();
+                eprintln!("      « {} »", String::from_utf8_lossy(&name));
+                if ah == 0x4B {
+                    // Ligne de commande : bloc de paramètres en ES:BX, pointeur en +2.
+                    let block = cpu.linear(0, cpu.gpr[3] & 0xFFFF) as usize;
+                    let tail = (usize::from(mem.read_u16(block + 4)) << 4) + usize::from(mem.read_u16(block + 2));
+                    let len = usize::from(mem.read_u8(tail)).min(126);
+                    let t: Vec<u8> = (0..len).map(|i| mem.read_u8(tail + 1 + i)).collect();
+                    eprintln!("      ligne « {} »", String::from_utf8_lossy(&t));
+                }
+            }
         }
         let mem = self.vm.mem();
         let entry = cpu.clone();
