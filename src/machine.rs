@@ -145,7 +145,7 @@ struct WindowState {
 
 const MAP_THRESHOLD: u64 = 600;
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Stats {
     pub exits: u64,
     pub mmio_exits: u64,
@@ -157,6 +157,35 @@ pub struct Stats {
     /// Mappages et démappages de la fenêtre A0000.
     pub vram_maps: u64,
     pub vram_unmaps: u64,
+    /// Sorties d'E/S par port (lectures et écritures).
+    pub io_ports: std::collections::HashMap<u16, u64>,
+}
+
+impl std::fmt::Debug for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ports: Vec<String> = self.top_ports(8).iter().map(|(p, c)| format!("{p:03X}h: {c}")).collect();
+        f.debug_struct("Stats")
+            .field("exits", &self.exits)
+            .field("mmio_exits", &self.mmio_exits)
+            .field("interpreted", &self.interpreted)
+            .field("host_calls", &self.host_calls)
+            .field("irqs", &self.irqs)
+            .field("vram_emulated", &self.vram_emulated)
+            .field("vram_maps", &self.vram_maps)
+            .field("vram_unmaps", &self.vram_unmaps)
+            .field("io_ports", &ports)
+            .finish()
+    }
+}
+
+impl Stats {
+    /// Les `n` ports les plus sollicités, du plus au moins fréquent.
+    pub fn top_ports(&self, n: usize) -> Vec<(u16, u64)> {
+        let mut v: Vec<_> = self.io_ports.iter().map(|(p, c)| (*p, *c)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.truncate(n);
+        v
+    }
 }
 
 pub enum Event {
@@ -569,12 +598,16 @@ impl<B: Backend> Pc<B> {
                     self.bios.scancode(self.vm.mem(), code);
                 }
                 Exit::IoOut { port, data } => {
+                    *self.stats.io_ports.entry(port).or_default() += 1;
                     self.io.write(port, data);
                     if matches!(port, 0x60 | 0x92) {
                         self.sync_a20()?;
                     }
                 }
-                Exit::IoIn { port, data } => self.io.read(port, data),
+                Exit::IoIn { port, data } => {
+                    *self.stats.io_ports.entry(port).or_default() += 1;
+                    self.io.read(port, data)
+                }
                 Exit::MmioRead { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
                     let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };
