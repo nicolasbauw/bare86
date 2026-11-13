@@ -94,6 +94,9 @@ pub fn install_rom(mem: &GuestMem) {
     set(0x08, INT08);
     set(0x09, INT09);
     set(0x33, INT33);
+    // EMS : segment de l'en-tête « EMMXXXX0 » (F000:E8B0), entrée en 12h.
+    mem.write_u16(0x67 * 4, 0x0012);
+    mem.write_u16(0x67 * 4 + 2, ROM_SEG + (0xE8B0 >> 4));
     for n in 0x0A..=0x0F {
         set(n, IRQ_MASTER_DEFAULT);
     }

@@ -7,6 +7,7 @@ mod bench;
 mod bios;
 mod debug;
 mod dos;
+mod ems;
 mod font;
 mod hle;
 mod host;
@@ -43,6 +44,7 @@ usage : dosbox [options] [programme [arguments…]]
                  programme, ou le répertoire courant pour le shell)
   --mips N       bridage à N millions d'instructions par seconde
   --mem MO       mémoire totale en Mo (16 par défaut)
+  --ems MO       mémoire EMS en Mo, en plus (4 par défaut, 0 à 32)
   --trace-int    journal des interruptions servies par l'hôte
   --trace-io     signale les ports d'E/S sans périphérique
   --debug        débogueur (registres, mémoire, pas à pas)
@@ -101,6 +103,10 @@ fn main() -> ExitCode {
             },
             "--mem" => match value("--mem") {
                 Some(v) if v >= 2.0 => cfg.extended_kb = (v as usize - 1) * 1024,
+                _ => return ExitCode::from(2),
+            },
+            "--ems" => match value("--ems") {
+                Some(v) if (0.0..=32.0).contains(&v) => cfg.ems_kb = (v * 1024.0) as usize,
                 _ => return ExitCode::from(2),
             },
             "--trace-int" => cfg.trace_int = true,

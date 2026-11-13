@@ -147,6 +147,11 @@ fn xms_driver() {
 }
 
 #[test]
+fn ems_driver() {
+    assert_eq!(run(program!("ems")).0, 0, "n° du contrôle en échec (voir asm/tests/ems.S)");
+}
+
+#[test]
 fn bios_keyboard() {
     // Maj + h, puis « i » tapé au terminal.
     let keys = [InputEvent::Key(0x2A), InputEvent::Key(0x23), InputEvent::Key(0xA3), InputEvent::Key(0xAA), InputEvent::Text(b'i')];

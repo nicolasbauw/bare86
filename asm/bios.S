@@ -100,6 +100,15 @@ xms_entry:
     out HOST_CALL, al
     retf
 
+    # EMS : le vecteur INT 67h pointe en FE8Bh:0012h ; ce segment commence
+    # par un en-tête de périphérique dont le nom (offset 0Ah) est EMMXXXX0,
+    # que les programmes vérifient pour détecter le pilote.
+    .org 0xE8B0, 0xFF
+ems_device:
+    .word 0xFFFF, 0xFFFF, 0x8000, 0, 0
+    .ascii "EMMXXXX0"
+    jmp 0xF000:(stubs + 0x67 * 16)
+
     # INT 09h, IRQ 1 (adresse de l'IBM AT) : scancode lu au 8042, proposé à
     # INT 15h AH=4Fh, puis confié à l'hôte (port E1h) qui tient la BDA.
     .org 0xE987, 0xFF

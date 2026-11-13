@@ -85,6 +85,8 @@ const BURST_BUDGET: u64 = 100_000;
 pub struct Config {
     /// Mémoire étendue au-delà du premier Mo, en Ko.
     pub extended_kb: usize,
+    /// Mémoire EMS en Ko (gardée côté hôte, en plus de la mémoire étendue).
+    pub ems_kb: usize,
     /// Débit visé en MIPS ; `None` : vitesse native.
     pub mips: Option<f64>,
     /// Journal des interruptions servies par l'hôte.
@@ -97,7 +99,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, mips: None, trace_int: false, trace_io: false, limit: None }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, limit: None }
     }
 }
 
@@ -179,6 +181,7 @@ pub struct Pc<B: Backend = KvmVm> {
     heartbeat: Heartbeat,
     kbc: Rc<RefCell<Kbc>>,
     xms: crate::xms::Xms,
+    ems: crate::ems::Ems,
     /// Scancodes en route vers le 8042, livrés au rythme d'une frappe.
     keys: VecDeque<u8>,
     last_scancode: Option<Instant>,
@@ -261,6 +264,7 @@ impl<B: Backend> Pc<B> {
             heartbeat,
             kbc,
             xms: crate::xms::Xms::new(0x10_0000 + cfg.extended_kb * 1024),
+            ems: crate::ems::Ems::new(cfg.ems_kb),
             keys: VecDeque::new(),
             last_scancode: None,
             last_made: None,
@@ -641,8 +645,12 @@ impl<B: Backend> Pc<B> {
         if self.drained_at.is_some() && matches!((vector, ah), (0x16, 0x01 | 0x11) | (0x21, 0x06 | 0x0B)) {
             self.polled_after_drain = true;
         }
-        let xms = if vector == 0x2F { self.xms.int2f(&mut cpu, (ROM_SEG, bios::XMS_ENTRY)) } else { None };
-        let flow = match xms {
+        let driver = match vector {
+            0x2F => self.xms.int2f(&mut cpu, (ROM_SEG, bios::XMS_ENTRY)),
+            0x67 => Some(self.ems.int67(&mut cpu, mem)),
+            _ => None,
+        };
+        let flow = match driver {
             Some(flow) => flow,
             None => match self.dos.call(vector, &mut cpu, mem, &mut self.host)? {
                 Some(flow) => flow,
