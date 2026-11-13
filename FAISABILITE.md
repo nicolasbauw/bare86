@@ -444,6 +444,20 @@ Avancement :
 - **Police en attendant la décision** : chargée à l'exécution depuis un fichier PSF1 ou PSF2 (gzip accepté, `src/font.rs`). Par défaut, `/usr/share/kbd/consolefonts/default8x16.psfu.gz` (paquet kbd) ; sinon `--font F.psf`. Rien n'est embarqué ni distribué ; les glyphes CP437 sont retrouvés par la table Unicode. Vérifié sur une capture de ZZT, rendu exact.
 - **Point 4 fait en partie (commit suivant).** `src/sdl.rs` : fenêtre SDL3 (`--window`), vCPU sur son propre thread (machine et signaux créés dessus), images partagées à 70 Hz, affichage au rapport 4:3. Clavier par position physique (scancodes HID → jeu 1, E0h pour les touches étendues : le DOS voit un clavier US). Souris relative et boutons. Vérifié avec le pilote vidéo « offscreen » de SDL. **Restent** : le son du haut-parleur (la fréquence est déjà calculée par `Pit::speaker`), et le shell interne dans la fenêtre (pour l'instant, `--window` exige un programme).
 
+- **Point 5, mode X : Wolfenstein 3D 1.4 shareware.** Copie archivée du FTP de 3D Realms, 856 401 octets, la taille de la fiche de l'archive ; stockée hors dépôt dans `~/Dev/dos-progs/wolf3d`.
+  - **Installation** : l'installeur DOS d'origine tourne et décompresse le jeu.
+  - **Jeu** : écran d'accueil (souris détectée, pas d'EMS/XMS avant l'étape 6), titre, générique, puis démo en 3D rendue correctement (captures `--shot`).
+  - **Corrections nécessaires** :
+    - **Registre d'état** : la boucle d'attente d'id Software repère le *blanc vertical* (bit 0 tenu sans le bit 3). Le registre modélise maintenant 449 lignes, dont 400 affichées, avec une synchronisation de 2 lignes dans le blanc vertical.
+    - **Clavier scripté** : les touches sont tenues 40 ms. Le jeu lit l'état du clavier à chaque image, et un appui de 2 ms passait inaperçu.
+  - **Mesures sur 60 s** :
+    - Pendant la démo, la VRAM est surtout émulée (≈ 350 000 accès/s, soit ≈ 2,5 % d'un cœur). Wolfenstein dessine les murs colonne par colonne en changeant de plan : c'est le cas « un plan par pixel » que le refroidissement renvoie volontairement à l'interpréteur.
+    - Le gros des sorties de VM vient des scrutations du port 3DAh et de l'INT 33h AX=0003h : ≈ 40 000 lectures de la souris par seconde, chacune un appel hôte.
+  - **Optimisation notée** : servir les lectures de la souris (03h, 0Bh) en ROM, à partir d'une zone en mémoire invitée tenue à jour par l'hôte.
+- **Reste dans le menu de Wolfenstein** : la navigation scriptée ne parvient pas encore de façon fiable jusqu'à « New Game » (position par défaut du curseur à éclaircir, dans la fenêtre plutôt qu'au script).
+- **Outils ajoutés** : `--stats` (compteurs en fin d'exécution) et `--limit S` (arrêt au bout de S secondes, avec registres et code à CS:IP), utiles pour diagnostiquer une boucle sans appel.
+- **Reste pour le critère** : un jeu en mode 13h chaîné (Wolfenstein utilise le non chaîné), le son du haut-parleur, le shell dans la fenêtre, et un essai interactif dans la fenêtre par le propriétaire du projet.
+
 Question ouverte (au propriétaire du projet) : police 8×16 du mode texte, sans copie de la ROM IBM. Candidates : Unifont (OFL ou GPL avec exception de police), Spleen (BSD-2, couverture semi-graphique à vérifier), Terminus (OFL).
 
 ### Prochaines étapes (vers Doom sous DOS/4GW)
