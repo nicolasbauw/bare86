@@ -26,6 +26,8 @@ const BIOS_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bios.bin"));
 const CONFIG_TABLE: u16 = 0xE6F5;
 /// Table DBCS vide (INT 21h AX=6300h), dans asm/bios.S.
 pub const DBCS_TABLE: u16 = 0xE700;
+/// Routine de conversion de casse des informations nationales (RETF).
+pub const CASE_MAP: u16 = 0xE710;
 
 /// Adresses dans la BDA.
 mod bda {
@@ -402,7 +404,7 @@ impl Bios {
 
 const SMAP: u32 = 0x534D_4150;
 
-fn local_time() -> libc::tm {
+pub fn local_time() -> libc::tm {
     // SAFETY: localtime_r remplit `tm`, entièrement initialisé à zéro avant.
     unsafe {
         let t = libc::time(std::ptr::null_mut());

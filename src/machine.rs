@@ -119,6 +119,8 @@ impl<B: Backend> Pc<B> {
     pub fn with_backend(vm: B, cfg: &Config, host: Host) -> Result<Self> {
         let mut bios = Bios::new(cfg.extended_kb);
         bios.install(vm.mem());
+        let mut dos = dos::Dos::new();
+        dos.boot(vm.mem());
         let throttle = cfg.mips.map(Throttle::new).transpose()?;
         let mut io = IoBus::default();
         io.trace = cfg.trace_io;
@@ -130,7 +132,7 @@ impl<B: Backend> Pc<B> {
             host,
             stats: Stats::default(),
             bios,
-            dos: dos::Dos::default(),
+            dos,
             vga: VgaWindow(vec![0; VGA_WINDOW.len()]),
             throttle,
             trace_int: cfg.trace_int,
@@ -138,8 +140,29 @@ impl<B: Backend> Pc<B> {
         })
     }
 
+    /// Monte un répertoire hôte comme lecteur (0 = A:).
+    pub fn mount(&mut self, drive: u8, root: std::path::PathBuf) {
+        self.dos.mount(drive, root);
+    }
+
+    /// Charge un programme en mémoire sous le nom DOS `path` (sans disque).
+    pub fn load_image(&mut self, image: &[u8], path: &[u8], tail: &[u8]) -> Result<()> {
+        let cpu = self.dos.start_image(self.vm.mem(), image, path, tail)?;
+        self.vm.set_state(&cpu)
+    }
+
     pub fn load_com(&mut self, image: &[u8]) -> Result<()> {
-        let cpu = dos::load_com(self.vm.mem(), image)?;
+        self.load_image(image, b"C:\\PROGRAM.COM", b"")
+    }
+
+    /// Chemin DOS d'un fichier hôte situé sous un lecteur monté.
+    pub fn dos_path_of(&self, host: &std::path::Path) -> Option<Vec<u8>> {
+        self.dos.dos_path_of(host)
+    }
+
+    /// Charge un programme d'un lecteur monté (« C:\\JEU.EXE »).
+    pub fn load_program(&mut self, path: &[u8], tail: &[u8]) -> Result<()> {
+        let cpu = self.dos.start(self.vm.mem(), path, tail)?;
         self.vm.set_state(&cpu)
     }
 
@@ -227,10 +250,9 @@ impl<B: Backend> Pc<B> {
         }
         let mem = self.vm.mem();
         self.bios.sync_ticks(mem);
-        let flow = match vector {
-            0x20 => Flow::Exit(0),
-            0x21 => self.dos.int21(&mut cpu, mem, &mut self.host)?,
-            _ => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
+        let flow = match self.dos.call(vector, &mut cpu, mem, &mut self.host)? {
+            Some(flow) => flow,
+            None => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
         };
         match flow {
             Flow::Exit(code) => return Ok(Some(code)),

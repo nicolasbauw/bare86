@@ -32,6 +32,12 @@ config_table:
 dbcs_table:
     .word 0
 
+    # Conversion de casse des informations nationales (INT 21h AH=38h) :
+    # rien à convertir au-delà de l'ASCII.
+    .org 0xE710, 0xFF
+case_map:
+    retf
+
     # Point d'entrée après réinitialisation (F000:FFF0) : pas de POST,
     # l'hôte prépare la machine et charge le programme directement.
     .org 0xFFF0, 0xFF

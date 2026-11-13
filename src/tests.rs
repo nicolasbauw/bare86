@@ -98,7 +98,8 @@ fn single_step() {
 #[test]
 fn disassembler() {
     let (pc, _) = machine(&Config::default(), program!("hello"));
-    let lines = debug::disassemble(pc.vm.mem(), 0x1000, 0x100, 2);
+    let cs = pc.vm.state().unwrap().seg[1].selector;
+    let lines = debug::disassemble(pc.vm.mem(), cs, 0x100, 2);
     assert!(lines[0].ends_with("mov dx,10Ch"), "{lines:?}");
     assert!(lines[1].ends_with("mov ah,9"), "{lines:?}");
 }
@@ -175,6 +176,35 @@ fn watcom_text_program() {
     assert_eq!(screen[4], "         Open Watcom en mode texte");
     assert_eq!(screen[6], "         Touche ? k (107)");
     assert_eq!(bios::screen_attr(pc.vm.mem(), 4, 9), 0x1E);
+}
+
+/// Étape 3 : exécutables MZ Open Watcom sur un répertoire hôte monté
+/// (fichiers, recherche, répertoires, mémoire, processus enfant).
+#[test]
+fn watcom_files_and_exec() {
+    let dir = std::env::temp_dir().join(format!("dosbox-c3-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("files.exe"), include_bytes!("../c/tests/files.exe")).unwrap();
+    std::fs::write(dir.join("child.exe"), include_bytes!("../c/tests/child.exe")).unwrap();
+    let out = Capture::default();
+    let mut pc = Pc::new(&Config::default(), Host::headless(Box::new(out.clone()))).unwrap();
+    pc.mount(2, dir.clone());
+    pc.load_program(b"C:\\FILES.EXE", b" un deux").unwrap();
+    let code = pc.run().unwrap();
+    let text = String::from_utf8_lossy(&out.0.borrow()).into_owned();
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("enfant : salut") && text.ends_with("fin\r\n"), "{text}");
+    assert!(pc.unhandled().is_empty(), "{:?}", pc.unhandled());
+    let mut left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+    left.sort();
+    assert_eq!(left, ["child.exe", "files.exe"]);
+    // Tout est rendu : PSP et environnement du shell racine, puis un bloc libre.
+    let chain = crate::dos::mcb_chain(pc.vm.mem());
+    assert_eq!(chain.len(), 3, "{chain:x?}");
+    assert_eq!(chain[0].0, chain[1].0);
+    assert_eq!(chain[2].0, 0);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 use crate::backend::Backend;

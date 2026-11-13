@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/* cible : com */
 /* Critère de l'étape 2 : programme Open Watcom en mode texte.
  * printf (DOS), int86 vers INT 10h (BIOS), getch (clavier). */
 #include <stdio.h>

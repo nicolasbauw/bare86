@@ -28,7 +28,8 @@ use machine::{Config, Pc};
 const HELLO_COM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/hello.bin"));
 
 const USAGE: &str = "\
-usage : dosbox [options] [programme.com]
+usage : dosbox [options] [programme [arguments…]]
+  --mount DIR    répertoire hôte monté en C: (par défaut : celui du programme)
   --mips N       bridage à N millions d'instructions par seconde
   --mem MO       mémoire totale en Mo (16 par défaut)
   --trace-int    journal des interruptions servies par l'hôte
@@ -42,6 +43,8 @@ fn main() -> ExitCode {
     let mut debug = false;
     let mut screen = false;
     let mut program = None;
+    let mut mount: Option<std::path::PathBuf> = None;
+    let mut tail = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let bench = match a.as_str() {
@@ -79,6 +82,13 @@ fn main() -> ExitCode {
             "--trace-io" => cfg.trace_io = true,
             "--debug" => debug = true,
             "--screen" => screen = true,
+            "--mount" => match args.next() {
+                Some(d) => mount = Some(d.into()),
+                None => {
+                    eprintln!("--mount : répertoire attendu");
+                    return ExitCode::from(2);
+                }
+            },
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -87,21 +97,37 @@ fn main() -> ExitCode {
                 eprintln!("option inconnue : {a}\n{USAGE}");
                 return ExitCode::from(2);
             }
-            _ => program = Some(a),
+            _ => {
+                // Le reste de la ligne appartient au programme DOS.
+                program = Some(a);
+                for arg in args.by_ref() {
+                    tail.push(b' ');
+                    tail.extend_from_slice(arg.as_bytes());
+                }
+            }
         }
     }
-    let image = match &program {
-        Some(path) => match std::fs::read(path) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("{path} : {e}");
-                return ExitCode::from(1);
-            }
-        },
-        None => HELLO_COM.to_vec(),
-    };
     let result = Pc::new(&cfg, Host::terminal()).and_then(|mut pc| {
-        pc.load_com(&image)?;
+        match &program {
+            Some(path) => {
+                let path = std::path::Path::new(path);
+                let root = match &mount {
+                    Some(m) => m.clone(),
+                    None => path.parent().map(|p| if p.as_os_str().is_empty() { ".".into() } else { p.to_path_buf() }).unwrap_or(".".into()),
+                };
+                pc.mount(2, root);
+                let dos = pc
+                    .dos_path_of(path)
+                    .ok_or_else(|| format!("{} : introuvable sous le lecteur C:", path.display()))?;
+                pc.load_program(&dos, &tail)?;
+            }
+            None => {
+                if let Some(m) = &mount {
+                    pc.mount(2, m.clone());
+                }
+                pc.load_com(HELLO_COM)?;
+            }
+        }
         let code = if debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };
         if screen {
             println!("\n{}", pc.screen_text().join("\n").trim_end());
