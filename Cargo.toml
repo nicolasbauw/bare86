@@ -5,8 +5,10 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 
 [dependencies]
+flate2 = "1.1.11"
 iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder", "instr_info", "intel"] }
 kvm-bindings = "0.14.2"
 kvm-ioctls = "0.25.1"
 libc = "0.2.191"
 perf-event-open-sys = "7.1.0"
+sdl3 = "0.22.1"

@@ -7,6 +7,7 @@ mod bench;
 mod bios;
 mod debug;
 mod dos;
+mod font;
 mod hle;
 mod host;
 mod interp;
@@ -21,6 +22,7 @@ mod pic;
 mod pit;
 mod render;
 mod rtc;
+mod sdl;
 mod term;
 mod throttle;
 mod timer;
@@ -45,7 +47,9 @@ usage : dosbox [options] [programme [arguments…]]
   --debug        débogueur (registres, mémoire, pas à pas)
   --screen       affiche l'écran texte à la fin du programme
   --term         affiche l'écran texte en direct dans le terminal
-  --shot F.png   capture de l'écran graphique à la fin du programme
+  --shot F.png   capture de l'écran à la fin du programme
+  --window       fenêtre SDL3 (vCPU sur son propre thread)
+  --font F.psf   police PSF du mode texte (par défaut : celle de la console)
   --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
                  texte, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
   --bench | --throttle | --remap   bancs de mesure de l'étape 0";
@@ -56,6 +60,8 @@ fn main() -> ExitCode {
     let mut screen = false;
     let mut term = false;
     let mut shot: Option<String> = None;
+    let mut window = false;
+    let mut font: Option<std::path::PathBuf> = None;
     let mut keys = None;
     let mut program = None;
     let mut mount: Option<std::path::PathBuf> = None;
@@ -99,6 +105,8 @@ fn main() -> ExitCode {
             "--screen" => screen = true,
             "--term" => term = true,
             "--shot" => shot = args.next(),
+            "--window" => window = true,
+            "--font" => font = args.next().map(Into::into),
             "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
                 Some(Ok(ev)) => keys = Some(ev),
                 Some(Err(e)) => {
@@ -135,49 +143,30 @@ fn main() -> ExitCode {
             }
         }
     }
-    let mut host = match keys {
-        Some(ev) => Host { input: Box::new(host::ScriptedInput(ev.into())), ..Host::headless(Box::new(host::Stdout)) },
-        None => Host::terminal(),
+    let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font };
+    let result = if window {
+        if opts.program.is_none() {
+            eprintln!("--window : programme requis (le shell interne ne s'affiche pas encore en fenêtre)");
+            return ExitCode::from(2);
+        }
+        let host_keys = keys;
+        sdl::run("DOS sous KVM", move |mut host| {
+            if let Some(ev) = host_keys {
+                host.input = Box::new(host::ScriptedInput(ev.into()));
+            }
+            launch(&opts, host)
+        })
+    } else {
+        let mut host = match keys {
+            Some(ev) => Host { input: Box::new(host::ScriptedInput(ev.into())), ..Host::headless(Box::new(host::Stdout)) },
+            None => Host::terminal(),
+        };
+        if term {
+            host.text = Box::new(host::Discard);
+            host.term = Some(term::TermScreen::new());
+        }
+        launch(&opts, host)
     };
-    if term {
-        host.text = Box::new(host::Discard);
-        host.term = Some(term::TermScreen::new());
-    }
-    let result = Pc::new(&cfg, host).and_then(|mut pc| {
-        match &program {
-            Some(path) => {
-                let path = std::path::Path::new(path);
-                let root = match &mount {
-                    Some(m) => m.clone(),
-                    None => path.parent().map(|p| if p.as_os_str().is_empty() { ".".into() } else { p.to_path_buf() }).unwrap_or(".".into()),
-                };
-                pc.mount(2, root);
-                let dos = pc
-                    .dos_path_of(path)
-                    .ok_or_else(|| format!("{} : introuvable sous le lecteur C:", path.display()))?;
-                pc.load_program(&dos, &tail)?;
-            }
-            None => {
-                pc.mount(2, mount.clone().unwrap_or_else(|| ".".into()));
-                return pc.shell();
-            }
-        }
-        let code = if debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };
-        if screen {
-            println!("\n{}", pc.screen_text().join("\n").trim_end());
-        }
-        if let Some(path) = &shot {
-            match pc.frame() {
-                Some((w, h, px)) => {
-                    if let Err(e) = std::fs::write(path, render::png(w, h, &px)) {
-                        eprintln!("{path} : {e}");
-                    }
-                }
-                None => eprintln!("--shot : mode texte, pas d'image (police à choisir, cf. FAISABILITE)"),
-            }
-        }
-        code
-    });
     match result {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
@@ -185,4 +174,58 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Ce qu'il faut pour construire et lancer la machine (sur le thread du vCPU).
+struct RunOptions {
+    cfg: Config,
+    program: Option<String>,
+    mount: Option<std::path::PathBuf>,
+    tail: Vec<u8>,
+    debug: bool,
+    screen: bool,
+    shot: Option<String>,
+    font: Option<std::path::PathBuf>,
+}
+
+fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
+    let mut pc = Pc::new(&o.cfg, host)?;
+    let font = match &o.font {
+        Some(p) => Some(font::Font::load(p)?),
+        None => font::Font::default_font(),
+    };
+    if let Some(f) = font {
+        pc.set_font(f);
+    }
+    match &o.program {
+        Some(path) => {
+            let path = std::path::Path::new(path);
+            let root = match &o.mount {
+                Some(m) => m.clone(),
+                None => path.parent().map(|p| if p.as_os_str().is_empty() { ".".into() } else { p.to_path_buf() }).unwrap_or(".".into()),
+            };
+            pc.mount(2, root);
+            let dos = pc.dos_path_of(path).ok_or_else(|| format!("{} : introuvable sous le lecteur C:", path.display()))?;
+            pc.load_program(&dos, &o.tail)?;
+        }
+        None => {
+            pc.mount(2, o.mount.clone().unwrap_or_else(|| ".".into()));
+            return Ok(pc.shell()?);
+        }
+    }
+    let code = if o.debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };
+    if o.screen {
+        println!("\n{}", pc.screen_text().join("\n").trim_end());
+    }
+    if let Some(path) = &o.shot {
+        match pc.frame() {
+            Some((w, h, px)) => {
+                if let Err(e) = std::fs::write(path, render::png(w, h, &px)) {
+                    eprintln!("{path} : {e}");
+                }
+            }
+            None => eprintln!("--shot : mode texte sans police (--font)"),
+        }
+    }
+    Ok(code?)
 }

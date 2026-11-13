@@ -54,6 +54,8 @@ const HOST_KBD_PORT: u16 = 0xE1;
 const KEY_SPACING: Duration = Duration::from_millis(2);
 /// Délai laissé à un programme qui scrute le clavier après la fin de l'entrée.
 const QUIT_GRACE: Duration = Duration::from_millis(300);
+/// Période des images envoyées à l'affichage (70 Hz, comme la VGA).
+const FRAME_PERIOD: Duration = Duration::from_micros(14_286);
 /// Période de rafraîchissement de l'écran du terminal.
 const TERM_FRAME: Duration = Duration::from_millis(33);
 
@@ -62,6 +64,7 @@ const IDLE_LIMIT: u64 = 256;
 /// Plafond d'instructions par rafale interprétée.
 const BURST_BUDGET: u64 = 100_000;
 
+#[derive(Clone)]
 pub struct Config {
     /// Mémoire étendue au-delà du premier Mo, en Ko.
     pub extended_kb: usize,
@@ -173,6 +176,9 @@ pub struct Pc<B: Backend = KvmVm> {
     polled_after_drain: bool,
     /// Pause d'un script en cours : pas de nouvelle entrée avant.
     input_paused_until: Option<Instant>,
+    font: Option<crate::font::Font>,
+    started: Instant,
+    last_frame: Option<Instant>,
     /// Dernier rafraîchissement de l'écran du terminal.
     last_render: Option<Instant>,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
@@ -242,6 +248,9 @@ impl<B: Backend> Pc<B> {
             drained_at: None,
             polled_after_drain: false,
             last_render: None,
+            font: None,
+            started: Instant::now(),
+            last_frame: None,
             input_paused_until: None,
             stepping: false,
             trace_int: cfg.trace_int,
@@ -480,6 +489,9 @@ impl<B: Backend> Pc<B> {
             self.update_window()?;
             self.service_input();
             self.render_term(false);
+            if self.host.wants_frames {
+                self.present_frame();
+            }
             if self.input_finished() {
                 return Err("fin de l'entrée : session arrêtée".into());
             }
@@ -623,11 +635,31 @@ impl<B: Backend> Pc<B> {
         &self.unhandled
     }
 
-    /// Image du mode graphique courant ; `None` en mode texte.
+    /// Image de l'écran : mode graphique, ou texte si une police est chargée.
     pub fn frame(&self) -> Option<(usize, usize, Vec<u32>)> {
         let mut px = Vec::new();
-        let (w, h) = crate::render::render(&self.vga.borrow(), self.vm.mem(), &mut px)?;
+        let vga = self.vga.borrow();
+        let mem = self.vm.mem();
+        let blink_on = (self.started.elapsed().as_millis() / 267).is_multiple_of(2);
+        let (w, h) = crate::render::render(&vga, mem, &mut px)
+            .or_else(|| crate::render::render_text(&vga, mem, self.font.as_ref()?, blink_on, &mut px))?;
         Some((w, h, px))
+    }
+
+    /// Police du mode texte (rendu en image : fenêtre, captures).
+    pub fn set_font(&mut self, font: crate::font::Font) {
+        self.font = Some(font);
+    }
+
+    /// Image envoyée à l'affichage de l'hôte, à 70 Hz.
+    fn present_frame(&mut self) {
+        if self.last_frame.is_some_and(|t| t.elapsed() < FRAME_PERIOD) {
+            return;
+        }
+        self.last_frame = Some(Instant::now());
+        if let Some((width, height, pixels)) = self.frame() {
+            self.host.display.present(&crate::host::Frame { width, height, pixels: &pixels });
+        }
     }
 
     /// Texte de la page active de l'écran.

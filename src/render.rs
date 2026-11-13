@@ -99,6 +99,53 @@ pub fn render(vga: &Vga, mem: &GuestMem, out: &mut Vec<u32>) -> Option<(usize, u
     Some((g.width, g.height))
 }
 
+/// Mode texte avec la police `font` : attributs par la palette du
+/// contrôleur d'attributs puis le DAC, clignotement (bit 7 si activé),
+/// curseur selon sa forme dans la BDA. `blink_on` : phase visible.
+pub fn render_text(vga: &Vga, mem: &GuestMem, font: &crate::font::Font, blink_on: bool, out: &mut Vec<u32>) -> Option<(usize, usize)> {
+    let snap = crate::bios::text_snapshot(mem)?;
+    let (fw, fh) = (font.width, font.height);
+    let (w, h) = (snap.cols * fw, snap.rows * fh);
+    out.clear();
+    out.resize(w * h, 0);
+    let blink = vga.attr[0x10] & 0x08 != 0;
+    for row in 0..snap.rows {
+        for col in 0..snap.cols {
+            let (ch, a) = snap.cells[row * snap.cols + col];
+            let (mut fg, bg) = if blink { (a & 0x0F, a >> 4 & 7) } else { (a & 0x0F, a >> 4) };
+            let hidden = blink && a & 0x80 != 0 && !blink_on;
+            let bg_rgb = dac_rgb(vga, attr_color(vga, bg));
+            if hidden {
+                fg = bg;
+            }
+            let fg_rgb = dac_rgb(vga, attr_color(vga, fg));
+            for y in 0..fh {
+                let bits = font.row(ch, y);
+                let line = &mut out[(row * fh + y) * w + col * fw..][..fw];
+                for (x, px) in line.iter_mut().enumerate() {
+                    *px = if bits >> (7 - x) & 1 != 0 { fg_rgb } else { bg_rgb };
+                }
+            }
+        }
+    }
+    if let Some((r, c)) = snap.cursor
+        && blink_on
+    {
+        // Forme du curseur en lignes de la cellule (BDA 0460h fin, 0461h début).
+        let start = usize::from(mem.read_u8(0x461) & 0x1F);
+        let end = usize::from(mem.read_u8(0x460) & 0x1F);
+        let a = snap.cells[r * snap.cols + c].1;
+        let fg = dac_rgb(vga, attr_color(vga, a & 0x0F));
+        // Formes du BIOS exprimées pour 8 lignes (06h–07h) : mises à l'échelle.
+        let scale = if end < 8 && fh > 8 { fh / 8 } else { 1 };
+        for y in (start * scale)..((end + 1) * scale).min(fh) {
+            let line = &mut out[(r * fh + y) * w + c * fw..][..fw];
+            line.fill(fg);
+        }
+    }
+    Some((w, h))
+}
+
 /// CGA 320 × 200 × 4 (modes 4, 5) et 640 × 200 × 2 (mode 6), en RAM
 /// B8000 : lignes paires à B8000, impaires à BA000.
 fn render_cga(vga: &Vga, mem: &GuestMem, mode: u8, out: &mut Vec<u32>) -> (usize, usize) {

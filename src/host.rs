@@ -60,6 +60,8 @@ pub struct Host {
     pub term: Option<crate::term::TermScreen>,
     /// Fin de session demandée (`InputEvent::Quit` reçu).
     pub quit: bool,
+    /// L'affichage veut des images (fenêtre) : la machine en produit à 70 Hz.
+    pub wants_frames: bool,
 }
 
 /// Dernière image conservée, pour les captures des tests.
@@ -300,6 +302,7 @@ impl Host {
             text,
             term: None,
             quit: false,
+            wants_frames: false,
         }
     }
 }
