@@ -563,7 +563,9 @@ Avancement :
     - *Interpréteur en mode paginé* : traduction par la table de pages de l'invité (4 Ko, 4 Mo avec PSE ; présence, écriture, U/S, CR0.WP ; bits A/D posés), contrôlée dans `lin()` avant tout effet (faute de page : rendue au processeur), décodage octet par octet à travers les pages. Doom sous FreeDOS + JEMMEX : 1690 → ≈ 1525 tics (≈ 115 i/s), au niveau du DOS de l'hôte (1520). Le mode V86 reste au processeur (instructions sensibles à IOPL à traiter).
     - INT 10h AX=1104h/1114h (police ROM 8×16) sans effet ; APM (INT 15h AH=53h) et BIOS PCI (INT 1Ah AH=B1h) absents.
   - **Reste** : interpréteur en mode V86 (jeux en mode réel sous JEMM) ; polices chargées par les programmes (rendu texte d'après le plan 2, comme le vrai matériel : DISPLAY/MODE CON CP, jeux en mode texte) et polices 8×8/8×14 (AX=1102h, 1101h) ; FDISK écrit la fin de partition en cylindre 520 au lieu de 519 (le noyau corrige d'après le LBA : sans conséquence).
-- **Reste ensuite** : CD-ROM (MSCDEX en HLE, images ISO/CUE, pistes audio).
+- **Reste ensuite**, dans l'ordre (choix du propriétaire du projet : le réseau avant le CD-ROM) :
+  1. **Réseau** : carte NE2000 ISA émulée (ports d'E/S, IRQ ; packet driver libre `NE2000.COM` côté DOS), sortie par NAT en espace utilisateur (à la « user networking » de QEMU : libslirp ou pile Rust type smoltcp ; DHCP, DNS, TCP/UDP sortants, sans droits) ; TAP en option. Critère : mTCP sous FreeDOS (DHCP, ping, FTP ou HTGET) ; ensuite IPX des jeux (Doom, Duke3D) par un pont.
+  2. **CD-ROM** : MSCDEX en HLE, images ISO/CUE, pistes audio.
 
 ### L'interpréteur est-il encore nécessaire ? (2026-11-13)
 
