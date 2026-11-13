@@ -62,9 +62,6 @@ pub struct Host {
     pub quit: bool,
     /// L'affichage veut des images (fenêtre) : la machine en produit à 70 Hz.
     pub wants_frames: bool,
-    /// Fréquence du haut-parleur en centièmes de Hz (0 : silence), lue par
-    /// le thread du son.
-    pub speaker: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
 }
 
 /// Dernière image conservée, pour les captures des tests.
@@ -306,7 +303,6 @@ impl Host {
             term: None,
             quit: false,
             wants_frames: false,
-            speaker: None,
         }
     }
 }

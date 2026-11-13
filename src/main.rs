@@ -2,10 +2,12 @@
 //! Émulateur DOS : le code DOS s'exécute nativement sous KVM ; BIOS, DOS et
 //! matériel PC sont fournis par l'hôte.
 
+mod audio;
 mod backend;
 mod bench;
 mod bios;
 mod debug;
+mod dma;
 mod dos;
 mod ems;
 mod font;
@@ -23,6 +25,7 @@ mod pic;
 mod pit;
 mod render;
 mod rtc;
+mod sb16;
 mod sdl;
 mod term;
 mod throttle;
@@ -51,6 +54,7 @@ usage : dosbox [options] [programme [arguments…]]
   --screen       affiche l'écran texte à la fin du programme
   --term         affiche l'écran texte en direct dans le terminal
   --shot F.png   capture de l'écran à la fin du programme
+  --wav F.wav    son enregistré dans un fichier (sans fenêtre)
   --window       fenêtre SDL3 (vCPU sur son propre thread)
   --stats        compteurs de la machine à la fin (sorties, VRAM émulée…)
   --limit S      arrêt au bout de S secondes, avec registres et code à CS:IP
@@ -66,6 +70,7 @@ fn main() -> ExitCode {
     let mut term = false;
     let mut shot: Option<String> = None;
     let mut window = false;
+    let mut wav: Option<String> = None;
     let mut stats = false;
     let mut font: Option<std::path::PathBuf> = None;
     let mut keys = None;
@@ -119,6 +124,7 @@ fn main() -> ExitCode {
             "--screen" => screen = true,
             "--term" => term = true,
             "--shot" => shot = args.next(),
+            "--wav" => wav = args.next(),
             "--window" => window = true,
             "--stats" => stats = true,
             "--font" => font = args.next().map(Into::into),
@@ -172,6 +178,9 @@ fn main() -> ExitCode {
             Some(ev) => Host { input: Box::new(host::ScriptedInput(ev.into())), ..Host::headless(Box::new(host::Stdout)) },
             None => Host::terminal(),
         };
+        if let Some(path) = &wav {
+            host.audio = Box::new(audio::WavSink::new(path));
+        }
         if term {
             host.text = Box::new(host::Discard);
             host.term = Some(term::TermScreen::new());

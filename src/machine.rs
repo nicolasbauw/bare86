@@ -163,7 +163,7 @@ pub struct Stats {
 
 impl std::fmt::Debug for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let ports: Vec<String> = self.top_ports(8).iter().map(|(p, c)| format!("{p:03X}h: {c}")).collect();
+        let ports: Vec<String> = self.top_ports(20).iter().map(|(p, c)| format!("{p:03X}h: {c}")).collect();
         f.debug_struct("Stats")
             .field("exits", &self.exits)
             .field("mmio_exits", &self.mmio_exits)
@@ -210,6 +210,9 @@ pub struct Pc<B: Backend = KvmVm> {
     heartbeat: Heartbeat,
     kbc: Rc<RefCell<Kbc>>,
     xms: crate::xms::Xms,
+    dma: Rc<RefCell<crate::dma::Dma>>,
+    sb: Rc<RefCell<crate::sb16::Sb16>>,
+    mixer: crate::audio::Mixer,
     ems: crate::ems::Ems,
     /// Scancodes en route vers le 8042, livrés au rythme d'une frappe.
     keys: VecDeque<u8>,
@@ -281,6 +284,12 @@ impl<B: Backend> Pc<B> {
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
         io.map(0x92..=0x92, Box::new(KbcPorts(kbc.clone())));
+        let dma = crate::dma::Dma::new().shared();
+        io.map(0x00..=0x0F, Box::new(crate::dma::DmaPorts(dma.clone())));
+        io.map(0x81..=0x8F, Box::new(crate::dma::DmaPorts(dma.clone())));
+        io.map(0xC0..=0xDF, Box::new(crate::dma::DmaPorts(dma.clone())));
+        let sb = Rc::new(RefCell::new(crate::sb16::Sb16::new()));
+        io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));
         let mut pc = Self {
             vm,
             io,
@@ -296,6 +305,9 @@ impl<B: Backend> Pc<B> {
             heartbeat,
             kbc,
             xms: crate::xms::Xms::new(0x10_0000 + cfg.extended_kb * 1024),
+            dma,
+            sb,
+            mixer: crate::audio::Mixer::new(),
             ems: crate::ems::Ems::new(cfg.ems_kb),
             keys: VecDeque::new(),
             last_scancode: None,
@@ -445,9 +457,12 @@ impl<B: Backend> Pc<B> {
             self.pic.borrow_mut().raise(0);
         }
         self.heartbeat.set_period(heartbeat_period(pit.irq0_period()))?;
-        if let Some(sp) = &self.host.speaker {
-            let f = pit.speaker().map_or(0, |f| (f * 100.0) as u32);
-            sp.store(f, std::sync::atomic::Ordering::Relaxed);
+        let speaker = pit.speaker();
+        drop(pit);
+        let mut sb = self.sb.borrow_mut();
+        self.mixer.advance(Instant::now(), &mut sb, &mut self.dma.borrow_mut(), self.vm.mem(), speaker, self.host.audio.as_mut());
+        if sb.take_irq() {
+            self.pic.borrow_mut().raise(crate::sb16::IRQ);
         }
         Ok(())
     }

@@ -37,7 +37,7 @@ const LOL_OFF: u16 = 0x0020;
 const NUL_DEVICE_OFF: u16 = LOL_OFF + 0x22;
 
 /// Environnement maître du shell racine.
-const MASTER_ENV: &[u8] = b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0PROMPT=$P$G\0";
+const MASTER_ENV: &[u8] = b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0PROMPT=$P$G\0BLASTER=A220 I5 D1 H5 T6\0";
 const MASTER_ENV_PARAS: u16 = 0x20;
 
 const ERR_INVALID_FUNCTION: u16 = 0x01;

@@ -9,8 +9,8 @@
 //! scancodes PC du jeu 1, préfixe E0h pour les touches étendues. Le DOS
 //! voit donc un clavier US (pas de KEYB), quelle que soit la disposition.
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ use sdl3::keyboard::Scancode;
 use sdl3::pixels::PixelFormat;
 use sdl3::render::FRect;
 
-use crate::host::{Display, Frame, Host, InputEvent, InputSource, NullAudio};
+use crate::host::{Display, Frame, Host, InputEvent, InputSource};
 
 /// Dernière image produite par le vCPU, avec un numéro de version.
 #[derive(Default)]
@@ -55,27 +55,23 @@ impl InputSource for ChannelInput {
     }
 }
 
-const AUDIO_RATE: u32 = 48_000;
-/// Son en attente visé : 40 ms, par blocs de 10 ms.
-const AUDIO_TARGET: i32 = (AUDIO_RATE / 25 * 2) as i32;
-const AUDIO_BLOCK: usize = (AUDIO_RATE / 100) as usize;
+/// Coussin visé dans le flux SDL : 40 ms ; reconstitué en silence quand
+/// le flux se vide (à-coups du vCPU).
+const AUDIO_CUSHION: usize = (crate::audio::RATE / 25 * 2) as usize;
 
-/// Complète le flux audio d'une onde carrée à `centi_hz` / 100 Hz (0 : silence).
-fn feed_speaker(stream: &sdl3::audio::AudioStream, centi_hz: u32, phase: &mut f64) {
-    let freq = f64::from(centi_hz) / 100.0;
-    while stream.queued_bytes().unwrap_or(AUDIO_TARGET) < AUDIO_TARGET {
-        let mut block = [0i16; AUDIO_BLOCK];
-        // Au-delà de 20 kHz (modulation de largeur d'impulsion), silence.
-        if freq > 0.0 && freq < 20_000.0 {
-            for s in block.iter_mut() {
-                *s = if *phase < 0.5 { 6000 } else { -6000 };
-                *phase = (*phase + freq / f64::from(AUDIO_RATE)).fract();
-            }
-        }
-        if stream.put_data_i16(&block).is_err() {
-            return;
-        }
+/// Verse la file du mixeur dans le flux SDL.
+fn feed_audio(stream: &sdl3::audio::AudioStream, queue: &Mutex<VecDeque<i16>>) {
+    let samples: Vec<i16> = match queue.lock() {
+        Ok(mut q) => q.drain(..).collect(),
+        Err(_) => return,
+    };
+    if samples.is_empty() {
+        return;
     }
+    if stream.queued_bytes().unwrap_or(0) == 0 {
+        let _ = stream.put_data_i16(&vec![0i16; AUDIO_CUSHION]);
+    }
+    let _ = stream.put_data_i16(&samples);
 }
 
 /// Usage HID (scancode SDL) → scancode PC jeu 1 ; bit 8 = préfixe E0h.
@@ -165,20 +161,19 @@ where
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
 
     let frame = Arc::new(Mutex::new(SharedFrame::default()));
-    // Haut-parleur : onde carrée générée ici d'après la fréquence publiée par le vCPU.
-    let speaker = Arc::new(AtomicU32::new(0));
+    // Son : file remplie par le mixeur du vCPU (stéréo, 48 kHz).
+    let queue = Arc::new(Mutex::new(VecDeque::new()));
     let audio = sdl.audio().map_err(|e| e.to_string())?;
     let spec = sdl3::audio::AudioSpec {
-        freq: Some(AUDIO_RATE as i32),
-        channels: Some(1),
+        freq: Some(crate::audio::RATE as i32),
+        channels: Some(2),
         format: Some(sdl3::audio::AudioFormat::S16LE),
     };
     let sound = audio.default_playback_device().open_device_stream(Some(&spec)).ok();
     if let Some(s) = &sound {
         let _ = s.resume();
     }
-    let mut phase = 0.0f64;
-    let vcpu_speaker = speaker.clone();
+    let vcpu_queue = queue.clone();
     let (tx, rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     let display = SharedDisplay(frame.clone());
@@ -187,13 +182,12 @@ where
         .spawn(move || {
             let host = Host {
                 display: Box::new(display),
-                audio: Box::new(NullAudio::default()),
+                audio: Box::new(crate::audio::QueueSink(vcpu_queue)),
                 input: Box::new(ChannelInput(rx)),
                 text: Box::new(crate::host::Discard),
                 term: None,
                 quit: false,
                 wants_frames: true,
-                speaker: Some(vcpu_speaker),
             };
             let _ = done_tx.send(machine(host));
         })
@@ -271,7 +265,7 @@ where
             return result;
         }
         if let Some(s) = &sound {
-            feed_speaker(s, speaker.load(Ordering::Relaxed), &mut phase);
+            feed_audio(s, &queue);
         }
         let new = {
             let f = frame.lock().map_err(|e| e.to_string())?;
