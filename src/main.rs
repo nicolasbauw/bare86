@@ -24,12 +24,11 @@ use std::process::ExitCode;
 use host::Host;
 use machine::{Config, Pc};
 
-/// Programme de démonstration intégré (asm/tests/hello.S).
-const HELLO_COM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/hello.bin"));
-
 const USAGE: &str = "\
 usage : dosbox [options] [programme [arguments…]]
-  --mount DIR    répertoire hôte monté en C: (par défaut : celui du programme)
+  sans programme : shell interne sur le lecteur C:
+  --mount DIR    répertoire hôte monté en C: (par défaut : celui du
+                 programme, ou le répertoire courant pour le shell)
   --mips N       bridage à N millions d'instructions par seconde
   --mem MO       mémoire totale en Mo (16 par défaut)
   --trace-int    journal des interruptions servies par l'hôte
@@ -122,10 +121,8 @@ fn main() -> ExitCode {
                 pc.load_program(&dos, &tail)?;
             }
             None => {
-                if let Some(m) = &mount {
-                    pc.mount(2, m.clone());
-                }
-                pc.load_com(HELLO_COM)?;
+                pc.mount(2, mount.clone().unwrap_or_else(|| ".".into()));
+                return pc.shell();
             }
         }
         let code = if debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };

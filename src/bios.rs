@@ -484,6 +484,17 @@ fn scroll(mem: &GuestMem, page: u8, n: u8, attr: u8, win: (u8, u8, u8, u8), up: 
     }
 }
 
+/// Efface la page active (attribut 07h) et ramène le curseur en haut.
+pub fn clear_screen(mem: &GuestMem) {
+    let s = Screen::of(mem);
+    let page = active_page(mem);
+    if s.text {
+        let last = (s.rows - 1) as u8;
+        scroll(mem, page, 0, 0x07, (0, 0, last, (s.cols - 1) as u8), true);
+    }
+    set_cursor(mem, page, 0, 0);
+}
+
 pub fn active_page(mem: &GuestMem) -> u8 {
     mem.read_u8(bda::PAGE)
 }
@@ -655,8 +666,19 @@ fn kb_event(mem: &GuestMem, ev: InputEvent) {
     }
 }
 
+fn kb_full(mem: &GuestMem) -> bool {
+    let mut next = mem.read_u16(bda::KB_TAIL) + 2;
+    if next >= mem.read_u16(bda::KB_END) {
+        next = mem.read_u16(bda::KB_START);
+    }
+    next == mem.read_u16(bda::KB_HEAD)
+}
+
+/// Range les entrées en attente, tant que le tampon a de la place : le
+/// reste attend dans la source (texte collé, entrée redirigée).
 fn kb_pump(mem: &GuestMem, host: &mut Host) {
-    while let Some(ev) = host.input.poll() {
+    while !kb_full(mem) {
+        let Some(ev) = host.input.poll() else { break };
         kb_event(mem, ev);
     }
 }

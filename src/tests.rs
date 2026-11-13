@@ -207,4 +207,28 @@ fn watcom_files_and_exec() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Shell interne : commandes internes et lancement d'un programme.
+#[test]
+fn shell_session() {
+    let dir = std::env::temp_dir().join(format!("dosbox-shell-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("child.exe"), include_bytes!("../c/tests/child.exe")).unwrap();
+    std::fs::write(dir.join("Notes de cours.txt"), b"bonjour\r\n\x1Acache").unwrap();
+    let typed = b"md jeux\ncd jeux\ncd\ncd..\ntype notesd~1.txt\nchild salut\nfoo\nexit\nver\n";
+    let out = Capture::default();
+    let mut host = Host::headless(Box::new(out.clone()));
+    host.input = Box::new(ScriptedInput(typed.iter().map(|&c| InputEvent::Text(c)).collect()));
+    let mut pc = Pc::new(&Config::default(), host).unwrap();
+    pc.mount(2, dir.clone());
+    assert_eq!(pc.shell().unwrap(), 7);
+    let text = String::from_utf8_lossy(&out.0.borrow()).into_owned();
+    for want in ["C:\\JEUX>cd\r\nC:\\JEUX\r\n", "bonjour\r\nC:\\>", "enfant : salut", "incorrect"] {
+        assert!(text.contains(want), "{want:?} absent de :\n{text}");
+    }
+    assert!(!text.contains("cache") && !text.contains("MS-DOS version"), "{text}");
+    assert!(dir.join("JEUX").is_dir());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 use crate::backend::Backend;

@@ -146,11 +146,13 @@ impl<B: Backend> Pc<B> {
     }
 
     /// Charge un programme en mémoire sous le nom DOS `path` (sans disque).
+    #[cfg(test)]
     pub fn load_image(&mut self, image: &[u8], path: &[u8], tail: &[u8]) -> Result<()> {
         let cpu = self.dos.start_image(self.vm.mem(), image, path, tail)?;
         self.vm.set_state(&cpu)
     }
 
+    #[cfg(test)]
     pub fn load_com(&mut self, image: &[u8]) -> Result<()> {
         self.load_image(image, b"C:\\PROGRAM.COM", b"")
     }
@@ -164,6 +166,25 @@ impl<B: Backend> Pc<B> {
     pub fn load_program(&mut self, path: &[u8], tail: &[u8]) -> Result<()> {
         let cpu = self.dos.start(self.vm.mem(), path, tail)?;
         self.vm.set_state(&cpu)
+    }
+
+    /// Shell interne : invite, commandes, programmes lancés tour à tour.
+    /// Rend la main sur EXIT ou quand l'entrée clavier est épuisée.
+    pub fn shell(&mut self) -> Result<u8> {
+        let mut code = 0;
+        loop {
+            let mem = self.vm.mem();
+            self.dos.prompt(mem, &mut self.host);
+            let Some(line) = self.dos.shell_read(mem, &mut self.host) else { return Ok(code) };
+            match self.dos.shell_command(mem, &mut self.host, &line)? {
+                dos::Action::Continue => {}
+                dos::Action::Exit => return Ok(code),
+                dos::Action::Run(path, tail) => {
+                    self.load_program(&path, &tail)?;
+                    code = self.run()?;
+                }
+            }
+        }
     }
 
     /// Exécute jusqu'à la fin du programme.

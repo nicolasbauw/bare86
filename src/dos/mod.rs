@@ -10,6 +10,7 @@ mod fs;
 mod handles;
 mod memory;
 mod process;
+mod shell;
 
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -25,6 +26,8 @@ use crate::mem::GuestMem;
 use fs::{Device, Drives, Target};
 use handles::{Kind, Sft};
 use process::{Process, PspInit, psp, psp_addr};
+
+pub use shell::Action;
 
 /// Segment des données du DOS (List of Lists, drapeau InDOS).
 const DOS_SEG: u16 = 0x0060;
@@ -192,7 +195,8 @@ impl Dos {
         self.exec(mem, &image, &dos, tail, 0, None, None).map_err(|e| format!("chargement : erreur DOS {e:02X}h"))
     }
 
-    /// Lance une image en mémoire sous le nom `path` (tests, programmes intégrés).
+    /// Lance une image en mémoire sous le nom `path` (tests).
+    #[cfg(test)]
     pub fn start_image(
         &mut self,
         mem: &GuestMem,
