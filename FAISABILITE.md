@@ -509,7 +509,13 @@ Avancement :
 - **FM OPL3** (`src/opl.rs`) : Nuked-OPL3 1.8 (LGPL-2.1+, commit `765ec96`, copie non modifiée dans `third_party/nuked-opl3`, compilée par `build.rs` avec le crate `cc` ; accord du propriétaire du projet). Ports 388h–38Bh, 220h–223h, 228h–229h ; minuteries et registre d'état (détection AdLib, OPL3 reconnue par les bits 1–2 à 0). Chaque écriture est horodatée et appliquée à son échantillon lors du rendu, au lieu du début du bloc suivant (jusqu'à 10 ms de décalage). Gain FM ×2 : Nuked sort ≈ 6 dB sous le numérique d'une vraie carte.
 - **Mixeur SB16** : volumes par pas de 2 dB (31 = 0 dB), au maximum au démarrage.
 - **Doom** (`snd_musicdevice 3`) : musique FM dès l'écran titre, puis musique et bruitages pendant la démo (rms ≈ 1 700 puis 3 500–5 500, un échantillon écrêté sur 20 s). **Wolfenstein** : musique AdLib (rms ≈ 800).
-- **Reste pour le critère** : écoute dans la fenêtre par le propriétaire du projet (craquements, équilibre), et un jeu Sierra (SCI : pilotes SB et AdLib).
+- **Écoute de Doom dans la fenêtre par le propriétaire du projet : parfaite.**
+- **Jeu Sierra : démo officielle de King's Quest VI** (SCI1.1, 1992 ; archive.org `KingsQuestViHeirTodayGoneTomorrowDemo`, `kq6demo.ZIP`, MD5 `43395de532bd65122969ae379b4db37b`, déjà configurée `ADL.DRV` + `AUDBLAST.DRV` ; `~/Dev/dos-progs/kq6demo/c`, lancer `GAME.EXE`). Logo Sierra, écran titre, puis la démo, avec musique FM et son numérisé.
+  - **Détection d'IRQ d'`AUDBLAST.DRV`** : il démasque les IRQ 3, 5, 7, 10, lance un transfert DMA d'un octet (14h) et l'attend par une boucle calibrée pour un 386, qui ne dure qu'≈ 10 µs à la vitesse native (mesuré). Livrée au passage suivant du mixeur, l'IRQ arrivait trop tard (« Unable to initialize your audio hardware ») ; livrée tout de suite, elle précédait la remise à zéro du drapeau attendu. Désormais, un transfert en cycle unique de ≤ 64 unités est achevé après 64 instructions en pas à pas.
+  - **Fuite de TF** : pendant ce pas à pas, un `pushf` ou un `int` de l'invité empile TF=1, que le pilote rétablit plus tard (piège déjà noté). L'INT 1 qui arrive alors sur le stub de la ROM (aucun débogueur dans l'invité) efface TF au retour.
+  - Niveaux : musique FM forte (rms ≈ 15 000), 0,05 % d'échantillons écrêtés dans les passages les plus forts.
+- **Coût** : la synthèse OPL et le mixeur tournent sur le thread du vCPU ; le timedemo de Doom passe de 124 à 111 i/s. Piste : rendu sur un thread dédié.
+- **Reste** : écoute de la démo de King's Quest VI dans la fenêtre par le propriétaire du projet.
 
 ## Questions ouvertes
 
