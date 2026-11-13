@@ -262,6 +262,9 @@ impl Bios {
                 cpu.set_w(BX, 0x0003);
                 cpu.set_w(CX, 0x0009);
             }
+            // Lignes de balayage, chargement de palette, adressage, vidéo,
+            // sommation des gris, curseur : acceptés (réglages de l'étape 5).
+            0x12 if (0x30..=0x36).contains(&cpu.lo(BX)) => cpu.set_lo(AX, 0x12),
             0x13 => write_string(cpu, mem, out),
             // Combinaison d'affichage : VGA couleur.
             0x1A if al == 0x00 => {
@@ -576,14 +579,43 @@ pub fn screen_text(mem: &GuestMem) -> Vec<String> {
 }
 
 /// Caractère Unicode d'un octet de la page de codes 437.
-fn cp437(b: u8) -> char {
+pub fn cp437(b: u8) -> char {
+    const LOW: &str = "☺☻♥♦♣♠•◘○◙♂♀♪♫☼►◄↕‼¶§▬↨↑↓→←∟↔▲▼";
     const HIGH: &str = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ";
     match b {
         0 => ' ',
+        0x01..=0x1F => LOW.chars().nth(usize::from(b - 1)).unwrap_or('?'),
         0x20..=0x7E => char::from(b),
+        0x7F => '⌂',
         0x80.. => HIGH.chars().nth(usize::from(b - 0x80)).unwrap_or('?'),
-        _ => '·',
     }
+}
+
+/// Page active du mode texte : cellules (caractère, attribut) et curseur.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TextSnapshot {
+    pub cols: usize,
+    pub rows: usize,
+    pub cells: Vec<(u8, u8)>,
+    /// Ligne, colonne ; `None` si le curseur est masqué (bit 5 de sa forme).
+    pub cursor: Option<(usize, usize)>,
+}
+
+/// Instantané de l'écran ; `None` en mode graphique.
+pub fn text_snapshot(mem: &GuestMem) -> Option<TextSnapshot> {
+    let s = Screen::of(mem);
+    if !s.text {
+        return None;
+    }
+    let page = active_page(mem);
+    let rows = s.rows.min(60);
+    let mut raw = vec![0u8; s.cols * rows * 2];
+    mem.read(s.cell(page, 0, 0), &mut raw);
+    let cells = raw.chunks(2).map(|c| (c[0], c[1])).collect();
+    let (r, c) = cursor(mem, page);
+    let hidden = mem.read_u8(bda::CURSOR_SHAPE + 1) & 0x20 != 0;
+    let cursor = (!hidden && usize::from(r) < rows && usize::from(c) < s.cols).then_some((usize::from(r), usize::from(c)));
+    Some(TextSnapshot { cols: s.cols, rows, cells, cursor })
 }
 
 /// Octet d'attribut d'une cellule de la page active (tests).

@@ -31,6 +31,8 @@ pub enum InputEvent {
     /// Caractère tapé au terminal (sans scancode d'origine).
     Text(u8),
     Mouse { dx: i32, dy: i32, buttons: u8 },
+    /// Pause d'un script (millisecondes) : l'entrée suivante attend.
+    Wait(u32),
     /// Fin de la session : fenêtre fermée, entrée épuisée, fin d'un script.
     Quit,
 }
@@ -54,6 +56,8 @@ pub struct Host {
     pub audio: Box<dyn AudioSink>,
     pub input: Box<dyn InputSource>,
     pub text: Box<dyn TextSink>,
+    /// Écran texte affiché en direct dans le terminal (`--term`).
+    pub term: Option<crate::term::TermScreen>,
     /// Fin de session demandée (`InputEvent::Quit` reçu).
     pub quit: bool,
 }
@@ -98,13 +102,21 @@ impl InputSource for ScriptedInput {
     }
 }
 
-/// Clavier du terminal : caractères tapés, sans écho ni attente de ligne.
-/// Le terminal est rétabli à la fin, ou sur Ctrl-C.
-pub struct StdinInput;
+/// Clavier du terminal : caractères tapés, sans écho ni attente de ligne ;
+/// flèches, touches de fonction et Alt+lettre décodées de leurs séquences
+/// d'échappement. Le terminal est rétabli à la fin, ou sur Ctrl-C.
+pub struct StdinInput {
+    pending: VecDeque<InputEvent>,
+}
 
 static SAVED_TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
 
 extern "C" fn restore_and_exit(_: libc::c_int) {
+    if crate::term::ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+        let s = crate::term::LEAVE;
+        // SAFETY: write est utilisable dans un gestionnaire de signal.
+        unsafe { libc::write(1, s.as_ptr().cast(), s.len()) };
+    }
     if let Some(t) = SAVED_TERMIOS.get() {
         // SAFETY: tcsetattr et _exit sont utilisables dans un gestionnaire de signal.
         unsafe { libc::tcsetattr(0, libc::TCSANOW, t) };
@@ -126,10 +138,11 @@ impl StdinInput {
                 libc::signal(libc::SIGINT, restore_and_exit as extern "C" fn(libc::c_int) as libc::sighandler_t);
             }
         }
-        Self
+        Self { pending: VecDeque::new() }
     }
 
-    fn read(&mut self, timeout_ms: i32) -> Option<InputEvent> {
+    /// Un octet ; `Some(None)` à la fin de l'entrée, `None` si rien n'arrive.
+    fn byte(timeout_ms: i32) -> Option<Option<u8>> {
         let mut fd = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
         let mut b = 0u8;
         // SAFETY: lecture d'un octet dans `b`.
@@ -137,13 +150,89 @@ impl StdinInput {
             if libc::poll(&mut fd, 1, timeout_ms) <= 0 {
                 return None;
             }
-            // Fin de l'entrée (tube vidé, Ctrl-D) : fin de session.
             if libc::read(0, (&raw mut b).cast(), 1) != 1 {
-                return Some(InputEvent::Quit);
+                return Some(None);
             }
         }
-        Some(InputEvent::Text(b))
+        Some(Some(b))
     }
+
+    /// Appui puis relâchement (le terminal ne signale pas les relâchements).
+    fn tap(&mut self, scan: u8, with: Option<u8>) {
+        use InputEvent::Key;
+        self.pending.extend(with.map(Key));
+        self.pending.extend([Key(scan), Key(scan | 0x80)]);
+        self.pending.extend(with.map(|m| Key(m | 0x80)));
+    }
+
+    /// Séquence après ESC : flèches, Origine/Fin, Inser/Suppr, Pg, F1–F12,
+    /// Alt+touche ; ESC seul si rien ne suit.
+    fn escape(&mut self) {
+        let Some(Some(b)) = Self::byte(20) else {
+            self.tap(0x01, None);
+            return;
+        };
+        if b != b'[' && b != b'O' {
+            // Alt+caractère.
+            if let Some(w) = crate::keyboard::char_word(b.to_ascii_lowercase()) {
+                self.tap((w >> 8) as u8, Some(0x38));
+            }
+            return;
+        }
+        let mut seq = Vec::new();
+        while let Some(Some(c)) = Self::byte(20) {
+            seq.push(c);
+            if c.is_ascii_alphabetic() || c == b'~' || seq.len() > 6 {
+                break;
+            }
+        }
+        let scan = match seq.as_slice() {
+            b"A" => 0x48,
+            b"B" => 0x50,
+            b"C" => 0x4D,
+            b"D" => 0x4B,
+            b"H" | b"1~" | b"7~" => 0x47,
+            b"F" | b"4~" | b"8~" => 0x4F,
+            b"2~" => 0x52,
+            b"3~" => 0x53,
+            b"5~" => 0x49,
+            b"6~" => 0x51,
+            b"P" | b"11~" => 0x3B,
+            b"Q" | b"12~" => 0x3C,
+            b"R" | b"13~" => 0x3D,
+            b"S" | b"14~" => 0x3E,
+            b"15~" => 0x3F,
+            b"17~" => 0x40,
+            b"18~" => 0x41,
+            b"19~" => 0x42,
+            b"20~" => 0x43,
+            b"21~" => 0x44,
+            b"23~" => 0x57,
+            b"24~" => 0x58,
+            _ => return,
+        };
+        self.tap(scan, None);
+    }
+
+    fn read(&mut self, timeout_ms: i32) -> Option<InputEvent> {
+        if let Some(ev) = self.pending.pop_front() {
+            return Some(ev);
+        }
+        match Self::byte(timeout_ms)? {
+            // Fin de l'entrée (tube vidé, Ctrl-D) : fin de session.
+            None => Some(InputEvent::Quit),
+            Some(0x1B) if libc_isatty() => {
+                self.escape();
+                self.pending.pop_front()
+            }
+            Some(b) => Some(InputEvent::Text(b)),
+        }
+    }
+}
+
+fn libc_isatty() -> bool {
+    // SAFETY: simple test sur l'entrée standard.
+    unsafe { libc::isatty(0) == 1 }
 }
 
 impl InputSource for StdinInput {
@@ -151,7 +240,11 @@ impl InputSource for StdinInput {
         self.read(0)
     }
     fn wait(&mut self) -> Option<InputEvent> {
-        self.read(-1)
+        loop {
+            if let Some(ev) = self.read(-1) {
+                return Some(ev);
+            }
+        }
     }
 }
 
@@ -162,6 +255,13 @@ impl Drop for StdinInput {
             unsafe { libc::tcsetattr(0, libc::TCSANOW, t) };
         }
     }
+}
+
+/// Sortie texte ignorée (l'écran est affiché par ailleurs).
+pub struct Discard;
+
+impl TextSink for Discard {
+    fn write(&mut self, _: &[u8]) {}
 }
 
 pub struct Stdout;
@@ -198,6 +298,7 @@ impl Host {
             audio: Box::new(NullAudio::default()),
             input: Box::new(ScriptedInput::default()),
             text,
+            term: None,
             quit: false,
         }
     }

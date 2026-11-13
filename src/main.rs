@@ -20,8 +20,10 @@ mod mouse;
 mod pic;
 mod pit;
 mod rtc;
+mod term;
 mod throttle;
 mod timer;
+mod vga;
 #[cfg(test)]
 mod tests;
 
@@ -41,6 +43,7 @@ usage : dosbox [options] [programme [arguments…]]
   --trace-io     signale les ports d'E/S sans périphérique
   --debug        débogueur (registres, mémoire, pas à pas)
   --screen       affiche l'écran texte à la fin du programme
+  --term         affiche l'écran texte en direct dans le terminal
   --keys SCRIPT  clavier scripté au lieu du terminal, puis fin de session :
                  texte, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
   --bench | --throttle | --remap   bancs de mesure de l'étape 0";
@@ -49,6 +52,7 @@ fn main() -> ExitCode {
     let mut cfg = Config::default();
     let mut debug = false;
     let mut screen = false;
+    let mut term = false;
     let mut keys = None;
     let mut program = None;
     let mut mount: Option<std::path::PathBuf> = None;
@@ -90,6 +94,7 @@ fn main() -> ExitCode {
             "--trace-io" => cfg.trace_io = true,
             "--debug" => debug = true,
             "--screen" => screen = true,
+            "--term" => term = true,
             "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
                 Some(Ok(ev)) => keys = Some(ev),
                 Some(Err(e)) => {
@@ -126,10 +131,14 @@ fn main() -> ExitCode {
             }
         }
     }
-    let host = match keys {
+    let mut host = match keys {
         Some(ev) => Host { input: Box::new(host::ScriptedInput(ev.into())), ..Host::headless(Box::new(host::Stdout)) },
         None => Host::terminal(),
     };
+    if term {
+        host.text = Box::new(host::Discard);
+        host.term = Some(term::TermScreen::new());
+    }
     let result = Pc::new(&cfg, host).and_then(|mut pc| {
         match &program {
             Some(path) => {

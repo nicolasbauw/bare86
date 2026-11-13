@@ -41,6 +41,9 @@ impl Dos {
         let mut line = Vec::new();
         let mut shift = 0u8;
         loop {
+            if let Some(t) = &mut host.term {
+                t.render(mem);
+            }
             let ascii = match host.input.wait()? {
                 InputEvent::Text(c) => keyboard::char_word(c).map(|w| w as u8),
                 InputEvent::Key(code) => {
@@ -59,6 +62,10 @@ impl Dos {
                     return None;
                 }
                 InputEvent::Mouse { .. } => None,
+                InputEvent::Wait(ms) => {
+                    std::thread::sleep(std::time::Duration::from_millis(u64::from(ms)));
+                    None
+                }
             };
             match ascii {
                 Some(b'\r') => {

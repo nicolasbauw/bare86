@@ -118,7 +118,8 @@ pub fn text_scancodes(c: u8) -> Vec<u8> {
 
 /// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
 /// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
-/// `{ctrl+c}`…), `{{` pour une accolade. Une fin de session suit le script.
+/// `{ctrl+c}`…), pauses (`{wait:500}`, en ms), `{{` pour une accolade. Une
+/// fin de session suit le script.
 pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> {
     use crate::host::InputEvent::{Key, Quit, Text};
     let mut out = Vec::new();
@@ -135,6 +136,10 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
         let end = rest.iter().position(|&c| c == b'}').ok_or("« { » sans « } »")?;
         let name = String::from_utf8_lossy(&rest[..end]).to_ascii_lowercase();
         rest = &rest[end + 1..];
+        if let Some(ms) = name.strip_prefix("wait:") {
+            out.push(crate::host::InputEvent::Wait(ms.parse().map_err(|_| format!("durée invalide : {ms}"))?));
+            continue;
+        }
         let (mods, key) = match name.rsplit_once('+') {
             Some((m, k)) => (m.to_string(), k.to_string()),
             None => (String::new(), name.clone()),
@@ -212,6 +217,7 @@ mod tests {
         let ev = parse_script("a{alt+f}{{{enter}").unwrap();
         assert_eq!(ev, [Text(b'a'), Key(0x38), Key(0x21), Key(0xA1), Key(0xB8), Text(b'{'), Key(0x1C), Key(0x9C), Quit]);
         assert!(parse_script("{nope}").is_err());
+        assert_eq!(parse_script("{wait:250}").unwrap(), [crate::host::InputEvent::Wait(250), Quit]);
     }
 
     #[test]

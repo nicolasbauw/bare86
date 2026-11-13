@@ -65,3 +65,15 @@ impl IoDevice for Sink {
     }
     fn write(&mut self, _: u16, _: u8, _: u32) {}
 }
+
+/// Périphérique partagé entre plusieurs plages de ports.
+pub struct Shared<T: IoDevice>(pub std::rc::Rc<std::cell::RefCell<T>>);
+
+impl<T: IoDevice> IoDevice for Shared<T> {
+    fn read(&mut self, port: u16, size: u8) -> u32 {
+        self.0.borrow_mut().read(port, size)
+    }
+    fn write(&mut self, port: u16, size: u8, value: u32) {
+        self.0.borrow_mut().write(port, size, value)
+    }
+}

@@ -53,6 +53,8 @@ const HOST_KBD_PORT: u16 = 0xE1;
 const KEY_SPACING: Duration = Duration::from_millis(2);
 /// Délai laissé à un programme qui scrute le clavier après la fin de l'entrée.
 const QUIT_GRACE: Duration = Duration::from_millis(300);
+/// Période de rafraîchissement de l'écran du terminal.
+const TERM_FRAME: Duration = Duration::from_millis(33);
 
 /// Instructions sans accès VRAM avant que l'interpréteur rende la main.
 const IDLE_LIMIT: u64 = 256;
@@ -137,6 +139,10 @@ pub struct Pc<B: Backend = KvmVm> {
     drained_at: Option<Instant>,
     /// Le programme a scruté le clavier depuis (délai de grâce applicable).
     polled_after_drain: bool,
+    /// Pause d'un script en cours : pas de nouvelle entrée avant.
+    input_paused_until: Option<Instant>,
+    /// Dernier rafraîchissement de l'écran du terminal.
+    last_render: Option<Instant>,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
     trace_int: bool,
@@ -178,6 +184,9 @@ impl<B: Backend> Pc<B> {
         io.map(0x61..=0x61, Box::new(PitPorts(pit.clone())));
         let heartbeat = Heartbeat::new(heartbeat_period(pit.borrow().irq0_period()))?;
         io.map(0x70..=0x71, Box::new(crate::rtc::Rtc::new(cfg.extended_kb)));
+        let vga = Rc::new(RefCell::new(crate::vga::VgaPorts::new()));
+        io.map(0x3B4..=0x3BA, Box::new(crate::io::Shared(vga.clone())));
+        io.map(0x3D4..=0x3DA, Box::new(crate::io::Shared(vga)));
         let kbc = Kbc::new().shared();
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
@@ -199,6 +208,8 @@ impl<B: Backend> Pc<B> {
             waiting_key: false,
             drained_at: None,
             polled_after_drain: false,
+            last_render: None,
+            input_paused_until: None,
             stepping: false,
             trace_int: cfg.trace_int,
             unhandled: BTreeSet::new(),
@@ -284,8 +295,13 @@ impl<B: Backend> Pc<B> {
     /// d'événements (DFlat) gardent ainsi l'ordre des raccourcis et du texte,
     /// et lisent l'état des modificateurs de la frappe (AH=02h).
     fn service_input(&mut self) {
-        while self.keys.is_empty() && !self.host.quit {
+        let paused = self.input_paused_until.is_some_and(|t| Instant::now() < t);
+        while self.keys.is_empty() && !self.host.quit && !paused {
             match self.host.input.poll() {
+                Some(InputEvent::Wait(ms)) => {
+                    self.input_paused_until = Some(Instant::now() + Duration::from_millis(u64::from(ms)));
+                    break;
+                }
                 Some(InputEvent::Quit) => self.host.quit = true,
                 Some(InputEvent::Key(code)) => self.keys.push_back(code),
                 Some(InputEvent::Text(c)) => self.keys.extend(keyboard::text_scancodes(c)),
@@ -309,6 +325,17 @@ impl<B: Backend> Pc<B> {
         }
         if self.kbc.borrow_mut().take_irq() {
             self.pic.borrow_mut().raise(1);
+        }
+    }
+
+    /// Écran du terminal (`--term`), une trentaine de fois par seconde.
+    pub fn render_term(&mut self, now: bool) {
+        let due = now || self.last_render.is_none_or(|t| t.elapsed() >= TERM_FRAME);
+        if let Some(term) = &mut self.host.term
+            && due
+        {
+            term.render(self.vm.mem());
+            self.last_render = Some(Instant::now());
         }
     }
 
@@ -370,6 +397,7 @@ impl<B: Backend> Pc<B> {
         loop {
             self.service_timers()?;
             self.service_input();
+            self.render_term(false);
             if self.input_finished() {
                 return Err("fin de l'entrée : session arrêtée".into());
             }
