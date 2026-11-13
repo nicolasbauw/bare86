@@ -366,14 +366,23 @@ Le runtime Watcom a demandé, en avance sur l'étape 3, une petite partie de l'I
 
 Tests : `c/tests/files.c` (exécutable MZ Watcom small : argv, environnement, fichiers, recherche, répertoires, renommage, malloc, `spawnl` d'un enfant), `asm/tests/fcb.S`, session de shell scriptée ; 28 tests. Corrigé en route : le tampon clavier du BIOS perdait les touches au-delà de 15 quand l'entrée arrivait d'un bloc (texte collé, tube).
 
-Reste pour le critère : pkunzip, edit et des programmes Turbo Pascal (binaires à se procurer).
+Critère, avec des binaires d'époque rangés hors du dépôt dans `~/Dev/dos-progs` (PKZIP 2.04g de HPCalc, MD5 de `PKZIP.EXE` conforme à PCjs ; EDIT 0.9a du dépôt FreeDOS 1.3 ; Turbo Pascal 5.5 de l'ancien musée Embarcadero) :
+
+| Programme | Résultat |
+| --- | --- |
+| PKZIP 2.04g | archive créée, validée par `unzip -t` sur l'hôte |
+| PKUNZIP 2.04g | test et extraction ; fichiers identiques aux originaux |
+| FreeDOS EDIT 0.9a | saisie, menus, enregistrement (Ctrl+S), sortie par le menu ; pilotée par `--keys` |
+| TPC 5.5 | compile un programme Crt + Dos |
+| Programme Turbo Pascal | **bloqué** : l'initialisation de Crt calibre `Delay` en scrutant 0040:006C sans aucun appel ; le compteur ne peut avancer qu'avec l'IRQ 0 réelle (étape 4) |
+
+Le pilotage d'EDIT a demandé un clavier scripté réaliste : `--keys` (texte et touches nommées, puis fin de session), touches livrées une à une (la suivante attend que la précédente soit lue ; les boucles d'événements comme DFlat inversaient sinon raccourcis et texte), AH=02h sans lecture de l'entrée (l'état des modificateurs reste celui de la frappe), délai de grâce de 300 ms après la fin du script pour un programme qui scrute le clavier. La trace `--trace-int` montre aussi les registres et CF au retour.
 
 ### Prochaines étapes (vers Doom sous DOS/4GW)
 
-1. Étape 3 : critère (pkunzip, edit, Turbo Pascal).
-2. Étape 4 : PIC, PIT, 8042, injection d'IRQ (et HLT) ; INT 08h et 09h réels à la place des tics et du clavier provisoires.
-3. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
-4. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
+1. Étape 4 : PIC, PIT, 8042, injection d'IRQ (et HLT) ; INT 08h et 09h réels à la place des tics et du clavier provisoires. Puis vérifier le programme Turbo Pascal (dernier point du critère de l'étape 3).
+2. Étape 5 : VGA (mode 13h, planaire, mode X) + backend SDL3.
+3. Étape 6 : XMS, A20, puis DOS/4GW et Doom (pagination dans l'interpréteur si un extendeur l'active).
 
 ## Questions ouvertes
 
