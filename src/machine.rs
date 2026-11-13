@@ -11,7 +11,10 @@
 //! 100000–…     mémoire étendue (HMA comprise, A20 active)
 //! ```
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::backend::{Backend, Error, Exit, Result};
 use crate::bios::{self, Bios, ROM, ROM_SEG};
@@ -21,7 +24,18 @@ use crate::host::Host;
 use crate::interp::{self, Mmio};
 use crate::io::IoBus;
 use crate::kvm::{KvmVm, Region, VGA_WINDOW};
+use crate::pic::{Pic, PicPorts};
+use crate::pit::{Pit, PitPorts};
 use crate::throttle::Throttle;
+use crate::timer::Heartbeat;
+
+/// Attente maximale sur HLT sans échéance de minuterie (entrées à relire).
+const HALT_MAX: Duration = Duration::from_millis(10);
+
+/// Battement : la période de l'IRQ 0, entre 50 µs et 10 ms.
+fn heartbeat_period(irq0: Duration) -> Duration {
+    irq0.clamp(Duration::from_micros(50), Duration::from_millis(10))
+}
 
 /// Port d'appel hôte utilisé par les stubs.
 pub const HOST_CALL_PORT: u16 = 0xE0;
@@ -77,6 +91,7 @@ pub struct Stats {
     pub mmio_exits: u64,
     pub interpreted: u64,
     pub host_calls: u64,
+    pub irqs: u64,
 }
 
 pub enum Event {
@@ -95,6 +110,11 @@ pub struct Pc<B: Backend = KvmVm> {
     dos: dos::Dos,
     vga: VgaWindow,
     throttle: Option<Throttle>,
+    pic: Rc<RefCell<Pic>>,
+    pit: Rc<RefCell<Pit>>,
+    heartbeat: Heartbeat,
+    /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
+    stepping: bool,
     trace_int: bool,
     /// Services non gérés déjà signalés (vecteur, AH).
     unhandled: BTreeSet<(u8, u8)>,
@@ -126,6 +146,13 @@ impl<B: Backend> Pc<B> {
         io.trace = cfg.trace_io;
         // Port de diagnostic POST, utilisé aussi comme temporisation.
         io.map(0x80..=0x80, Box::new(crate::io::Sink));
+        let pic = Pic::new().shared();
+        io.map(0x20..=0x21, Box::new(PicPorts(pic.clone())));
+        io.map(0xA0..=0xA1, Box::new(PicPorts(pic.clone())));
+        let pit = Pit::new().shared();
+        io.map(0x40..=0x43, Box::new(PitPorts(pit.clone())));
+        io.map(0x61..=0x61, Box::new(PitPorts(pit.clone())));
+        let heartbeat = Heartbeat::new(heartbeat_period(pit.borrow().irq0_period()))?;
         Ok(Self {
             vm,
             io,
@@ -135,6 +162,10 @@ impl<B: Backend> Pc<B> {
             dos,
             vga: VgaWindow(vec![0; VGA_WINDOW.len()]),
             throttle,
+            pic,
+            pit,
+            heartbeat,
+            stepping: false,
             trace_int: cfg.trace_int,
             unhandled: BTreeSet::new(),
         })
@@ -196,9 +227,61 @@ impl<B: Backend> Pc<B> {
         }
     }
 
+    pub fn set_single_step(&mut self, on: bool) -> Result<()> {
+        self.stepping = on;
+        self.vm.request_irq_window(false);
+        self.vm.set_single_step(on)
+    }
+
+    /// Minuterie : IRQ 0 échue, cadence du battement.
+    fn service_timers(&mut self) -> Result<()> {
+        let mut pit = self.pit.borrow_mut();
+        if pit.take_irq0(Instant::now()) {
+            self.pic.borrow_mut().raise(0);
+        }
+        self.heartbeat.set_period(heartbeat_period(pit.irq0_period()))?;
+        Ok(())
+    }
+
+    /// Injecte l'interruption en attente au PIC, ou demande une fenêtre.
+    fn deliver_irq(&mut self) -> Result<()> {
+        if self.stepping {
+            return Ok(());
+        }
+        let pending = self.pic.borrow().pending().is_some();
+        if pending && self.vm.can_inject() {
+            if let Some(vector) = self.pic.borrow_mut().acknowledge() {
+                self.vm.inject(vector)?;
+                self.stats.irqs += 1;
+            }
+            self.vm.request_irq_window(false);
+        } else {
+            self.vm.request_irq_window(pending);
+        }
+        Ok(())
+    }
+
+    /// HLT : attend la prochaine interruption (IF doit être levé).
+    fn halt(&mut self) -> Result<()> {
+        if self.pic.borrow().pending().is_some() {
+            return Ok(());
+        }
+        if self.vm.state()?.flags & (1 << 9) == 0 {
+            return Err("HLT avec les interruptions masquées (IF = 0)".into());
+        }
+        let now = Instant::now();
+        let until = self.pit.borrow().next_irq0().unwrap_or(now + HALT_MAX).min(now + HALT_MAX);
+        if until > now {
+            std::thread::sleep(until - now);
+        }
+        Ok(())
+    }
+
     /// Exécute jusqu'au prochain événement (fin du programme ou fin de pas).
     pub fn resume(&mut self) -> Result<Event> {
         loop {
+            self.service_timers()?;
+            self.deliver_irq()?;
             self.stats.exits += 1;
             let mut host_call = false;
             let mut mmio = false;
@@ -223,13 +306,13 @@ impl<B: Backend> Pc<B> {
                     mmio = VGA_WINDOW.contains(&(addr as usize));
                 }
                 Exit::Interrupted => {
-                    self.bios.sync_ticks(self.vm.mem());
                     if let Some(t) = &mut self.throttle {
                         t.pace()?;
                     }
                 }
+                Exit::IrqWindow => {}
                 Exit::Step => return Ok(Event::Step),
-                Exit::Hlt => return Err("HLT sans interruption à attendre (PIC : étape 4)".into()),
+                Exit::Hlt => self.halt()?,
                 Exit::Shutdown => return Err("arrêt du processeur (triple faute ?)".into()),
                 Exit::Other(e) => return Err(format!("sortie de VM inattendue : {e}").into()),
             }
@@ -271,7 +354,6 @@ impl<B: Backend> Pc<B> {
             );
         }
         let mem = self.vm.mem();
-        self.bios.sync_ticks(mem);
         let flow = match self.dos.call(vector, &mut cpu, mem, &mut self.host)? {
             Some(flow) => flow,
             None => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,

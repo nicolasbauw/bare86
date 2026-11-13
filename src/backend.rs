@@ -14,6 +14,8 @@ pub enum Exit<'a> {
     MmioRead { addr: u64, data: &'a mut [u8] },
     MmioWrite { addr: u64, data: &'a [u8] },
     Hlt,
+    /// L'invité peut recevoir une interruption (fenêtre demandée).
+    IrqWindow,
     /// Exécution interrompue par un signal (bridage, minuterie).
     Interrupted,
     /// Fin d'un pas en mode pas à pas.
@@ -71,4 +73,11 @@ pub trait Backend {
     fn set_state(&mut self, cpu: &Cpu) -> Result<()>;
     /// Pas à pas : chaque `run` s'arrête après une instruction (`Exit::Step`).
     fn set_single_step(&mut self, on: bool) -> Result<()>;
+    /// L'invité accepte une interruption externe maintenant (IF = 1, pas
+    /// d'ombre d'interruption) ; d'après la dernière sortie.
+    fn can_inject(&mut self) -> bool;
+    /// Injecte l'interruption externe `vector` avant la prochaine instruction.
+    fn inject(&mut self, vector: u8) -> Result<()>;
+    /// Demande une sortie dès que l'invité pourra recevoir une interruption.
+    fn request_irq_window(&mut self, on: bool);
 }

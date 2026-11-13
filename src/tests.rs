@@ -245,4 +245,16 @@ fn fcb_files() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// IRQ 0 injectée : INT 08h du BIOS, INT 1Ch, HLT, PIT reprogrammé.
+#[test]
+fn timer_interrupts() {
+    let start = std::time::Instant::now();
+    let (code, _, pc) = run(program!("irq"));
+    let t = start.elapsed();
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/irq.S)");
+    // 5 tics à 18,2 Hz (~275 ms) puis 100 ms à 1 kHz.
+    assert!(t > std::time::Duration::from_millis(300) && t < std::time::Duration::from_millis(1500), "{t:?}");
+    assert!(pc.stats.irqs >= 105, "{:?}", pc.stats);
+}
+
 use crate::backend::Backend;

@@ -8,7 +8,6 @@
 
 use std::collections::BTreeSet;
 use std::ops::Range;
-use std::time::Instant;
 
 use crate::backend::Result;
 use crate::hle::{AX, BP, BX, CF, CX, DI, DX, ES, Flow, Regs, SI, ZF, lin, set_ret_flag};
@@ -63,35 +62,44 @@ mod bda {
 const EQUIPMENT: u16 = 0x0022;
 /// Tics par jour à 1 193 182 / 65 536 Hz.
 const TICKS_PER_DAY: u64 = 0x1800B0;
-const PIT_HZ: u64 = 1_193_182;
+use crate::pit::PIT_HZ;
 
-/// ROM BIOS en F0000 et IVT : le vecteur n pointe sur F000:n*16.
+/// Gestionnaires en ROM (asm/bios.S).
+const INT08: u16 = 0xFEA5;
+const IRQ_MASTER_DEFAULT: u16 = 0xE820;
+const IRQ_SLAVE_DEFAULT: u16 = 0xE830;
+const DUMMY_IRET: u16 = 0xE840;
+
+/// ROM BIOS en F0000 et IVT : le vecteur n pointe sur le stub F000:n*16,
+/// sauf les IRQ et INT 1Ch, servies en ROM sans sortie de VM.
 pub fn install_rom(mem: &GuestMem) {
     mem.write(ROM.start, BIOS_IMAGE);
-    for n in 0..256u16 {
-        mem.write_u16(usize::from(n) * 4, n * 16);
+    let set = |n: u16, off: u16| {
+        mem.write_u16(usize::from(n) * 4, off);
         mem.write_u16(usize::from(n) * 4 + 2, ROM_SEG);
+    };
+    for n in 0..256u16 {
+        set(n, n * 16);
     }
+    set(0x08, INT08);
+    for n in 0x0A..=0x0F {
+        set(n, IRQ_MASTER_DEFAULT);
+    }
+    for n in 0x70..=0x77 {
+        set(n, IRQ_SLAVE_DEFAULT);
+    }
+    set(0x1C, DUMMY_IRET);
 }
 
 pub struct Bios {
     extended_kb: usize,
-    /// Origine de l'horloge hôte pour le compteur de tics.
-    epoch: Instant,
-    /// Tics depuis le minuit du démarrage, à `epoch` (ajusté par 1Ah/01h).
-    base: i64,
-    /// Jours écoulés déjà signalés par le drapeau de minuit.
-    day: i64,
     /// Modes vidéo graphiques déjà signalés.
     warned_modes: BTreeSet<u8>,
 }
 
 impl Bios {
     pub fn new(extended_kb: usize) -> Self {
-        let t = local_time();
-        let secs = (t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec) as u64;
-        let base = (secs * PIT_HZ / 65536) as i64;
-        Self { extended_kb, epoch: Instant::now(), base, day: 0, warned_modes: BTreeSet::new() }
+        Self { extended_kb, warned_modes: BTreeSet::new() }
     }
 
     /// ROM, IVT, BDA, écran texte effacé.
@@ -109,24 +117,10 @@ impl Bios {
         mem.write_u8(bda::VGA_FLAGS, 0x11);
         mem.write_u8(bda::DCC, 0x0B);
         self.set_mode(mem, 3);
-        self.sync_ticks(mem);
-    }
-
-    /// Met à jour le compteur de tics de la BDA d'après l'horloge hôte.
-    /// Provisoire : à l'étape 4, l'IRQ 0 injectée (INT 08h) le fera avancer.
-    pub fn sync_ticks(&mut self, mem: &GuestMem) {
-        let t = self.now_ticks();
-        let day = t.div_euclid(TICKS_PER_DAY as i64);
-        if day > self.day {
-            self.day = day;
-            mem.write_u8(bda::MIDNIGHT, 1);
-        }
-        mem.write_u32(bda::TICKS, t.rem_euclid(TICKS_PER_DAY as i64) as u32);
-    }
-
-    fn now_ticks(&self) -> i64 {
-        let ns = self.epoch.elapsed().as_nanos();
-        self.base + (ns * u128::from(PIT_HZ) / (65536 * 1_000_000_000)) as i64
+        // Tics depuis minuit ; ensuite, c'est l'IRQ 0 (INT 08h) qui les fait avancer.
+        let t = local_time();
+        let secs = (t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec) as u64;
+        mem.write_u32(bda::TICKS, (secs * PIT_HZ / 65536 % TICKS_PER_DAY) as u32);
     }
 
     /// Sert l'interruption `vector` ; `Unhandled` si elle n'est pas du BIOS.
@@ -371,10 +365,8 @@ impl Bios {
                 mem.write_u8(bda::MIDNIGHT, 0);
             }
             0x01 => {
-                let want = (i64::from(cpu.w(CX)) << 16) | i64::from(cpu.w(DX));
-                self.base += want - self.now_ticks().rem_euclid(TICKS_PER_DAY as i64);
+                mem.write_u32(bda::TICKS, (u32::from(cpu.w(CX)) << 16) | u32::from(cpu.w(DX)));
                 mem.write_u8(bda::MIDNIGHT, 0);
-                self.sync_ticks(mem);
             }
             // Heure de la RTC (BCD), heure d'été non signalée.
             0x02 => {

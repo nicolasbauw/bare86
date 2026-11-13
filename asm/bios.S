@@ -38,6 +38,53 @@ dbcs_table:
 case_map:
     retf
 
+    # IRQ sans gestionnaire : fin d'interruption au 8259 maître (IRQ 2–7)
+    # ou aux deux (IRQ 8–15).
+    .org 0xE820, 0xFF
+irq_master_default:
+    push ax
+    mov al, 0x20
+    out 0x20, al
+    pop ax
+    iret
+    .org 0xE830, 0xFF
+irq_slave_default:
+    push ax
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop ax
+    iret
+    # Vecteurs sans effet (INT 1Ch, tic utilisateur) : sans sortie de VM.
+    .org 0xE840, 0xFF
+dummy_iret:
+    iret
+
+    # INT 08h, IRQ 0 (adresse de l'IBM AT) : tics de la BDA, passage de
+    # minuit, INT 1Ch, puis fin d'interruption.
+    .org 0xFEA5, 0xFF
+int08:
+    push ds
+    push ax
+    mov ax, 0x40
+    mov ds, ax
+    inc word ptr ds:[0x6C]
+    jnz 1f
+    inc word ptr ds:[0x6E]
+1:  cmp word ptr ds:[0x6E], 0x18
+    jne 2f
+    cmp word ptr ds:[0x6C], 0xB0
+    jne 2f
+    mov word ptr ds:[0x6C], 0
+    mov word ptr ds:[0x6E], 0
+    mov byte ptr ds:[0x70], 1
+2:  int 0x1C
+    mov al, 0x20
+    out 0x20, al
+    pop ax
+    pop ds
+    iret
+
     # Point d'entrée après réinitialisation (F000:FFF0) : pas de POST,
     # l'hôte prépare la machine et charge le programme directement.
     .org 0xFFF0, 0xFF

@@ -2,6 +2,8 @@
 //! Backend KVM : une VM à un vCPU, mémoire découpée en slots.
 
 use kvm_bindings::{KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, KVM_MEM_READONLY, kvm_guest_debug, kvm_userspace_memory_region};
+use std::os::fd::AsRawFd;
+
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
 use crate::backend::{Backend, Exit, Result};
@@ -130,6 +132,7 @@ impl Backend for KvmVm {
             Ok(VcpuExit::MmioRead(addr, data)) => Exit::MmioRead { addr, data },
             Ok(VcpuExit::MmioWrite(addr, data)) => Exit::MmioWrite { addr, data },
             Ok(VcpuExit::Hlt) => Exit::Hlt,
+            Ok(VcpuExit::IrqWindowOpen) => Exit::IrqWindow,
             Ok(VcpuExit::Debug(_)) => Exit::Step,
             Ok(VcpuExit::Shutdown) => Exit::Shutdown,
             Ok(other) => Exit::Other(format!("{other:?}")),
@@ -165,5 +168,26 @@ impl Backend for KvmVm {
     fn set_single_step(&mut self, on: bool) -> Result<()> {
         self.single_step = on;
         self.arm_single_step()
+    }
+
+    fn can_inject(&mut self) -> bool {
+        let run = self.vcpu.get_kvm_run();
+        run.ready_for_interrupt_injection != 0 && run.if_flag != 0
+    }
+
+    fn inject(&mut self, vector: u8) -> Result<()> {
+        /// _IOW(KVMIO, 0x86, struct kvm_interrupt)
+        const KVM_INTERRUPT: libc::c_ulong = 0x4004_AE86;
+        let irq = kvm_bindings::kvm_interrupt { irq: u32::from(vector) };
+        // SAFETY: ioctl du vCPU avec une structure kvm_interrupt valide.
+        let r = unsafe { libc::ioctl(self.vcpu.as_raw_fd(), KVM_INTERRUPT, &irq) };
+        if r != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(())
+    }
+
+    fn request_irq_window(&mut self, on: bool) {
+        self.vcpu.get_kvm_run().request_interrupt_window = u8::from(on);
     }
 }

@@ -15,7 +15,10 @@ mod keyboard;
 mod kvm;
 mod machine;
 mod mem;
+mod pic;
+mod pit;
 mod throttle;
+mod timer;
 #[cfg(test)]
 mod tests;
 

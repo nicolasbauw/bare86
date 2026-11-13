@@ -88,7 +88,7 @@ fn parse_addr(s: &str) -> Option<(u16, u16)> {
 
 /// Avance de `n` instructions ; renvoie le code de sortie si le programme se termine.
 pub fn step<B: Backend>(pc: &mut Pc<B>, n: usize) -> Result<Option<u8>> {
-    pc.vm.set_single_step(true)?;
+    pc.set_single_step(true)?;
     let mut end = None;
     for _ in 0..n {
         if let Event::Exit(code) = pc.resume()? {
@@ -96,7 +96,7 @@ pub fn step<B: Backend>(pc: &mut Pc<B>, n: usize) -> Result<Option<u8>> {
             break;
         }
     }
-    pc.vm.set_single_step(false)?;
+    pc.set_single_step(false)?;
     Ok(end)
 }
 
