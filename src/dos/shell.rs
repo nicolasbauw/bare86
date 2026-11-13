@@ -3,7 +3,8 @@
 //! programmes. Il joue le rôle de COMMAND.COM (le PSP racine est le sien).
 
 use crate::backend::Result;
-use crate::host::Host;
+use crate::host::{Host, InputEvent};
+use crate::keyboard;
 use crate::mem::GuestMem;
 
 use super::fs::{self, Target};
@@ -33,11 +34,49 @@ impl Dos {
         con_out(mem, host, &p);
     }
 
-    /// Lit une ligne au clavier ; `None` quand l'entrée est épuisée.
+    /// Lit une ligne au clavier ; `None` quand l'entrée est épuisée. Le shell
+    /// tourne côté hôte, sans programme invité pour servir l'IRQ 1 : il lit
+    /// donc l'entrée de l'hôte directement.
     pub fn shell_read(&mut self, mem: &GuestMem, host: &mut Host) -> Option<Vec<u8>> {
-        let line = self.read_line(mem, host, 128).ok()?;
-        con_out(mem, host, b"\r\n");
-        Some(line)
+        let mut line = Vec::new();
+        let mut shift = 0u8;
+        loop {
+            let ascii = match host.input.wait()? {
+                InputEvent::Text(c) => keyboard::char_word(c).map(|w| w as u8),
+                InputEvent::Key(code) => {
+                    let (scan, make) = (code & 0x7F, code & 0x80 == 0);
+                    if let Some(bit) = keyboard::modifier(scan) {
+                        shift = if make { shift | bit } else { shift & !bit };
+                        None
+                    } else if make {
+                        keyboard::key_word(scan, shift).map(|w| w as u8)
+                    } else {
+                        None
+                    }
+                }
+                InputEvent::Quit => {
+                    host.quit = true;
+                    return None;
+                }
+                InputEvent::Mouse { .. } => None,
+            };
+            match ascii {
+                Some(b'\r') => {
+                    con_out(mem, host, b"\r\n");
+                    return Some(line);
+                }
+                Some(0x08 | 0x7F) => {
+                    if line.pop().is_some() {
+                        con_out(mem, host, b"\x08 \x08");
+                    }
+                }
+                Some(c) if c >= b' ' && line.len() < 127 => {
+                    line.push(c);
+                    con_out(mem, host, &[c]);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn shell_command(&mut self, mem: &GuestMem, host: &mut Host, line: &[u8]) -> Result<Action> {

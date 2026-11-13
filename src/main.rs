@@ -11,6 +11,7 @@ mod hle;
 mod host;
 mod interp;
 mod io;
+mod kbc;
 mod keyboard;
 mod kvm;
 mod machine;

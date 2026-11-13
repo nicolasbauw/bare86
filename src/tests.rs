@@ -154,7 +154,7 @@ fn bios_keyboard() {
 fn bios_keyboard_without_input_fails_cleanly() {
     let (mut pc, _) = machine(&Config::default(), program!("bios_kbd"));
     let err = pc.run().unwrap_err();
-    assert!(err.0.contains("INT 16h"), "{err}");
+    assert!(err.0.contains("fin de l'entrée"), "{err}");
 }
 
 #[test]
@@ -255,6 +255,14 @@ fn timer_interrupts() {
     // 5 tics à 18,2 Hz (~275 ms) puis 100 ms à 1 kHz.
     assert!(t > std::time::Duration::from_millis(300) && t < std::time::Duration::from_millis(1500), "{t:?}");
     assert!(pc.stats.irqs >= 105, "{:?}", pc.stats);
+}
+
+/// Clavier lu par le programme lui-même (INT 09h détournée, port 60h).
+#[test]
+fn keyboard_irq_hooked() {
+    let keys = [InputEvent::Text(b'q'), InputEvent::Key(0x1E), InputEvent::Key(0x9E), InputEvent::Text(b'z'), InputEvent::Key(0x39)];
+    let (mut pc, _) = machine_with_input(&Config::default(), program!("int9"), &keys);
+    assert_eq!(pc.run().unwrap(), 0x39);
 }
 
 use crate::backend::Backend;

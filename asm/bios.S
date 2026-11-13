@@ -60,6 +60,38 @@ irq_slave_default:
 dummy_iret:
     iret
 
+    # Reprise d'un appel qui attend une touche : l'hôte rétablit les registres
+    # d'entrée et place IP ici ; l'IRQ 1 réveille le HLT, puis l'appel est
+    # refait sur le stub du vecteur (le cadre de l'INT d'origine reste en pile).
+    .org 0xE850, 0xFF
+wait16:
+    sti
+    hlt
+    cli
+    jmp stubs + 0x16 * 16
+    .org 0xE860, 0xFF
+wait21:
+    sti
+    hlt
+    cli
+    jmp stubs + 0x21 * 16
+
+    # INT 09h, IRQ 1 (adresse de l'IBM AT) : scancode lu au 8042, proposé à
+    # INT 15h AH=4Fh, puis confié à l'hôte (port E1h) qui tient la BDA.
+    .org 0xE987, 0xFF
+int09:
+    push ax
+    in al, 0x60
+    mov ah, 0x4F
+    stc
+    int 0x15
+    jnc 1f
+    out 0xE1, al
+1:  mov al, 0x20
+    out 0x20, al
+    pop ax
+    iret
+
     # INT 08h, IRQ 0 (adresse de l'IBM AT) : tics de la BDA, passage de
     # minuit, INT 1Ch, puis fin d'interruption.
     .org 0xFEA5, 0xFF

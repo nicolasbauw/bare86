@@ -12,7 +12,7 @@
 //! ```
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,9 @@ use crate::host::Host;
 use crate::interp::{self, Mmio};
 use crate::io::IoBus;
 use crate::kvm::{KvmVm, Region, VGA_WINDOW};
+use crate::host::InputEvent;
+use crate::kbc::{Kbc, KbcPorts};
+use crate::keyboard;
 use crate::pic::{Pic, PicPorts};
 use crate::pit::{Pit, PitPorts};
 use crate::throttle::Throttle;
@@ -32,6 +35,11 @@ use crate::timer::Heartbeat;
 /// Attente maximale sur HLT sans échéance de minuterie (entrées à relire).
 const HALT_MAX: Duration = Duration::from_millis(10);
 
+/// Le programme a remplacé l'INT 09h de la ROM (il lit le clavier lui-même).
+fn int09_hooked(mem: &crate::mem::GuestMem) -> bool {
+    mem.read_u32(0x09 * 4) != (u32::from(ROM_SEG) << 16 | u32::from(bios::INT09))
+}
+
 /// Battement : la période de l'IRQ 0, entre 50 µs et 10 ms.
 fn heartbeat_period(irq0: Duration) -> Duration {
     irq0.clamp(Duration::from_micros(50), Duration::from_millis(10))
@@ -39,6 +47,12 @@ fn heartbeat_period(irq0: Duration) -> Duration {
 
 /// Port d'appel hôte utilisé par les stubs.
 pub const HOST_CALL_PORT: u16 = 0xE0;
+/// Port par lequel l'INT 09h de la ROM confie un scancode à l'hôte.
+const HOST_KBD_PORT: u16 = 0xE1;
+/// Intervalle entre deux scancodes livrés au 8042.
+const KEY_SPACING: Duration = Duration::from_millis(2);
+/// Délai laissé à un programme qui scrute le clavier après la fin de l'entrée.
+const QUIT_GRACE: Duration = Duration::from_millis(300);
 
 /// Instructions sans accès VRAM avant que l'interpréteur rende la main.
 const IDLE_LIMIT: u64 = 256;
@@ -113,6 +127,16 @@ pub struct Pc<B: Backend = KvmVm> {
     pic: Rc<RefCell<Pic>>,
     pit: Rc<RefCell<Pit>>,
     heartbeat: Heartbeat,
+    kbc: Rc<RefCell<Kbc>>,
+    /// Scancodes en route vers le 8042, livrés au rythme d'une frappe.
+    keys: VecDeque<u8>,
+    last_scancode: Option<Instant>,
+    /// Le programme attend une touche (appel repris après HLT).
+    waiting_key: bool,
+    /// Fin de l'entrée constatée, tout étant lu : début du délai de grâce.
+    drained_at: Option<Instant>,
+    /// Le programme a scruté le clavier depuis (délai de grâce applicable).
+    polled_after_drain: bool,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
     trace_int: bool,
@@ -153,6 +177,9 @@ impl<B: Backend> Pc<B> {
         io.map(0x40..=0x43, Box::new(PitPorts(pit.clone())));
         io.map(0x61..=0x61, Box::new(PitPorts(pit.clone())));
         let heartbeat = Heartbeat::new(heartbeat_period(pit.borrow().irq0_period()))?;
+        let kbc = Kbc::new().shared();
+        io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
+        io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
         Ok(Self {
             vm,
             io,
@@ -165,6 +192,12 @@ impl<B: Backend> Pc<B> {
             pic,
             pit,
             heartbeat,
+            kbc,
+            keys: VecDeque::new(),
+            last_scancode: None,
+            waiting_key: false,
+            drained_at: None,
+            polled_after_drain: false,
             stepping: false,
             trace_int: cfg.trace_int,
             unhandled: BTreeSet::new(),
@@ -243,6 +276,60 @@ impl<B: Backend> Pc<B> {
         Ok(())
     }
 
+    /// Entrées de l'hôte → scancodes → 8042 → IRQ 1. Une frappe à la fois :
+    /// un octet par intervalle, le tampon du 8042 vide, et l'appui sur une
+    /// touche (hors modificateurs) attend que le programme ait lu la
+    /// précédente dans la BDA, sauf s'il a détourné l'INT 09h. Les boucles
+    /// d'événements (DFlat) gardent ainsi l'ordre des raccourcis et du texte,
+    /// et lisent l'état des modificateurs de la frappe (AH=02h).
+    fn service_input(&mut self) {
+        while self.keys.is_empty() && !self.host.quit {
+            match self.host.input.poll() {
+                Some(InputEvent::Quit) => self.host.quit = true,
+                Some(InputEvent::Key(code)) => self.keys.push_back(code),
+                Some(InputEvent::Text(c)) => self.keys.extend(keyboard::text_scancodes(c)),
+                Some(InputEvent::Mouse { .. }) => {}
+                None => break,
+            }
+        }
+        let now = Instant::now();
+        let spaced = self.last_scancode.is_none_or(|t| now.duration_since(t) >= KEY_SPACING);
+        if let Some(&b) = self.keys.front()
+            && spaced
+            && self.kbc.borrow().is_empty()
+        {
+            let mem = self.vm.mem();
+            let key_press = b & 0x80 == 0 && b != 0xE0 && keyboard::modifier(b).is_none();
+            if !key_press || int09_hooked(mem) || bios::peek_key(mem).is_none() {
+                self.kbc.borrow_mut().feed(b);
+                self.keys.pop_front();
+                self.last_scancode = Some(now);
+            }
+        }
+        if self.kbc.borrow_mut().take_irq() {
+            self.pic.borrow_mut().raise(1);
+        }
+    }
+
+    /// Fin de session après la fin de l'entrée (script épuisé, tube vidé),
+    /// une fois tout ce qui a été tapé lu : tout de suite si le programme
+    /// attend une touche ; après un délai de grâce s'il scrute le clavier ou
+    /// a détourné l'INT 09h (boucles d'événements qui traitent la dernière
+    /// touche au tour suivant). Un programme qui ne lit pas le clavier va
+    /// jusqu'à sa fin.
+    fn input_finished(&mut self) -> bool {
+        let mem = self.vm.mem();
+        let drained = self.host.quit && self.keys.is_empty() && self.kbc.borrow().is_empty() && bios::peek_key(mem).is_none();
+        if !drained {
+            self.drained_at = None;
+            self.polled_after_drain = false;
+            return false;
+        }
+        let since = *self.drained_at.get_or_insert_with(Instant::now);
+        let reads_keys = self.polled_after_drain || int09_hooked(mem);
+        self.waiting_key || (reads_keys && since.elapsed() >= QUIT_GRACE)
+    }
+
     /// Injecte l'interruption en attente au PIC, ou demande une fenêtre.
     fn deliver_irq(&mut self) -> Result<()> {
         if self.stepping {
@@ -281,12 +368,20 @@ impl<B: Backend> Pc<B> {
     pub fn resume(&mut self) -> Result<Event> {
         loop {
             self.service_timers()?;
+            self.service_input();
+            if self.input_finished() {
+                return Err("fin de l'entrée : session arrêtée".into());
+            }
             self.deliver_irq()?;
             self.stats.exits += 1;
             let mut host_call = false;
             let mut mmio = false;
             match self.vm.run()? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
+                Exit::IoOut { port: HOST_KBD_PORT, data } => {
+                    let code = data[0];
+                    self.bios.scancode(self.vm.mem(), code);
+                }
                 Exit::IoOut { port, data } => self.io.write(port, data),
                 Exit::IoIn { port, data } => self.io.read(port, data),
                 Exit::MmioRead { addr, data } => {
@@ -354,6 +449,12 @@ impl<B: Backend> Pc<B> {
             );
         }
         let mem = self.vm.mem();
+        let entry = cpu.clone();
+        self.waiting_key = false;
+        let ah = (cpu.gpr[0] >> 8) as u8;
+        if self.drained_at.is_some() && matches!((vector, ah), (0x16, 0x01 | 0x11) | (0x21, 0x06 | 0x0B)) {
+            self.polled_after_drain = true;
+        }
         let flow = match self.dos.call(vector, &mut cpu, mem, &mut self.host)? {
             Some(flow) => flow,
             None => self.bios.call(vector, &mut cpu, mem, &mut self.host)?,
@@ -367,6 +468,14 @@ impl<B: Backend> Pc<B> {
                 }
             }
             Flow::Continue => {}
+            // Reprise après HLT : registres d'entrée, IP sur le tremplin du vecteur.
+            Flow::Wait => {
+                cpu = entry;
+                cpu.ip = u32::from(if vector == 0x16 { bios::WAIT16 } else { bios::WAIT21 });
+                self.waiting_key = true;
+                self.vm.set_state(&cpu)?;
+                return Ok(None);
+            }
         }
         if self.trace_int {
             let mem = self.vm.mem();
@@ -382,9 +491,6 @@ impl<B: Backend> Pc<B> {
             );
         }
         self.vm.set_state(&cpu)?;
-        if self.host.stop {
-            return Err("fin de l'entrée : session arrêtée".into());
-        }
         Ok(None)
     }
 

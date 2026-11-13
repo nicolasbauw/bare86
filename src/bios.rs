@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use crate::backend::Result;
 use crate::hle::{AX, BP, BX, CF, CX, DI, DX, ES, Flow, Regs, SI, ZF, lin, set_ret_flag};
-use crate::host::{Host, InputEvent, TextSink};
+use crate::host::{Host, TextSink};
 use crate::interp::Cpu;
 use crate::keyboard;
 use crate::mem::GuestMem;
@@ -69,6 +69,11 @@ const INT08: u16 = 0xFEA5;
 const IRQ_MASTER_DEFAULT: u16 = 0xE820;
 const IRQ_SLAVE_DEFAULT: u16 = 0xE830;
 const DUMMY_IRET: u16 = 0xE840;
+/// INT 09h (IRQ 1), à l'adresse de l'IBM AT.
+pub const INT09: u16 = 0xE987;
+/// Reprises après HLT d'un appel qui attend une touche (asm/bios.S).
+pub const WAIT16: u16 = 0xE850;
+pub const WAIT21: u16 = 0xE860;
 
 /// ROM BIOS en F0000 et IVT : le vecteur n pointe sur le stub F000:n*16,
 /// sauf les IRQ et INT 1Ch, servies en ROM sans sortie de VM.
@@ -82,6 +87,7 @@ pub fn install_rom(mem: &GuestMem) {
         set(n, n * 16);
     }
     set(0x08, INT08);
+    set(0x09, INT09);
     for n in 0x0A..=0x0F {
         set(n, IRQ_MASTER_DEFAULT);
     }
@@ -93,13 +99,15 @@ pub fn install_rom(mem: &GuestMem) {
 
 pub struct Bios {
     extended_kb: usize,
+    /// Préfixe E0h reçu : le scancode suivant est une touche étendue.
+    e0: bool,
     /// Modes vidéo graphiques déjà signalés.
     warned_modes: BTreeSet<u8>,
 }
 
 impl Bios {
     pub fn new(extended_kb: usize) -> Self {
-        Self { extended_kb, warned_modes: BTreeSet::new() }
+        Self { extended_kb, e0: false, warned_modes: BTreeSet::new() }
     }
 
     /// ROM, IVT, BDA, écran texte effacé.
@@ -138,7 +146,7 @@ impl Bios {
             }
             0x13 => int13(cpu, mem),
             0x15 => self.int15(cpu, mem),
-            0x16 => int16(cpu, mem, host)?,
+            0x16 => int16(cpu, mem),
             0x1A => self.int1a(cpu, mem),
             // Impression d'écran, Ctrl-Break, tic utilisateur : rien à faire.
             0x05 | 0x1B | 0x1C => Flow::Continue,
@@ -303,6 +311,8 @@ impl Bios {
             }
             // Attente / fin d'attente de périphérique : rien à attendre.
             (0x90 | 0x91, _) => ok(cpu, 0),
+            // Interception clavier (appelée par INT 09h) : touche à traiter.
+            (0x4F, _) => set_ret_flag(cpu, mem, CF, true),
             (0xC0, _) => {
                 cpu.set_sreg(ES, ROM_SEG);
                 cpu.set_w(BX, CONFIG_TABLE);
@@ -628,13 +638,15 @@ fn kb_push(mem: &GuestMem, word: u16) -> bool {
     true
 }
 
-fn kb_peek(mem: &GuestMem) -> Option<u16> {
+/// Prochaine touche du tampon de la BDA, sans la retirer.
+pub fn peek_key(mem: &GuestMem) -> Option<u16> {
     let head = mem.read_u16(bda::KB_HEAD);
     (head != mem.read_u16(bda::KB_TAIL)).then(|| mem.read_u16(0x400 + usize::from(head)))
 }
 
-fn kb_pop(mem: &GuestMem) -> Option<u16> {
-    let word = kb_peek(mem)?;
+/// Retire la prochaine touche du tampon de la BDA.
+pub fn read_key(mem: &GuestMem) -> Option<u16> {
+    let word = peek_key(mem)?;
     let mut head = mem.read_u16(bda::KB_HEAD) + 2;
     if head >= mem.read_u16(bda::KB_END) {
         head = mem.read_u16(bda::KB_START);
@@ -643,111 +655,67 @@ fn kb_pop(mem: &GuestMem) -> Option<u16> {
     Some(word)
 }
 
-/// Range un événement d'entrée dans le tampon clavier de la BDA.
-/// Provisoire : à l'étape 4, l'IRQ 1 et INT 09h s'en chargeront.
-/// Applique un événement : état des modificateurs, touche rangée.
-fn kb_event(mem: &GuestMem, ev: InputEvent) {
-    match ev {
-        InputEvent::Key(code) => {
-            let scan = code & 0x7F;
-            let make = code & 0x80 == 0;
-            let mut shift = mem.read_u8(bda::SHIFT);
-            if let Some(bit) = keyboard::modifier(scan) {
-                shift = if make { shift | bit } else { shift & !bit };
-            } else if scan == 0x3A && make {
-                shift ^= keyboard::CAPS;
-            } else if make && let Some(w) = keyboard::key_word(scan, shift) {
-                kb_push(mem, w);
-            }
-            mem.write_u8(bda::SHIFT, shift);
-        }
-        InputEvent::Text(c) => {
-            if let Some(w) = keyboard::char_word(c) {
-                kb_push(mem, w);
-            }
-        }
-        InputEvent::Mouse { .. } | InputEvent::Quit => {}
-    }
-}
-
-/// Range l'entrée en attente dans le tampon de la BDA. Le relâchement d'un
-/// modificateur attend aussi que la touche frappée avec lui ait été lue :
-/// AH=02h juste après la lecture voit l'état de la frappe (DFlat, Alt+F).
-fn kb_pump(mem: &GuestMem, host: &mut Host) {
-    // Une touche à la fois, comme sous des doigts : la suivante attend que
-    // la précédente ait été lue (les boucles d'événements, DFlat par
-    // exemple, ne mélangent ainsi pas l'ordre des raccourcis et du texte).
-    if kb_peek(mem).is_some() {
-        return;
-    }
-    while !host.quit {
-        match host.input.poll() {
-            Some(InputEvent::Quit) => host.quit = true,
-            Some(ev) => {
-                kb_event(mem, ev);
-                if kb_peek(mem).is_some() {
-                    break;
-                }
-            }
-            None => break,
-        }
-    }
-}
-
 /// Mot clavier vu par les fonctions « non étendues » (00h, 01h).
 fn classic(word: u16) -> u16 {
     if word as u8 == 0xE0 { word & 0xFF00 } else { word }
 }
 
-/// Retire la prochaine touche du tampon, en l'attendant au besoin.
-pub fn read_key(mem: &GuestMem, host: &mut Host) -> Result<u16> {
-    kb_pump(mem, host);
-    loop {
-        if let Some(w) = kb_pop(mem) {
-            return Ok(w);
+impl Bios {
+    /// Scancode reçu par l'INT 09h de la ROM (port E1h) : état des
+    /// modificateurs et mot clavier rangé dans le tampon de la BDA.
+    pub fn scancode(&mut self, mem: &GuestMem, code: u8) {
+        if code == 0xE0 {
+            self.e0 = true;
+            return;
         }
-        if host.quit {
-            host.stop = true;
-            return Err("attente d'une touche, fin de l'entrée".into());
+        let extended = std::mem::take(&mut self.e0);
+        let scan = code & 0x7F;
+        let make = code & 0x80 == 0;
+        // Maj « fictives » ajoutées par le clavier autour des touches étendues.
+        if extended && matches!(scan, 0x2A | 0x36) {
+            return;
         }
-        match host.input.wait() {
-            Some(InputEvent::Quit) => host.quit = true,
-            Some(ev) => kb_event(mem, ev),
-            None => return Err("attente d'une touche, plus aucune entrée".into()),
+        let mut shift = mem.read_u8(bda::SHIFT);
+        if let Some(bit) = keyboard::modifier(scan) {
+            shift = if make { shift | bit } else { shift & !bit };
+        } else if make {
+            match scan {
+                0x3A => shift ^= keyboard::CAPS,
+                0x45 => shift ^= 0x20,
+                0x46 => shift ^= 0x10,
+                _ => {
+                    if scan == 0x52 {
+                        shift ^= 0x80;
+                    }
+                    if let Some(mut w) = keyboard::key_word(scan, shift) {
+                        // Pavé gris (E0) : ASCII E0h, comme un BIOS de clavier MF2.
+                        if extended && (0x47..=0x53).contains(&scan) {
+                            w = (w & 0xFF00) | 0xE0;
+                        }
+                        kb_push(mem, w);
+                    }
+                }
+            }
         }
+        mem.write_u8(bda::SHIFT, shift);
     }
 }
 
-/// Délai laissé à un programme qui scrute le clavier après la fin de l'entrée.
-const QUIT_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
-
-/// Prochaine touche du tampon, sans la retirer ni attendre.
-pub fn peek_key(mem: &GuestMem, host: &mut Host) -> Option<u16> {
-    kb_pump(mem, host);
-    let key = kb_peek(mem);
-    if key.is_none() && host.quit {
-        let since = *host.drained_at.get_or_insert_with(std::time::Instant::now);
-        host.stop = since.elapsed() >= QUIT_GRACE;
-    }
-    key
-}
-
-fn int16(cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Flow> {
+fn int16(cpu: &mut Cpu, mem: &GuestMem) -> Flow {
     let ah = cpu.hi(AX);
     match ah {
-        0x00 | 0x10 => {
-            let word = read_key(mem, host).map_err(|e| format!("INT 16h : {e}"))?;
-            cpu.set_w(AX, if ah == 0 { classic(word) } else { word });
-        }
+        // Lecture bloquante : sans touche, l'appel est repris après HLT.
+        0x00 | 0x10 => match read_key(mem) {
+            Some(word) => cpu.set_w(AX, if ah == 0 { classic(word) } else { word }),
+            None => return Flow::Wait,
+        },
         0x01 | 0x11 => {
-            let word = peek_key(mem, host);
+            let word = peek_key(mem);
             if let Some(w) = word {
                 cpu.set_w(AX, if ah == 1 { classic(w) } else { w });
             }
             set_ret_flag(cpu, mem, ZF, word.is_none());
         }
-        // État des modificateurs, sans lire l'entrée : il reste celui de la
-        // dernière touche rangée.
         0x02 | 0x12 => {
             cpu.set_lo(AX, mem.read_u8(bda::SHIFT));
             if ah == 0x12 {
@@ -760,7 +728,7 @@ fn int16(cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Flow> {
             let full = !kb_push(mem, cpu.w(CX));
             cpu.set_lo(AX, u8::from(full));
         }
-        _ => return Ok(Flow::Unhandled(ah)),
+        _ => return Flow::Unhandled(ah),
     }
-    Ok(Flow::Continue)
+    Flow::Continue
 }

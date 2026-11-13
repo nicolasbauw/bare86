@@ -110,6 +110,10 @@ pub struct Dos {
     pending_scan: Option<u8>,
     /// Ligne saisie à la console pas encore lue par AH=3Fh.
     con_line: VecDeque<u8>,
+    /// Ligne en cours de saisie, entre deux reprises de l'appel.
+    line_edit: Option<Vec<u8>>,
+    /// AH=0Ch en attente : le tampon clavier a déjà été vidé.
+    flushed: bool,
 }
 
 impl Default for Dos {
@@ -135,6 +139,8 @@ impl Dos {
             next_search: 1,
             pending_scan: None,
             con_line: VecDeque::new(),
+            line_edit: None,
+            flushed: false,
         }
     }
 
@@ -348,31 +354,33 @@ impl Dos {
 
     // ---- Console ----
 
-    /// Lecture console sans écho : les touches étendues donnent 0 puis leur scancode.
-    fn con_in(&mut self, mem: &GuestMem, host: &mut Host) -> Result<u8> {
+    /// Lecture console sans écho : les touches étendues donnent 0 puis leur
+    /// scancode. `None` : aucune touche, l'appel attendra (`Flow::Wait`).
+    fn con_in(&mut self, mem: &GuestMem) -> Option<u8> {
         if let Some(scan) = self.pending_scan.take() {
-            return Ok(scan);
+            return Some(scan);
         }
-        let w = bios::read_key(mem, host).map_err(|e| format!("INT 21h : {e}"))?;
+        let w = bios::read_key(mem)?;
         let ascii = w as u8;
         if ascii == 0 || ascii == 0xE0 {
             self.pending_scan = Some((w >> 8) as u8);
-            return Ok(0);
+            return Some(0);
         }
-        Ok(ascii)
+        Some(ascii)
     }
 
-    fn key_ready(&self, mem: &GuestMem, host: &mut Host) -> bool {
-        self.pending_scan.is_some() || bios::peek_key(mem, host).is_some()
+    fn key_ready(&self, mem: &GuestMem) -> bool {
+        self.pending_scan.is_some() || bios::peek_key(mem).is_some()
     }
 
-    /// Saisie d'une ligne avec écho et retour arrière (AH=0Ah, 3Fh sur CON).
-    fn read_line(&mut self, mem: &GuestMem, host: &mut Host, max: usize) -> Result<Vec<u8>> {
-        let mut line = Vec::new();
-        loop {
-            let c = self.con_in(mem, host)?;
+    /// Saisie d'une ligne avec écho et retour arrière (AH=0Ah, 3Fh sur CON),
+    /// par morceaux : chaque reprise de l'appel consomme les touches arrivées.
+    /// `Some(ligne)` à la touche Entrée.
+    fn read_line(&mut self, mem: &GuestMem, host: &mut Host, max: usize) -> Option<Vec<u8>> {
+        let mut line = self.line_edit.take().unwrap_or_default();
+        while let Some(c) = self.con_in(mem) {
             match c {
-                b'\r' => return Ok(line),
+                b'\r' => return Some(line),
                 0x08 | 0x7F => {
                     if line.pop().is_some() {
                         con_out(mem, host, b"\x08 \x08");
@@ -387,6 +395,8 @@ impl Dos {
                 _ => con_out(mem, host, &[0x07]),
             }
         }
+        self.line_edit = Some(line);
+        None
     }
 
     // ---- Fichiers ----
@@ -441,10 +451,11 @@ impl Dos {
         }
     }
 
-    fn read_handle(&mut self, cpu: &Cpu, mem: &GuestMem, host: &mut Host) -> Result<std::result::Result<u16, u16>> {
+    /// AH=3Fh ; `None` : lecture de la console en attente d'une ligne.
+    fn read_handle(&mut self, cpu: &Cpu, mem: &GuestMem, host: &mut Host) -> Option<std::result::Result<u16, u16>> {
         let idx = match self.psp_handle(mem, cpu.w(BX)) {
             Ok(i) => i,
-            Err(e) => return Ok(Err(e)),
+            Err(e) => return Some(Err(e)),
         };
         let at = lin(cpu.sreg(DS), cpu.w(DX));
         let want = usize::from(cpu.w(CX));
@@ -458,13 +469,13 @@ impl Dos {
             let n = want.min(self.con_line.len());
             let bytes: Vec<u8> = self.con_line.drain(..n).collect();
             mem.write(at, &bytes);
-            return Ok(Ok(n as u16));
+            return Some(Ok(n as u16));
         }
-        let Some(e) = self.sft.get(idx) else { return Ok(Err(handles::ERR_BAD_HANDLE)) };
+        let Some(e) = self.sft.get(idx) else { return Some(Err(handles::ERR_BAD_HANDLE)) };
         if e.mode & 3 == 1 {
-            return Ok(Err(fs::ERR_ACCESS_DENIED));
+            return Some(Err(fs::ERR_ACCESS_DENIED));
         }
-        Ok(match &mut e.kind {
+        Some(match &mut e.kind {
             Kind::File(f) => {
                 let mut buf = vec![0u8; want];
                 let mut n = 0;
@@ -472,7 +483,7 @@ impl Dos {
                     match f.file.read(&mut buf[n..]) {
                         Ok(0) => break,
                         Ok(k) => n += k,
-                        Err(e) => return Ok(Err(io_err(&e))),
+                        Err(e) => return Some(Err(io_err(&e))),
                     }
                 }
                 mem.write(at, &buf[..n]);
@@ -534,12 +545,12 @@ impl Dos {
         Ok(())
     }
 
-    fn ioctl(&mut self, cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> std::result::Result<(), u16> {
+    fn ioctl(&mut self, cpu: &mut Cpu, mem: &GuestMem) -> std::result::Result<(), u16> {
         let al = cpu.lo(AX);
         match al {
             0x00 | 0x01 | 0x06 | 0x07 => {
                 let idx = self.psp_handle(mem, cpu.w(BX))?;
-                let con_ready = !self.con_line.is_empty() || self.key_ready(mem, host);
+                let con_ready = !self.con_line.is_empty() || self.key_ready(mem);
                 let current = self.drives.current;
                 let e = self.sft.get(idx).ok_or(handles::ERR_BAD_HANDLE)?;
                 let info = match &e.kind {
@@ -676,21 +687,23 @@ impl Dos {
         let dx = cpu.w(DX);
         Ok(match ah {
             0x00 => self.terminate(cpu, mem, 0, 0),
-            0x01 => {
-                let c = self.con_in(mem, host)?;
-                con_out(mem, host, &[c]);
-                cpu.set_lo(AX, c);
-                Out::Keep
-            }
+            0x01 => match self.con_in(mem) {
+                Some(c) => {
+                    con_out(mem, host, &[c]);
+                    cpu.set_lo(AX, c);
+                    Out::Keep
+                }
+                None => Out::Flow(Flow::Wait),
+            },
             0x02 => {
                 con_out(mem, host, &[cpu.lo(DX)]);
                 Out::Keep
             }
             // E/S console directes : DL = FFh lit sans attendre (ZF = 1 si rien).
             0x06 if cpu.lo(DX) == 0xFF => {
-                let ready = self.key_ready(mem, host);
-                let c = if ready { self.con_in(mem, host)? } else { 0 };
-                cpu.set_lo(AX, c);
+                let c = self.con_in(mem);
+                let ready = c.is_some();
+                cpu.set_lo(AX, c.unwrap_or(0));
                 set_ret_flag(cpu, mem, crate::hle::ZF, !ready);
                 Out::Keep
             }
@@ -698,11 +711,13 @@ impl Dos {
                 con_out(mem, host, &[cpu.lo(DX)]);
                 Out::Keep
             }
-            0x07 | 0x08 => {
-                let c = self.con_in(mem, host)?;
-                cpu.set_lo(AX, c);
-                Out::Keep
-            }
+            0x07 | 0x08 => match self.con_in(mem) {
+                Some(c) => {
+                    cpu.set_lo(AX, c);
+                    Out::Keep
+                }
+                None => Out::Flow(Flow::Wait),
+            },
             0x09 => {
                 let mut s = Vec::new();
                 let mut off = dx;
@@ -722,7 +737,7 @@ impl Dos {
                 let at = lin(ds, dx);
                 let max = usize::from(mem.read_u8(at));
                 if max > 0 {
-                    let line = self.read_line(mem, host, max)?;
+                    let Some(line) = self.read_line(mem, host, max) else { return Ok(Out::Flow(Flow::Wait)) };
                     con_out(mem, host, b"\r");
                     mem.write_u8(at + 1, line.len() as u8);
                     mem.write(at + 2, &line);
@@ -731,21 +746,25 @@ impl Dos {
                 Out::Keep
             }
             0x0B => {
-                let ready = self.key_ready(mem, host);
+                let ready = self.key_ready(mem);
                 cpu.set_lo(AX, if ready { 0xFF } else { 0 });
                 Out::Keep
             }
             // Vide le tampon clavier puis appelle la fonction AL.
+            // Reprise après attente : le tampon a déjà été vidé.
             0x0C => {
-                self.pending_scan = None;
-                while bios::peek_key(mem, host).is_some() {
-                    bios::read_key(mem, host)?;
+                if !self.flushed {
+                    self.pending_scan = None;
+                    while bios::read_key(mem).is_some() {}
                 }
-                if matches!(al, 0x01 | 0x06 | 0x07 | 0x08 | 0x0A) {
+                let out = if matches!(al, 0x01 | 0x06 | 0x07 | 0x08 | 0x0A) {
                     cpu.set_hi(AX, al);
-                    return self.int21(cpu, mem, host);
-                }
-                Out::Keep
+                    self.int21(cpu, mem, host)?
+                } else {
+                    Out::Keep
+                };
+                self.flushed = matches!(out, Out::Flow(Flow::Wait));
+                out
             }
             0x0D => Out::Keep,
             0x0E => {
@@ -898,10 +917,10 @@ impl Dos {
                 Self::ax_result(cpu, r)
             }
             0x3E => Out::from(self.close(mem, cpu.w(BX))),
-            0x3F => {
-                let r = self.read_handle(cpu, mem, host)?;
-                Self::ax_result(cpu, r)
-            }
+            0x3F => match self.read_handle(cpu, mem, host) {
+                Some(r) => Self::ax_result(cpu, r),
+                None => Out::Flow(Flow::Wait),
+            },
             0x40 => {
                 let r = self.write_handle(cpu, mem, host);
                 Self::ax_result(cpu, r)
@@ -937,7 +956,7 @@ impl Dos {
                     Err(e) => Out::Err(e),
                 }
             }
-            0x44 => Out::from(self.ioctl(cpu, mem, host)),
+            0x44 => Out::from(self.ioctl(cpu, mem)),
             0x45 => {
                 let r = self.psp_handle(mem, cpu.w(BX)).and_then(|idx| {
                     let h = handles::assign(mem, self.current_psp, idx).ok_or(handles::ERR_TOO_MANY)?;

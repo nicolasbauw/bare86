@@ -56,13 +56,6 @@ pub struct Host {
     pub text: Box<dyn TextSink>,
     /// Fin de session demandée (`InputEvent::Quit` reçu).
     pub quit: bool,
-    /// Fin de session effective : après `quit`, le programme a redemandé
-    /// une touche alors que tout ce qui avait été tapé était lu.
-    pub stop: bool,
-    /// Premier constat d'un tampon vide après `quit` : un programme qui
-    /// scrute le clavier garde un délai de grâce pour traiter les dernières
-    /// touches (boucles d'événements qui les traitent au tour suivant).
-    pub drained_at: Option<std::time::Instant>,
 }
 
 /// Dernière image conservée, pour les captures des tests.
@@ -98,9 +91,10 @@ impl AudioSink for NullAudio {
 #[derive(Default)]
 pub struct ScriptedInput(pub VecDeque<InputEvent>);
 
+/// Script épuisé : fin de session.
 impl InputSource for ScriptedInput {
     fn poll(&mut self) -> Option<InputEvent> {
-        self.0.pop_front()
+        Some(self.0.pop_front().unwrap_or(InputEvent::Quit))
     }
 }
 
@@ -205,8 +199,6 @@ impl Host {
             input: Box::new(ScriptedInput::default()),
             text,
             quit: false,
-            stop: false,
-            drained_at: None,
         }
     }
 }

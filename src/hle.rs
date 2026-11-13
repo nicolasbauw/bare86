@@ -10,6 +10,9 @@ pub enum Flow {
     Exit(u8),
     /// Service non géré : AH du service.
     Unhandled(u8),
+    /// En attente d'une touche : l'appel sera repris tel quel après un HLT
+    /// (registres d'entrée rétablis), pour laisser passer l'IRQ 1.
+    Wait,
 }
 
 /// Registres généraux, dans l'ordre de `Cpu::gpr`.

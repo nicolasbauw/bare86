@@ -96,6 +96,26 @@ pub fn char_word(c: u8) -> Option<u16> {
     None
 }
 
+/// Scancodes (appui, relâchement) d'un caractère tapé au terminal, avec Maj
+/// ou Ctrl autour si le caractère l'exige.
+pub fn text_scancodes(c: u8) -> Vec<u8> {
+    let Some(w) = char_word(c) else { return Vec::new() };
+    let scan = (w >> 8) as u8;
+    let ascii = w as u8;
+    let modifier = if ascii != 0 && NORMAL.get(usize::from(scan)) != Some(&ascii) && SHIFT.get(usize::from(scan)) == Some(&ascii) {
+        Some(0x2A)
+    } else if (1..=26).contains(&ascii) && !matches!(ascii, 0x08 | 0x09 | 0x0D) {
+        Some(0x1D)
+    } else {
+        None
+    };
+    let mut v = Vec::new();
+    v.extend(modifier);
+    v.extend([scan, scan | 0x80]);
+    v.extend(modifier.map(|m| m | 0x80));
+    v
+}
+
 /// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
 /// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
 /// `{ctrl+c}`…), `{{` pour une accolade. Une fin de session suit le script.
@@ -192,5 +212,14 @@ mod tests {
         let ev = parse_script("a{alt+f}{{{enter}").unwrap();
         assert_eq!(ev, [Text(b'a'), Key(0x38), Key(0x21), Key(0xA1), Key(0xB8), Text(b'{'), Key(0x1C), Key(0x9C), Quit]);
         assert!(parse_script("{nope}").is_err());
+    }
+
+    #[test]
+    fn text_to_scancodes() {
+        assert_eq!(text_scancodes(b'a'), [0x1E, 0x9E]);
+        assert_eq!(text_scancodes(b'A'), [0x2A, 0x1E, 0x9E, 0xAA]);
+        assert_eq!(text_scancodes(b'\n'), [0x1C, 0x9C]);
+        assert_eq!(text_scancodes(3), [0x1D, 0x2E, 0xAE, 0x9D]);
+        assert_eq!(text_scancodes(b'*'), [0x37, 0xB7]);
     }
 }
