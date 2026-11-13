@@ -72,8 +72,8 @@ usage: bare86 [options] [program [arguments…]]
                  access (to measure what the interpreter brings)
   --limit S      stop after S seconds, with registers and code at CS:IP
   window keys:   Alt+Enter full screen, Ctrl+F5 screenshot,
-                 Ctrl+F11/F12 slower/faster, Ctrl+F10 or middle button
-                 releases the mouse
+                 Ctrl+F11 slower, Ctrl+Shift+F11 (or Ctrl+F12) faster,
+                 Ctrl+F10 or middle button releases the mouse
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…

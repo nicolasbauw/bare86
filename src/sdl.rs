@@ -284,8 +284,11 @@ where
                     match sc {
                         Scancode::F10 => set_capture(&mut canvas, false, &mut captured, speed),
                         Scancode::F5 if !repeat => screenshot(&frame),
+                        // Ctrl+F11 : plus lent ; Ctrl+Maj+F11 (ou Ctrl+F12, souvent pris
+                        // par le bureau, KDE par exemple) : plus vite.
                         Scancode::F11 | Scancode::F12 => {
-                            speed = step_speed(speed, sc == Scancode::F12);
+                            let shift = keymod.intersects(sdl3::keyboard::Mod::LSHIFTMOD | sdl3::keyboard::Mod::RSHIFTMOD);
+                            speed = step_speed(speed, sc == Scancode::F12 || shift);
                             let _ = tx.send(InputEvent::Speed(speed));
                             set_title(&mut canvas, captured, speed);
                         }
