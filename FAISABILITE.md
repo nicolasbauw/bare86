@@ -456,7 +456,11 @@ Avancement :
   - **Optimisation notée** : servir les lectures de la souris (03h, 0Bh) en ROM, à partir d'une zone en mémoire invitée tenue à jour par l'hôte.
 - **Reste dans le menu de Wolfenstein** : la navigation scriptée ne parvient pas encore de façon fiable jusqu'à « New Game » (position par défaut du curseur à éclaircir, dans la fenêtre plutôt qu'au script).
 - **Outils ajoutés** : `--stats` (compteurs en fin d'exécution) et `--limit S` (arrêt au bout de S secondes, avec registres et code à CS:IP), utiles pour diagnostiquer une boucle sans appel.
-- **Reste pour le critère** : un jeu en mode 13h chaîné (Wolfenstein utilise le non chaîné), le son du haut-parleur, le shell dans la fenêtre, et un essai interactif dans la fenêtre par le propriétaire du projet.
+- **Son et shell dans la fenêtre (commits 428fd4e et suivant).**
+  - Haut-parleur : le vCPU publie la fréquence (`Pit::speaker`) dans une variable atomique ; le thread de la fenêtre génère l'onde carrée (48 kHz, environ 40 ms d'avance) dans un flux audio SDL. Le son numérisé par modulation de largeur d'impulsion n'est pas rendu.
+  - Le shell interne s'affiche maintenant en fenêtre : sa lecture de ligne rafraîchit l'affichage avant chaque attente.
+  - Vérifié sans écran, avec les pilotes SDL `offscreen` et `dummy`.
+- **Reste pour le critère** : un jeu en mode 13h chaîné (Wolfenstein utilise le non chaîné), et un essai interactif dans la fenêtre par le propriétaire du projet (image, son, clavier, vitesse ressentie). Commande : `target/release/dosbox --window --mount ~/Dev/dos-progs/wolf3d/c/WOLF3D ~/Dev/dos-progs/wolf3d/c/WOLF3D/WOLF3D.EXE`, ou `--window` seul pour le shell.
 
 Question ouverte (au propriétaire du projet) : police 8×16 du mode texte, sans copie de la ROM IBM. Candidates : Unifont (OFL ou GPL avec exception de police), Spleen (BSD-2, couverture semi-graphique à vérifier), Terminus (OFL).
 
