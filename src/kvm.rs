@@ -141,14 +141,23 @@ impl Backend for KvmVm {
         })
     }
 
-    fn complete_pending(&mut self) -> Result<()> {
+    fn complete_pending(&mut self, mmio: &mut dyn FnMut(u64, &mut [u8], bool)) -> Result<()> {
         self.vcpu.set_kvm_immediate_exit(1);
-        let r = self.vcpu.run().map(|_| ());
+        let r = loop {
+            match self.vcpu.run() {
+                Ok(VcpuExit::MmioRead(addr, data)) => mmio(addr, data, false),
+                Ok(VcpuExit::MmioWrite(addr, data)) => {
+                    let mut d = data.to_vec();
+                    mmio(addr, &mut d, true);
+                }
+                // Instruction terminée : KVM rend la main sans relancer l'invité.
+                Err(e) if e.errno() == libc::EINTR => break Ok(()),
+                Ok(other) => break Err(format!("fin d'instruction : sortie inattendue {other:?}").into()),
+                Err(e) => break Err(e.into()),
+            }
+        };
         self.vcpu.set_kvm_immediate_exit(0);
-        match r {
-            Err(e) if e.errno() != libc::EINTR => Err(e.into()),
-            _ => Ok(()),
-        }
+        r
     }
 
     fn state(&self) -> Result<Cpu> {
@@ -185,6 +194,13 @@ impl Backend for KvmVm {
             return Err(std::io::Error::last_os_error().into());
         }
         Ok(())
+    }
+
+    fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()> {
+        match host_addr {
+            Some(a) => self.map_vga_window_raw(a),
+            None => self.map_vga_window(None),
+        }
     }
 
     fn request_irq_window(&mut self, on: bool) {

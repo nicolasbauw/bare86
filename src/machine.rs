@@ -31,6 +31,7 @@ use crate::pic::{Pic, PicPorts};
 use crate::pit::{Pit, PitPorts};
 use crate::throttle::Throttle;
 use crate::timer::Heartbeat;
+use crate::vga::{Access, Vga, VgaPorts};
 
 /// Attente maximale sur HLT sans échéance de minuterie (entrées à relire).
 const HALT_MAX: Duration = Duration::from_millis(10);
@@ -78,12 +79,12 @@ impl Default for Config {
     }
 }
 
-/// Fenêtre VGA provisoire : 64 Ko linéaires, en attendant l'étape 5.
-pub struct VgaWindow(Vec<u8>);
-
-/// Accès MMIO vus par l'interpréteur : fenêtre VGA, écritures en ROM.
+/// Accès MMIO vus par l'interpréteur : fenêtre VGA (logique des plans),
+/// écritures en ROM (ignorées).
 struct MmioBus<'a> {
-    vga: &'a mut VgaWindow,
+    vga: &'a mut Vga,
+    accesses: u64,
+    reads: u64,
 }
 
 impl Mmio for MmioBus<'_> {
@@ -92,14 +93,39 @@ impl Mmio for MmioBus<'_> {
         VGA_WINDOW.contains(&a) || (write && ROM.contains(&a))
     }
     fn read8(&mut self, addr: u32) -> u8 {
-        self.vga.0[addr as usize - VGA_WINDOW.start]
+        self.accesses += 1;
+        self.reads += 1;
+        self.vga.read(addr as usize - VGA_WINDOW.start)
     }
     fn write8(&mut self, addr: u32, v: u8) {
         if VGA_WINDOW.contains(&(addr as usize)) {
-            self.vga.0[addr as usize - VGA_WINDOW.start] = v;
+            self.accesses += 1;
+            self.vga.write(addr as usize - VGA_WINDOW.start, v);
         }
     }
 }
+
+/// Suivi du mappage de la fenêtre A0000 (FAISABILITE, « décision sur la
+/// mémoire vidéo ») : linéaire tout de suite, plan unique après
+/// `MAP_THRESHOLD` accès émulés sans changement de configuration ;
+/// retour à l'émulation pour `COOLDOWN` si la configuration change trop
+/// souvent (un plan par pixel : les remappages coûteraient plus cher).
+#[derive(Default)]
+struct WindowState {
+    mapped: bool,
+    epoch: u64,
+    emulated_in_epoch: u64,
+    /// Lectures émulées dans cette configuration (plan de lecture ≠ plan écrit).
+    reads_in_epoch: u64,
+    rate_start: Option<Instant>,
+    changes_in_rate: u32,
+    cooldown_until: Option<Instant>,
+}
+
+const MAP_THRESHOLD: u64 = 600;
+const RATE_PERIOD: Duration = Duration::from_millis(100);
+const MAX_CHANGES_PER_PERIOD: u32 = 200;
+const COOLDOWN: Duration = Duration::from_millis(500);
 
 #[derive(Default, Debug)]
 pub struct Stats {
@@ -108,6 +134,11 @@ pub struct Stats {
     pub interpreted: u64,
     pub host_calls: u64,
     pub irqs: u64,
+    /// Accès à la VRAM passés par la logique des plans (MMIO, interpréteur).
+    pub vram_emulated: u64,
+    /// Mappages et démappages de la fenêtre A0000.
+    pub vram_maps: u64,
+    pub vram_unmaps: u64,
 }
 
 pub enum Event {
@@ -124,7 +155,8 @@ pub struct Pc<B: Backend = KvmVm> {
     pub stats: Stats,
     bios: Bios,
     dos: dos::Dos,
-    vga: VgaWindow,
+    vga: Rc<RefCell<Vga>>,
+    window: WindowState,
     throttle: Option<Throttle>,
     pic: Rc<RefCell<Pic>>,
     pit: Rc<RefCell<Pit>>,
@@ -167,7 +199,8 @@ impl Pc<KvmVm> {
 
 impl<B: Backend> Pc<B> {
     pub fn with_backend(vm: B, cfg: &Config, host: Host) -> Result<Self> {
-        let mut bios = Bios::new(cfg.extended_kb);
+        let vga = Rc::new(RefCell::new(Vga::new()?));
+        let mut bios = Bios::new(cfg.extended_kb, vga.clone());
         bios.install(vm.mem());
         let mut dos = dos::Dos::new();
         dos.boot(vm.mem());
@@ -184,9 +217,8 @@ impl<B: Backend> Pc<B> {
         io.map(0x61..=0x61, Box::new(PitPorts(pit.clone())));
         let heartbeat = Heartbeat::new(heartbeat_period(pit.borrow().irq0_period()))?;
         io.map(0x70..=0x71, Box::new(crate::rtc::Rtc::new(cfg.extended_kb)));
-        let vga = Rc::new(RefCell::new(crate::vga::VgaPorts::new()));
-        io.map(0x3B4..=0x3BA, Box::new(crate::io::Shared(vga.clone())));
-        io.map(0x3D4..=0x3DA, Box::new(crate::io::Shared(vga)));
+        io.map(0x3B4..=0x3BA, Box::new(VgaPorts(vga.clone())));
+        io.map(0x3C0..=0x3DF, Box::new(VgaPorts(vga.clone())));
         let kbc = Kbc::new().shared();
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));
@@ -197,7 +229,8 @@ impl<B: Backend> Pc<B> {
             stats: Stats::default(),
             bios,
             dos,
-            vga: VgaWindow(vec![0; VGA_WINDOW.len()]),
+            vga,
+            window: WindowState::default(),
             throttle,
             pic,
             pit,
@@ -276,6 +309,54 @@ impl<B: Backend> Pc<B> {
         self.stepping = on;
         self.vm.request_irq_window(false);
         self.vm.set_single_step(on)
+    }
+
+    /// Mappe, remappe ou démappe la fenêtre A0000 selon la configuration VGA.
+    fn update_window(&mut self) -> Result<()> {
+        let mut vga = self.vga.borrow_mut();
+        let now = Instant::now();
+        let w = &mut self.window;
+        if vga.epoch != w.epoch {
+            w.epoch = vga.epoch;
+            w.emulated_in_epoch = 0;
+            w.reads_in_epoch = 0;
+            if w.rate_start.is_none_or(|t| now.duration_since(t) >= RATE_PERIOD) {
+                w.rate_start = Some(now);
+                w.changes_in_rate = 0;
+            }
+            w.changes_in_rate += 1;
+            if w.changes_in_rate > MAX_CHANGES_PER_PERIOD {
+                w.cooldown_until = Some(now + COOLDOWN);
+            }
+        }
+        let cooling = w.cooldown_until.is_some_and(|t| now < t);
+        let access = vga.access();
+        let want = match access {
+            Access::Emulated => None,
+            _ if cooling => None,
+            Access::Linear => Some(access),
+            // Lectures vues alors qu'elles viseraient un autre plan que celui mappé.
+            Access::Plane(p) if p != vga.read_plane() && w.reads_in_epoch > 0 => None,
+            Access::Plane(_) if w.mapped || w.emulated_in_epoch >= MAP_THRESHOLD => Some(access),
+            Access::Plane(_) => None,
+        };
+        match want {
+            Some(a) => {
+                vga.point_window(a)?;
+                if !w.mapped {
+                    self.vm.map_vga(Some(vga.window_host_addr()))?;
+                    w.mapped = true;
+                    self.stats.vram_maps += 1;
+                }
+            }
+            None if w.mapped => {
+                self.vm.map_vga(None)?;
+                w.mapped = false;
+                self.stats.vram_unmaps += 1;
+            }
+            None => {}
+        }
+        Ok(())
     }
 
     /// Minuterie : IRQ 0 échue, cadence du battement.
@@ -396,6 +477,7 @@ impl<B: Backend> Pc<B> {
     pub fn resume(&mut self) -> Result<Event> {
         loop {
             self.service_timers()?;
+            self.update_window()?;
             self.service_input();
             self.render_term(false);
             if self.input_finished() {
@@ -414,18 +496,26 @@ impl<B: Backend> Pc<B> {
                 Exit::IoOut { port, data } => self.io.write(port, data),
                 Exit::IoIn { port, data } => self.io.read(port, data),
                 Exit::MmioRead { addr, data } => {
-                    let mut bus = MmioBus { vga: &mut self.vga };
+                    let mut vga = self.vga.borrow_mut();
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };
                     for (i, b) in data.iter_mut().enumerate() {
                         let a = addr as u32 + i as u32;
                         *b = if bus.claims(a, false) { bus.read8(a) } else { 0xFF };
                     }
+                    self.window.emulated_in_epoch += bus.accesses;
+                    self.window.reads_in_epoch += bus.reads;
+                    self.stats.vram_emulated += bus.accesses;
                     mmio = true;
                 }
                 Exit::MmioWrite { addr, data } => {
-                    let mut bus = MmioBus { vga: &mut self.vga };
+                    let mut vga = self.vga.borrow_mut();
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };
                     for (i, &b) in data.iter().enumerate() {
                         bus.write8(addr as u32 + i as u32, b);
                     }
+                    self.window.emulated_in_epoch += bus.accesses;
+                    self.window.reads_in_epoch += bus.reads;
+                    self.stats.vram_emulated += bus.accesses;
                     // Écriture en ROM : ignorée, pas de rafale.
                     mmio = VGA_WINDOW.contains(&(addr as usize));
                 }
@@ -442,8 +532,12 @@ impl<B: Backend> Pc<B> {
             }
             if mmio {
                 self.stats.mmio_exits += 1;
-                let mut bus = MmioBus { vga: &mut self.vga };
+                let mut vga = self.vga.borrow_mut();
+                let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };
                 let burst = interp::continue_in_host(&mut self.vm, &mut bus, IDLE_LIMIT, BURST_BUDGET)?;
+                self.window.emulated_in_epoch += bus.accesses;
+                self.window.reads_in_epoch += bus.reads;
+                self.stats.vram_emulated += bus.accesses;
                 self.stats.interpreted += burst.instructions;
                 if let Some(t) = &mut self.throttle {
                     t.credit(burst.instructions);
@@ -534,9 +628,16 @@ impl<B: Backend> Pc<B> {
         bios::screen_text(self.vm.mem())
     }
 
+    /// Octet de la fenêtre graphique : tampon linéaire en chain4, plan 0 sinon (tests).
     #[cfg(test)]
     pub fn vga_byte(&self, off: usize) -> u8 {
-        self.vga.0[off]
+        let v = self.vga.borrow();
+        if v.chain4() { v.linear_byte(off) } else { v.plane_byte(0, off) }
+    }
+
+    #[cfg(test)]
+    pub fn vga(&self) -> std::cell::Ref<'_, Vga> {
+        self.vga.borrow()
     }
 }
 

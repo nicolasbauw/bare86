@@ -272,4 +272,26 @@ fn mouse_and_cmos() {
     assert!(pc.unhandled().is_empty(), "{:?}", pc.unhandled());
 }
 
+/// Fenêtre A0000 : mappage direct quand la VGA se comporte comme de la RAM,
+/// logique des plans émulée sinon (FAISABILITE, « décision sur la mémoire vidéo »).
+#[test]
+fn vram_mapping_strategy() {
+    let (code, _, pc) = run(program!("vram"));
+    assert_eq!(code, 0);
+    let v = pc.vga();
+    // Mode 13h écrit nativement, puis réparti dans les plans au passage en mode X.
+    assert_eq!(v.plane_byte(3, 0x8000 + 600 * 4), 0x21);
+    // Plans 1 et 2 écrits ; copie par les latches de 0 vers 8000h. Le contenu
+    // du mode 13h n'occupe que les décalages multiples de 4 de chaque plan.
+    assert_eq!((v.plane_byte(1, 15999), v.plane_byte(2, 15999)), (0x55, 0x66));
+    assert_eq!([0, 1, 2, 3].map(|p| v.plane_byte(p, 0x8000 + 96)), [0x21, 0x55, 0x66, 0x21]);
+    assert_eq!([0, 1, 2, 3].map(|p| v.plane_byte(p, 0x8000 + 99)), [0x00, 0x55, 0x66, 0x00]);
+    // Premier octet de la copie : MOVS à deux accès MMIO (lecture puis écriture).
+    assert_eq!([0, 1, 2, 3].map(|p| v.plane_byte(p, 0x8000)), [0x21, 0x55, 0x66, 0x21]);
+    let s = &pc.stats;
+    // Émulés : le premier plan (16 000, avant le seuil) et la copie (2 × 100).
+    assert!(s.vram_emulated >= 16_200 && s.vram_emulated < 17_000, "{s:?}");
+    assert!(s.vram_maps >= 2 && s.vram_unmaps >= 1, "{s:?}");
+}
+
 use crate::backend::Backend;

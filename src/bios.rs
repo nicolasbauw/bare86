@@ -104,11 +104,12 @@ pub struct Bios {
     /// Modes vidéo graphiques déjà signalés.
     warned_modes: BTreeSet<u8>,
     pub mouse: crate::mouse::Mouse,
+    vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>,
 }
 
 impl Bios {
-    pub fn new(extended_kb: usize) -> Self {
-        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new() }
+    pub fn new(extended_kb: usize, vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>) -> Self {
+        Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vga }
     }
 
     /// ROM, IVT, BDA, écran texte effacé.
@@ -167,9 +168,10 @@ impl Bios {
             _ => return Flow::Unhandled(0x00),
         };
         let text = is_text(mode);
-        if !text && self.warned_modes.insert(mode) {
-            eprintln!("[bios] mode vidéo {mode:02X}h : affichage à l'étape 5");
+        if !text && !matches!(mode, 0x0D | 0x0E | 0x10 | 0x12 | 0x13) && self.warned_modes.insert(mode) {
+            eprintln!("[bios] mode vidéo {mode:02X}h : registres VGA non programmés");
         }
+        self.vga.borrow_mut().set_mode(mode, al & 0x80 == 0);
         mem.write_u8(bda::VIDEO_MODE, mode);
         mem.write_u16(bda::COLS, cols);
         mem.write_u8(bda::ROWS, rows - 1);

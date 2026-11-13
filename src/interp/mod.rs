@@ -260,7 +260,16 @@ pub fn continue_in_host<B: Backend, M: Mmio>(
     idle_limit: u64,
     budget: u64,
 ) -> crate::backend::Result<Burst> {
-    vm.complete_pending()?;
+    vm.complete_pending(&mut |addr, data, write| {
+        for (i, b) in data.iter_mut().enumerate() {
+            let a = addr as u32 + i as u32;
+            if write {
+                mmio.write8(a, *b);
+            } else {
+                *b = if mmio.claims(a, false) { mmio.read8(a) } else { 0xFF };
+            }
+        }
+    })?;
     let mut cpu = vm.state()?;
     let burst = run_burst(&mut cpu, vm.mem(), mmio, idle_limit, budget);
     vm.set_state(&cpu)?;

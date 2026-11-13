@@ -67,8 +67,11 @@ pub trait Backend {
     fn mem(&self) -> &GuestMem;
     /// Exécute l'invité jusqu'à la prochaine sortie.
     fn run(&mut self) -> Result<Exit<'_>>;
-    /// Termine l'accès E/S ou MMIO en cours sans relancer l'invité.
-    fn complete_pending(&mut self) -> Result<()>;
+    /// Termine l'instruction en cours (accès E/S ou MMIO déjà servi) sans
+    /// relancer l'invité. Une instruction à deux accès MMIO (MOVS de la VRAM
+    /// vers la VRAM) en produit un second, servi par `mmio(adresse,
+    /// données, écriture)`.
+    fn complete_pending(&mut self, mmio: &mut dyn FnMut(u64, &mut [u8], bool)) -> Result<()>;
     fn state(&self) -> Result<Cpu>;
     fn set_state(&mut self, cpu: &Cpu) -> Result<()>;
     /// Pas à pas : chaque `run` s'arrête après une instruction (`Exit::Step`).
@@ -80,4 +83,8 @@ pub trait Backend {
     fn inject(&mut self, vector: u8) -> Result<()>;
     /// Demande une sortie dès que l'invité pourra recevoir une interruption.
     fn request_irq_window(&mut self, on: bool);
+    /// Mappe la fenêtre VGA A0000–AFFFF sur 64 Ko de mémoire hôte (accès
+    /// natifs), ou la démappe (`None` : accès MMIO). L'adresse est toujours
+    /// la même : la vue hôte est remappée par la carte VGA elle-même.
+    fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()>;
 }
