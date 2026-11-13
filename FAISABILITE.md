@@ -500,6 +500,14 @@ Avancement :
 
 **Critère de l'étape 6 tenu** (Doom tourne, ainsi que Quake, Dune avec EMS, DOS/4GW, DOS/32A, PMODE/W, CWSDPMI). Reste hors critère : relier les UMB à la chaîne de MCB du DOS (`DOS=UMB`, `LOADHIGH`), un hôte DPMI en HLE seulement si un programme l'exige.
 
+### Étape 7 : Sound Blaster 16, en cours (2026-11-13)
+
+- **DMA 8237** (`src/dma.rs`) : canaux 0–3 et 4–7, pages, auto-init, sens décroissant, fin de comptage ; transferts tirés par le périphérique au fil du rendu.
+- **DSP SB16 4.05** (`src/sb16.rs`) en 220h, IRQ 5, DMA 1 et 5 : réinitialisation, version, sortie directe, DMA 8 et 16 bits (cycle unique, auto-init, haute vitesse), taux (40h, 41h), pause et reprise, silence (80h), IRQ forcées (F2h, F3h), mixeur (état des IRQ en 82h, volumes maître et voix). Rééchantillonnage linéaire vers 48 kHz.
+- **Mixeur** (`src/audio.rs`) sur le thread du vCPU : trames dues d'après l'horloge hôte, haut-parleur PC compris ; sortie vers une file que la fenêtre verse dans le flux SDL (coussin de 40 ms reconstitué si le flux se vide), ou fichier WAV (`--wav F.wav`, sans fenêtre). Variable `BLASTER=A220 I5 D1 H5 T6` dans l'environnement.
+- **Doom** (`snd_sfxdevice 3` dans `DEFAULT.CFG`) : les effets numérisés de la démo sont rendus (WAV analysé : silence puis tirs et bruitages dès le début de la démo, crêtes ≈ 12 000, sans écrêtage).
+- **OPL3 : en attente.** Choix proposé : Nuked-OPL3 (LGPL-2.1+, émulation de référence), copié dans `third_party/nuked-opl3` et compilé par `build.rs` (crate `cc`) ; sa compilation demande l'accord du propriétaire du projet.
+
 ## Questions ouvertes
 
 - ~~DOS réimplémenté côté hôte ou vrai noyau FreeDOS dans la VM ?~~ Tranché : voir [Choix du DOS](#choix-du-dos).
