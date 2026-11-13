@@ -250,7 +250,7 @@ impl<B: Mmio> Exec<'_, B> {
     /// protégé, présence et droits d'accès du descripteur en cache.
     fn lin(&self, seg: R, off: u32, size: u32, write: bool) -> X<u32> {
         let s = self.cpu.seg[seg_idx(seg)];
-        if self.cpu.protected() {
+        if self.cpu.pm() {
             let code = s.typ & 8 != 0;
             let ok = s.present
                 && !s.unusable
@@ -416,7 +416,18 @@ impl<B: Mmio> Exec<'_, B> {
     pub fn step(&mut self, ins: &Instruction) -> X {
         let next = if self.cpu.code32() { ins.next_ip() as u32 } else { ins.next_ip() as u32 & 0xFFFF };
         let mn = ins.mnemonic();
-        if self.cpu.protected() && !self.protected_mode_ok(ins) {
+        if self.cpu.pm() && !self.protected_mode_ok(ins) {
+            return Err(Bail);
+        }
+        // V86 : INT passe par l'IDT du superviseur ; CLI, STI, PUSHF, POPF et
+        // IRET sont sensibles à IOPL (le superviseur les intercepte, ou ne
+        // laisse pas changer IOPL) : tous laissés au processeur.
+        if self.cpu.v86()
+            && matches!(
+                mn,
+                Mn::Int | Mn::Int3 | Mn::Into | Mn::Iret | Mn::Iretd | Mn::Cli | Mn::Sti | Mn::Pushf | Mn::Pushfd | Mn::Popf | Mn::Popfd
+            )
+        {
             return Err(Bail);
         }
         let size = match ins.op_kind(0) {

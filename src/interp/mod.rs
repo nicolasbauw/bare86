@@ -145,14 +145,31 @@ impl Cpu {
         self.cr0 & 1 != 0
     }
 
-    /// Code 32 bits (CS.D en mode protégé).
-    pub fn code32(&self) -> bool {
-        self.protected() && self.seg[1].db
+    /// Mode virtuel 8086 (EFLAGS.VM) : adressage du mode réel, CPL 3, sous
+    /// un superviseur (JEMMEX, EMM386).
+    pub fn v86(&self) -> bool {
+        self.flags & (1 << 17) != 0
     }
 
-    /// Niveau de privilège courant (DPL de SS, comme le fait SVM).
+    /// Mode protégé avec descripteurs (pas V86).
+    pub fn pm(&self) -> bool {
+        self.protected() && !self.v86()
+    }
+
+    /// Code 32 bits (CS.D en mode protégé).
+    pub fn code32(&self) -> bool {
+        self.pm() && self.seg[1].db
+    }
+
+    /// Niveau de privilège courant (DPL de SS, comme le fait SVM ; 3 en V86).
     pub fn cpl(&self) -> u8 {
-        if self.protected() { self.seg[2].dpl } else { 0 }
+        if self.v86() {
+            3
+        } else if self.protected() {
+            self.seg[2].dpl
+        } else {
+            0
+        }
     }
 
     pub fn linear(&self, seg: usize, off: u32) -> u32 {
@@ -205,11 +222,9 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
     Some((ins, code32 != prefix67))
 }
 
-/// États que l'interpréteur laisse entièrement au processeur (le mode V86
-/// demanderait de traiter les instructions sensibles à IOPL).
+/// États que l'interpréteur laisse entièrement au processeur : pas à pas.
 fn unsupported_mode(cpu: &Cpu) -> bool {
-    const VM: u32 = 1 << 17;
-    cpu.flags & (alu::TF | VM) != 0
+    cpu.flags & alu::TF != 0
 }
 
 /// Résultat d'un pas isolé (tests différentiels).
@@ -246,7 +261,7 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         if idle >= idle_limit {
             break StopReason::Idle;
         }
-        // Pas à pas, V86 : laissés au processeur.
+        // Pas à pas : laissé au processeur.
         if unsupported_mode(cpu) {
             break StopReason::Unsupported;
         }
