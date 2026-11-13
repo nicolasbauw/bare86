@@ -8,6 +8,8 @@ mod bench;
 mod bios;
 mod config;
 mod debug;
+#[allow(dead_code)] // démarrage sur image : en cours (étape 9)
+mod disk;
 mod dma;
 mod dos;
 mod ems;

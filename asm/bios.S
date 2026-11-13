@@ -153,6 +153,12 @@ int09:
     pop ax
     iret
 
+    # Table des paramètres de disquette (vecteur 1Eh, INT 13h AH=08h), à son
+    # adresse traditionnelle : 1,44 Mo, 18 secteurs par piste.
+    .org 0xEFC7, 0xFF
+diskette_params:
+    .byte 0xDF, 0x02, 0x25, 0x02, 0x12, 0x1B, 0xFF, 0x6C, 0xF6, 0x0F, 0x08
+
     # INT 08h, IRQ 0 (adresse de l'IBM AT) : tics de la BDA, passage de
     # minuit, INT 1Ch, puis fin d'interruption.
     .org 0xFEA5, 0xFF

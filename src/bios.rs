@@ -73,6 +73,9 @@ const DUMMY_IRET: u16 = 0xE840;
 pub const INT09: u16 = 0xE987;
 /// Reprises après HLT d'un appel qui attend une touche (asm/bios.S).
 /// Point d'entrée XMS (saut court, NOP, `out E0h, al`, `retf`).
+/// Table des paramètres de disquette (asm/bios.S, vecteur 1Eh).
+#[allow(dead_code)] // démarrage sur image : en cours (étape 9)
+pub const DISKETTE_PARAMS: u16 = 0xEFC7;
 pub const XMS_ENTRY: u16 = 0xE8A0;
 /// VBE (asm/bios.S) : fonction de fenêtre, chaînes, liste des modes.
 const VBE_WIN_FUNC: u16 = 0xE8D0;
