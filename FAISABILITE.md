@@ -433,6 +433,13 @@ Plan de l'étape 5 :
 4. Backend SDL3 : fenêtre, clavier, souris, haut-parleur ; vCPU sur son propre thread.
 5. Critère : un jeu en mode 13h et un jeu en mode X à pleine vitesse, avec la part mappée mesurée.
 
+Avancement :
+
+- **Points 1 et 2 faits (commit 42e7748).** `src/vga.rs` : registres complets, memfd de 5 × 64 Ko (4 plans + tampon linéaire chain4, réparti ou rassemblé au passage chain4 ↔ non chaîné, plan a & 3 au décalage a & !3), tous les modes de lecture et d'écriture, DAC (palette par défaut approchée), INT 10h programme les registres des modes 0Dh, 0Eh, 10h, 12h, 13h et texte. `src/machine.rs` (`update_window`) : linéaire mappé immédiatement ; plan d'écriture mappé après 600 accès émulés, puis simple remappage de la vue à chaque changement de plan ; démappage pour les configurations à logique de plans ; refroidissement de 0,5 s au-delà de 2 000 changements de configuration par seconde ; compteurs `vram_emulated`, `vram_maps`, `vram_unmaps`.
+- Règle affinée en route : Doom ne règle jamais le plan de lecture quand il copie son image. On mappe donc le plan *écrit*, sauf si une lecture a été vue pendant la phase émulée d'une configuration dont le plan de lecture diffère (une lecture native rendrait le mauvais plan). Limite connue : en accès natif, les lectures ne chargent pas les latches.
+- Test `asm/tests/vram.S` : remplissage en mode 13h natif ; en mode X, premier plan émulé jusqu'au seuil, second plan natif ; copie par les latches émulée. Au total, 16 200 accès émulés sur 96 200.
+- **Bogue de l'étape 0 corrigé** : une instruction à deux accès MMIO (MOVS de la VRAM vers la VRAM) perdait son écriture, car `complete_pending` ignorait la seconde sortie MMIO. Elle est maintenant servie.
+
 Question ouverte (au propriétaire du projet) : police 8×16 du mode texte, sans copie de la ROM IBM. Candidates : Unifont (OFL ou GPL avec exception de police), Spleen (BSD-2, couverture semi-graphique à vérifier), Terminus (OFL).
 
 ### Prochaines étapes (vers Doom sous DOS/4GW)
