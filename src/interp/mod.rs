@@ -80,6 +80,9 @@ pub struct Cpu {
     pub stack32: bool,
     pub idt_base: u32,
     pub cr0: u32,
+    /// Répertoire de pages (CR3) et CR4 (PSE : pages de 4 Mo).
+    pub cr3: u32,
+    pub cr4: u32,
     pub(crate) seg_dirty: bool,
 }
 
@@ -123,6 +126,8 @@ impl Cpu {
             stack32: s.ss.db != 0,
             idt_base: s.idt.base as u32,
             cr0: s.cr0 as u32,
+            cr3: s.cr3 as u32,
+            cr4: s.cr4 as u32,
             seg_dirty: false,
         }
     }
@@ -132,7 +137,7 @@ impl Cpu {
         let mut gpr = [0; 8];
         gpr[4] = sp.into();
         let s = Seg::real(seg);
-        Self { gpr, ip: ip.into(), flags: 0x202, seg: [s; 6], stack32: false, idt_base: 0, cr0: 0, seg_dirty: true }
+        Self { gpr, ip: ip.into(), flags: 0x202, seg: [s; 6], stack32: false, idt_base: 0, cr0: 0, cr3: 0, cr4: 0, seg_dirty: true }
     }
 
     /// Mode protégé (CR0.PE).
@@ -177,9 +182,17 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
     let mut bytes = [0u8; 15];
     let code32 = cpu.code32();
     let ip = if code32 { cpu.ip } else { cpu.ip & 0xFFFF };
-    let at = cpu.seg[1].base.wrapping_add(ip) as usize;
-    let n = bytes.len().min(mem.size().saturating_sub(at));
-    mem.read(at, &mut bytes[..n]);
+    let at = cpu.seg[1].base.wrapping_add(ip);
+    // Octet par octet à travers la pagination : on s'arrête à la première
+    // page absente ; le décodage échoue si l'instruction la franchit.
+    let mut n = 0;
+    while n < bytes.len() {
+        match exec::translate(cpu, mem, at.wrapping_add(n as u32), false, false) {
+            Some(p) if (p as usize) < mem.size() => bytes[n] = mem.read_u8(p as usize),
+            _ => break,
+        }
+        n += 1;
+    }
     let bitness = if code32 { 32 } else { 16 };
     let ins = Decoder::with_ip(bitness, &bytes[..n], u64::from(ip), DecoderOptions::NONE).decode();
     if ins.is_invalid() {
@@ -192,11 +205,11 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
     Some((ins, code32 != prefix67))
 }
 
-/// États que l'interpréteur laisse entièrement au processeur.
+/// États que l'interpréteur laisse entièrement au processeur (le mode V86
+/// demanderait de traiter les instructions sensibles à IOPL).
 fn unsupported_mode(cpu: &Cpu) -> bool {
     const VM: u32 = 1 << 17;
-    const PG: u32 = 1 << 31;
-    cpu.flags & (alu::TF | VM) != 0 || cpu.cr0 & PG != 0
+    cpu.flags & (alu::TF | VM) != 0
 }
 
 /// Résultat d'un pas isolé (tests différentiels).
@@ -233,7 +246,7 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         if idle >= idle_limit {
             break StopReason::Idle;
         }
-        // Pas à pas, V86, pagination : laissés au processeur.
+        // Pas à pas, V86 : laissés au processeur.
         if unsupported_mode(cpu) {
             break StopReason::Unsupported;
         }

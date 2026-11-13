@@ -169,10 +169,53 @@ pub(super) struct Exec<'a, B: Mmio> {
     pub addr32: bool,
 }
 
+/// Traduction linéaire → physique par la table de pages de l'invité (pages
+/// de 4 Ko, de 4 Mo avec CR4.PSE) ; `None` : faute de page, laissée au
+/// processeur. Avec `mark`, pose les bits A (et D en écriture) comme lui.
+pub(crate) fn translate(cpu: &Cpu, mem: &GuestMem, lin: u32, write: bool, mark: bool) -> Option<u32> {
+    const PG: u32 = 1 << 31;
+    const WP: u32 = 1 << 16;
+    const PSE: u32 = 1 << 4;
+    if cpu.cr0 & PG == 0 {
+        return Some(lin);
+    }
+    let user = cpu.cpl() == 3;
+    let entry = |a: u32| ((a as usize) + 4 <= mem.size()).then(|| mem.read_u32(a as usize));
+    let allowed = |e: u32| e & 1 != 0 && (!user || e & 4 != 0) && (!write || e & 2 != 0 || (!user && cpu.cr0 & WP == 0));
+    let pde_at = (cpu.cr3 & !0xFFF).wrapping_add((lin >> 22) << 2);
+    let pde = entry(pde_at)?;
+    if pde & 0x80 != 0 && cpu.cr4 & PSE != 0 {
+        if !allowed(pde) {
+            return None;
+        }
+        if mark {
+            mem.write_u32(pde_at as usize, pde | 0x20 | if write { 0x40 } else { 0 });
+        }
+        return Some((pde & 0xFFC0_0000) | (lin & 0x003F_FFFF));
+    }
+    let pte_at = (pde & !0xFFF).wrapping_add(((lin >> 12) & 0x3FF) << 2);
+    let pte = entry(pte_at)?;
+    // Droits effectifs : ceux du répertoire et de la table à la fois.
+    if pde & 1 == 0 || !allowed(pte) || !allowed(pde | 1) {
+        return None;
+    }
+    if mark {
+        mem.write_u32(pde_at as usize, pde | 0x20);
+        mem.write_u32(pte_at as usize, pte | 0x20 | if write { 0x40 } else { 0 });
+    }
+    Some((pte & !0xFFF) | (lin & 0xFFF))
+}
+
 impl<B: Mmio> Exec<'_, B> {
     // --- Mémoire -------------------------------------------------------
 
+    /// Adresse physique d'un octet déjà contrôlé par `lin` (pagination).
+    fn phys(&self, addr: u32, write: bool) -> Option<u32> {
+        translate(self.cpu, self.mem, addr, write, true)
+    }
+
     fn read8(&mut self, addr: u32) -> u8 {
+        let Some(addr) = self.phys(addr, false) else { return 0xFF };
         if self.mmio.claims(addr, false) {
             self.mmio_hits += 1;
             self.mmio.read8(addr)
@@ -184,6 +227,7 @@ impl<B: Mmio> Exec<'_, B> {
     }
 
     fn write8(&mut self, addr: u32, v: u8) {
+        let Some(addr) = self.phys(addr, true) else { return };
         if self.mmio.claims(addr, true) {
             self.mmio_hits += 1;
             self.mmio.write8(addr, v);
@@ -224,7 +268,16 @@ impl<B: Mmio> Exec<'_, B> {
         if u64::from(off) + u64::from(size) - 1 > u64::from(s.limit) {
             return Err(Bail);
         }
-        Ok(s.base.wrapping_add(off))
+        let a = s.base.wrapping_add(off);
+        // Pagination : premier et dernier octet présents et permis, avant
+        // tout effet ; sinon la faute de page revient au processeur.
+        if self.cpu.cr0 & (1 << 31) != 0 {
+            let last = a.wrapping_add(size - 1);
+            if translate(self.cpu, self.mem, a, write, false).is_none() || translate(self.cpu, self.mem, last, write, false).is_none() {
+                return Err(Bail);
+            }
+        }
+        Ok(a)
     }
 
     fn rd(&mut self, seg: R, off: u32, size: u32) -> X<u32> {

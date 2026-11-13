@@ -290,6 +290,8 @@ fn random_real_cpu(rng: &mut Rng) -> Cpu {
         stack32: false,
         idt_base: 0,
         cr0: 0,
+        cr3: 0,
+        cr4: 0,
         seg_dirty: false,
     }
 }
@@ -339,6 +341,8 @@ fn random_protected_cpu(rng: &mut Rng) -> Cpu {
         stack32: ss.db,
         idt_base: IDT as u32,
         cr0: 0x11,
+        cr3: 0,
+        cr4: 0,
         seg_dirty: false,
     }
 }
@@ -496,6 +500,8 @@ fn int_pushes_and_vectors() {
         stack32: false,
         idt_base: 0,
         cr0: 0,
+        cr3: 0,
+        cr4: 0,
         seg_dirty: false,
     };
     mem.write(0x10010, &[0xCD, 0x21]);
