@@ -374,6 +374,20 @@ impl Sb16 {
                 0x00 => self.reset_mixer(),
                 // Sélections d'IRQ et de DMA : figées sur IRQ 5, DMA 1 et 5.
                 0x80 | 0x81 | 0x82 => {}
+                // Volumes SB Pro (gauche, droite sur 4 bits) : reportés sur
+                // les registres SB16 de 5 bits, comme le fait la carte
+                // (n → 2n + 1). Maître 22h, voix 04h, FM 26h.
+                i @ (0x22 | 0x04 | 0x26) => {
+                    self.mixer[usize::from(i)] = v;
+                    let base = match i {
+                        0x22 => 0x30,
+                        0x04 => 0x32,
+                        _ => 0x34,
+                    };
+                    let five = |n: u8| ((n << 1) | 1) << 3;
+                    self.mixer[base] = five(v >> 4);
+                    self.mixer[base + 1] = five(v & 0x0F);
+                }
                 i => self.mixer[usize::from(i)] = v,
             },
             0x06 => {
