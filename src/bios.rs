@@ -25,6 +25,11 @@ const BIOS_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bios.bin"));
 const CONFIG_TABLE: u16 = 0xE6F5;
 /// Table DBCS vide (INT 21h AX=6300h), dans asm/bios.S.
 pub const DBCS_TABLE: u16 = 0xE700;
+/// Polices en ROM (`INT 10h AX=1130h`, INT 43h) : 8×16 et 8×14 tirées de
+/// Terminus, et une table de remplacement 9 points vide (un seul 00h).
+const FONT_8X16: u16 = 0x1000;
+const FONT_8X14: u16 = 0x2000;
+const FONT_ALT_EMPTY: u16 = 0x2E00;
 /// Routine de conversion de casse des informations nationales (RETF).
 pub const CASE_MAP: u16 = 0xE710;
 
@@ -165,6 +170,9 @@ pub const MOUSE_STATE: usize = 0xF_E890;
 /// sauf les IRQ et INT 1Ch, servies en ROM sans sortie de VM.
 pub fn install_rom(mem: &GuestMem) {
     mem.write(ROM.start, BIOS_IMAGE);
+    mem.write(ROM.start + usize::from(FONT_8X16), crate::font::BUILTIN);
+    mem.write(ROM.start + usize::from(FONT_8X14), &crate::font::builtin_8x14());
+    mem.write_u8(ROM.start + usize::from(FONT_ALT_EMPTY), 0);
     let set = |n: u16, off: u16| {
         mem.write_u16(usize::from(n) * 4, off);
         mem.write_u16(usize::from(n) * 4 + 2, ROM_SEG);
@@ -290,7 +298,20 @@ impl Bios {
         mem.write_u16(bda::CRTC, if mode == 7 { 0x3B4 } else { 0x3D4 });
         mem.write_u8(bda::MODE_CTRL, if text { 0x29 } else { 0x1E });
         mem.write_u8(bda::PALETTE, 0x30);
-        mem.write_u8(bda::CHAR_HEIGHT, if text || mode >= 0x0F { 16 } else { 8 });
+        // Hauteur des caractères, et police graphique (INT 43h) des modes
+        // 350 et 480 lignes ; pas encore de police 8×8 pour ceux de 200.
+        let height = match mode {
+            0x0F | 0x10 => 14,
+            0x11 | 0x12 => 16,
+            _ if text => 16,
+            _ => 8,
+        };
+        mem.write_u8(bda::CHAR_HEIGHT, height);
+        if !text && height > 8 {
+            let font = if height == 14 { FONT_8X14 } else { FONT_8X16 };
+            mem.write_u16(0x43 * 4, font);
+            mem.write_u16(0x43 * 4 + 2, ROM_SEG);
+        }
         let equip = mem.read_u16(bda::EQUIPMENT) & !0x30;
         mem.write_u16(bda::EQUIPMENT, equip | if mode == 7 { 0x30 } else { 0x20 });
         if text && al & 0x80 == 0 {
@@ -362,12 +383,23 @@ impl Bios {
             // du rendu texte. Les polices chargées par le programme (plan 2)
             // ne sont pas encore affichées.
             0x11 if matches!(al, 0x04 | 0x14) => {}
-            // Informations sur la police (pas encore de police en ROM).
+            // Informations sur la police : ES:BP selon BH (00h INT 1Fh,
+            // 01h INT 43h, 02h 8×14, 06h 8×16, 05h/07h remplacements 9
+            // points) ; 8×8 (03h, 04h) pas encore en ROM : 0000:0000.
             0x11 if al == 0x30 => {
                 cpu.set_w(CX, u16::from(mem.read_u8(bda::CHAR_HEIGHT)));
                 cpu.set_lo(DX, mem.read_u8(bda::ROWS));
-                cpu.set_sreg(ES, 0);
-                cpu.set_w(BP, 0);
+                let vector = |n: usize| (mem.read_u16(n * 4 + 2), mem.read_u16(n * 4));
+                let (seg, off) = match cpu.hi(BX) {
+                    0x00 => vector(0x1F),
+                    0x01 => vector(0x43),
+                    0x02 => (ROM_SEG, FONT_8X14),
+                    0x06 => (ROM_SEG, FONT_8X16),
+                    0x05 | 0x07 => (ROM_SEG, FONT_ALT_EMPTY),
+                    _ => (0, 0),
+                };
+                cpu.set_sreg(ES, seg);
+                cpu.set_w(BP, off);
             }
             // Informations EGA : couleur, 256 Ko.
             0x12 if cpu.lo(BX) == 0x10 => {

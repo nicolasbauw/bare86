@@ -169,6 +169,11 @@ impl Mouse {
                 self.shown -= 1;
                 self.redraw(mem);
             }
+            // Nombre de boutons (Genius, CuteMouse ; HX le demande).
+            0x0011 => {
+                cpu.set_w(AX, 0xFFFF);
+                cpu.set_w(BX, 2);
+            }
             0x0003 => {
                 cpu.set_w(BX, u16::from(self.buttons));
                 cpu.set_w(CX, self.x as u16);

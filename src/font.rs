@@ -8,8 +8,15 @@
 use std::io::Read;
 use std::path::Path;
 
-/// Glyphes CP437 8×16 tirés de Terminus, 16 octets par caractère.
-const BUILTIN: &[u8; 4096] = include_bytes!("../fonts/terminus-cp437-8x16.bin");
+/// Glyphes CP437 8×16 tirés de Terminus, 16 octets par caractère (aussi
+/// placés en ROM, `INT 10h AX=1130h`).
+pub const BUILTIN: &[u8; 4096] = include_bytes!("../fonts/terminus-cp437-8x16.bin");
+
+/// Version 8×14 (modes 350 lignes) : les lignes 0 et 15, presque toujours
+/// vides chez Terminus, retirées.
+pub fn builtin_8x14() -> Vec<u8> {
+    BUILTIN.as_chunks::<16>().0.iter().flat_map(|g| g[1..15].iter().copied()).collect()
+}
 
 pub struct Font {
     pub width: usize,

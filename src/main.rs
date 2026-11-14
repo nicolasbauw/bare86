@@ -453,10 +453,17 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
         }
         None => {
             pc.mount(2, o.mount.clone().unwrap_or_else(|| ".".into()));
-            return Ok(pc.shell()?);
         }
     }
-    let code = if o.debug { debug::repl(&mut pc).map(|c| c.unwrap_or(0)) } else { pc.run() };
+    // Sans programme : le shell interne ; `--shot` et `--stats` valent aussi
+    // pour une session de shell (fin de l'entrée, EXIT ou limite de temps).
+    let code = if o.program.is_none() && !o.boot {
+        pc.shell()
+    } else if o.debug {
+        debug::repl(&mut pc).map(|c| c.unwrap_or(0))
+    } else {
+        pc.run()
+    };
     if o.screen {
         println!("\n{}", pc.screen_text().join("\n").trim_end());
     }
