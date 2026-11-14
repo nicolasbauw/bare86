@@ -86,8 +86,6 @@ pub(crate) enum Target {
     Program,
     /// Image de disque dur.
     HardDisk,
-    /// Un dossier (ligne « [ ce dossier ] »).
-    Directory,
 }
 
 impl Target {
@@ -97,7 +95,6 @@ impl Target {
             Target::Cd => &["iso", "cue"],
             Target::Program => &["exe", "com", "bat"],
             Target::HardDisk => &["img", "ima", "hdd", "vhd"],
-            Target::Directory => &[],
         }
     }
 
@@ -107,7 +104,6 @@ impl Target {
             Target::Cd => "Image de CD (.iso, .cue)",
             Target::Program => "Programme à lancer (.EXE, .COM, .BAT)",
             Target::HardDisk => "Image de disque dur pour C:",
-            Target::Directory => "Dossier du jeu",
         }
     }
 }
@@ -119,9 +115,6 @@ pub(crate) enum Browsed {
     Chosen(PathBuf),
     Cancelled,
 }
-
-/// Nom de la ligne qui choisit le dossier courant (cible `Directory`).
-const HERE: &str = "[ ce dossier ]";
 
 pub(crate) struct Browser {
     pub(crate) target: Target,
@@ -167,9 +160,6 @@ impl Browser {
         dirs.sort_by_key(|n| n.to_lowercase());
         files.sort_by_key(|n| n.to_lowercase());
         self.entries = Vec::new();
-        if self.target == Target::Directory {
-            self.entries.push((HERE.into(), true));
-        }
         if self.dir.parent().is_some() {
             self.entries.push(("..".into(), true));
         }
@@ -181,9 +171,6 @@ impl Browser {
 
     fn enter(&mut self) -> Option<PathBuf> {
         let (name, is_dir) = self.entries.get(self.sel)?.clone();
-        if name == HERE {
-            return Some(self.dir.clone());
-        }
         if !is_dir {
             return Some(self.dir.join(name));
         }
@@ -218,8 +205,7 @@ impl Browser {
             }
             Key::Edit | Key::Delete => {}
             Key::Enter | Key::Right => {
-                let here = self.entries.get(self.sel).is_some_and(|(n, _)| n == HERE);
-                if let Some(path) = self.enter().filter(|_| key == Key::Enter || !here) {
+                if let Some(path) = self.enter().filter(|_| key == Key::Enter) {
                     return Browsed::Chosen(path);
                 }
             }
@@ -247,7 +233,7 @@ impl Browser {
             s.text(4, 3, "(rien ici)", ATTR_TEXT);
         }
         for (row, (i, (name, is_dir))) in self.entries.iter().enumerate().skip(self.top).take(LIST_ROWS).enumerate() {
-            let text = if *is_dir && name != HERE { format!("{name}/") } else { name.clone() };
+            let text = if *is_dir { format!("{name}/") } else { name.clone() };
             s.item(4 + row, &text, i == self.sel);
         }
         s.footer("Entrée choisir   ← dossier parent   Échap retour");

@@ -229,7 +229,7 @@ built-in DOS directly.
 |---|---|
 | Enter | Run the game, in a window, with its configuration file (other command-line options still apply) |
 | E or F2 | Edit the game's profile |
-| Enter on "+ New game..." | Choose the game's directory, then edit its new profile |
+| Enter on "+ New game..." | Choose the game's program (.EXE, .COM, .BAT) in a file browser; the profile goes into the game's directory (the subdirectory of the games directory that holds the program), then the editor opens |
 | Escape | Quit |
 
 The profile editor sets, without typing: the program (chosen in a file

@@ -172,6 +172,16 @@ fn is_true(v: Option<String>) -> bool {
     v.is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "yes" | "on"))
 }
 
+/// Dossier du jeu d'un programme : le sous-dossier du répertoire des jeux
+/// qui le contient (`jeux/doom` pour `jeux/doom/c/DOOMS/DOOM.EXE`), ou son
+/// propre dossier s'il est ailleurs.
+fn game_dir(root: &Path, program: &Path) -> PathBuf {
+    match program.strip_prefix(root).ok().and_then(|r| r.components().next()) {
+        Some(first) if program.parent() != Some(root) => root.join(first),
+        _ => program.parent().map_or_else(|| root.to_path_buf(), Path::to_path_buf),
+    }
+}
+
 /// Profil en cours de création ou de modification.
 struct Editor {
     name: String,
@@ -320,7 +330,8 @@ impl Ui {
                     Key::Home => self.sel = 0,
                     Key::End => self.sel = last,
                     Key::Enter if self.sel < last => return UiAction::Launch(self.profiles[self.sel].conf.clone()),
-                    Key::Enter => self.page = Page::Browse(Browser::open(Target::Directory, self.root.clone(), None), None),
+                    // Nouveau jeu : choisir directement son programme.
+                    Key::Enter => self.page = Page::Browse(Browser::open(Target::Program, self.root.clone(), None), None),
                     Key::Edit if self.sel < last => {
                         let dir = self.profiles[self.sel].conf.parent().map(Path::to_path_buf).unwrap_or_default();
                         self.page = Page::Edit(Editor::open(dir));
@@ -347,7 +358,15 @@ impl Ui {
                             }
                             self.page = Page::Edit(ed);
                         }
-                        _ => self.page = Page::Edit(Editor::open(path)),
+                        // Nouveau jeu : son dossier est celui, sous le répertoire
+                        // des jeux, qui contient le programme choisi.
+                        _ => {
+                            let dir = game_dir(&self.root, &path);
+                            let mut ed = Editor::open(dir);
+                            let v = ed.store_path(&path);
+                            ed.doc.set("program", Some(&v));
+                            self.page = Page::Edit(ed);
+                        }
                     },
                 }
             }
@@ -361,7 +380,7 @@ impl Ui {
                     Key::End => ed.sel = FIELDS.len() - 1,
                     Key::Left | Key::Right => ed.step(f, key == Key::Right),
                     Key::Delete | Key::Backspace => {
-                        if let Some((k, _)) = file_field(f).or(choices(f).map(|(k, _)| (k, Target::Directory))) {
+                        if let Some(k) = file_field(f).map(|(k, _)| k).or(choices(f).map(|(k, _)| k)) {
                             ed.doc.set(k, None);
                         } else if let Some(k) = toggle_key(f) {
                             ed.doc.set(k, None);
@@ -544,17 +563,30 @@ mod tests {
         let text = std::fs::read_to_string(root.join("doom").join(PROFILE)).unwrap();
         assert_eq!(text, "# mon Doom\nvbe1 = true\nsb = pro2\nmips = 3\nnet = true\nprogram = DOOM.EXE\n");
 
-        // Nouveau jeu : dossier « wolf » (« [ ce dossier ] », « .. », doom/, wolf/).
+        // Nouveau jeu : on choisit directement son programme (« .. », doom/,
+        // wolf/ ; puis « .. », WOLF3D.EXE) ; le profil va dans wolf/.
         keys(&mut ui, &[Key::End, Key::Enter]);
+        let t = screen(&ui);
+        assert!(t.contains("Programme à lancer") && t.contains("wolf/"), "{t}");
         keys(&mut ui, &[Key::Down, Key::Down, Key::Down, Key::Enter]);
-        keys(&mut ui, &[Key::Home, Key::Enter]);
-        assert!(screen(&ui).contains("Profil : wolf"), "{}", screen(&ui));
-        ui.key(Key::Enter);
+        assert!(screen(&ui).contains("WOLF3D.EXE"), "{}", screen(&ui));
         keys(&mut ui, &[Key::Down, Key::Enter]);
+        let t = screen(&ui);
+        assert!(t.contains("Profil : wolf") && t.contains("WOLF3D.EXE"), "{t}");
         // Enregistrer et lancer (dernière ligne).
         ui.key(Key::End);
         assert_eq!(ui.key(Key::Enter), UiAction::Launch(root.canonicalize().unwrap().join("wolf").join(PROFILE)));
         assert!(screen(&ui).contains("wolf"));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn game_directory_of_a_program() {
+        let root = Path::new("/jeux");
+        assert_eq!(game_dir(root, Path::new("/jeux/doom/c/DOOMS/DOOM.EXE")), Path::new("/jeux/doom"));
+        assert_eq!(game_dir(root, Path::new("/jeux/dune/DUNE.BAT")), Path::new("/jeux/dune"));
+        // Programme posé à la racine, ou ailleurs : son propre dossier.
+        assert_eq!(game_dir(root, Path::new("/jeux/JEU.EXE")), Path::new("/jeux"));
+        assert_eq!(game_dir(root, Path::new("/autre/x/JEU.EXE")), Path::new("/autre/x"));
     }
 }
