@@ -576,6 +576,9 @@ Avancement :
      - **son** : SB16 déjà conforme (pilote de Windows, configuration manuelle 220h/5/1/5) ;
      - pièges connus sur processeur moderne : « Windows protection error » (boucles de calibrage trop rapides, correctif FIX95CPU ou bridage à `--mips`), limite de mémoire de 98 (≤ 512 Mo, sans souci avec nos 16–64 Mo), TLB et pagination du VMM sous KVM à surveiller ;
      - critère : bureau de Windows 95 puis 98, souris, un jeu DirectX/WinG simple ; ensuite mode SVGA et son.
+     - **questions à trancher avant de commencer** (2026-11-14, propriétaire du projet) :
+       - *se procurer Windows légalement* : voir si l'installation officielle (95/98) peut encore s'obtenir par une voie légale (licence et support d'origine d'occasion, abonnement MSDN/Visual Studio donnant accès aux anciennes versions, etc.), plutôt qu'une image de provenance douteuse ;
+       - *Windows « intégré » à la rust-dos ou Windows historique ?* rust-dos fournit son propre Windows : KERNEL32, USER32, GDI32, DirectX et les autres DLL système réécrits dans l'émulateur, comme son DOS (aucune installation, aucune image, aucun fichier Windows : on tape le nom du jeu à l'invite DOS). Comparer les deux voies (couverture des jeux, effort, fidélité, légalité, cohérence avec la virtualisation KVM de Bare86) avant de choisir.
 
 ### Point de reprise (fin de session du 2026-11-13)
 
@@ -586,7 +589,7 @@ Essais commodes (clavier scripté) : `bare86 --hda COPIE.img --boot --keys "{unt
 À faire, dans l'ordre convenu :
 1. **Réseau** (avant le CD-ROM, choix du propriétaire du projet) : NE2000 ISA émulée + NAT en espace utilisateur ; critère mTCP sous FreeDOS (DHCP, ping, FTP/HTGET). Les paquets réseau de FreeDOS (mTCP, FDNET) ne sont sans doute pas sur l'édition disquette : prévoir de les récupérer (FullUSB ou paquets du dépôt FreeDOS).
 2. **CD-ROM** : MSCDEX en HLE, ISO/CUE, pistes audio ; lecteur ATAPI pour les vrais DOS (et Windows).
-3. **Windows 95/98** (comme rust-dos) : IDE/ATA, ATAPI, 8042 auxiliaire, VGA puis VBE ; détail dans « Reste ensuite » (étape 9).
+3. **Windows 95/98** (comme rust-dos) : IDE/ATA, ATAPI, 8042 auxiliaire, VGA puis VBE ; détail dans « Reste ensuite » (étape 9). Trancher d'abord : obtention légale de l'installation officielle, et Windows historique ou Windows intégré façon rust-dos.
 4. Restes mineurs : polices chargées par les programmes et 8×8/8×14 (rendu texte d'après le plan 2) ; Keen 4 sans EMS/XMS et rendu de 160 px de large ; Wolf3D scrute 201h sur « Press a key » ; essais en fenêtre par le propriétaire du projet (souris sous FreeDOS, Ctrl+F4).
 
 ### L'interpréteur est-il encore nécessaire ? (2026-11-13)
