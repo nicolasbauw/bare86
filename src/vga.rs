@@ -15,7 +15,7 @@
 //! interpréteur). Pour un plan, la vue ne change pas de cible : elle reste
 //! sur la scène, qui tient le contenu du plan choisi ; changer de plan
 //! revient à deux copies de 64 Ko (scène → ancien plan, nouveau plan →
-//! scène), sans appel système ni faute de page dans KVM. Voir FAISABILITE.md, « décision sur la mémoire vidéo ».
+//! scène), sans appel système ni faute de page dans KVM. Voir docs/JOURNAL.md, « décision sur la mémoire vidéo ».
 //!
 //! Texte et CGA restent en RAM ordinaire (B0000–BFFFF).
 

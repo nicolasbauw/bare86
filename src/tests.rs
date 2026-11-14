@@ -368,7 +368,7 @@ fn mouse_and_cmos() {
 }
 
 /// Fenêtre A0000 : mappage direct quand la VGA se comporte comme de la RAM,
-/// logique des plans émulée sinon (FAISABILITE, « décision sur la mémoire vidéo »).
+/// logique des plans émulée sinon (docs/JOURNAL.md, « décision sur la mémoire vidéo »).
 #[test]
 fn vram_mapping_strategy() {
     let (code, _, pc) = run(program!("vram"));

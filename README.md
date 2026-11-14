@@ -1,0 +1,313 @@
+# Bare86
+
+Bare86 runs DOS programs on Linux at native speed. It does not emulate the x86
+processor: the DOS code runs directly on the host CPU, inside a minimal
+virtual machine set up with KVM hardware virtualization. Only the BIOS, DOS and
+the PC hardware (VGA, Sound Blaster, keyboard, mouse, disks, CD-ROM, network
+card) are provided in software, by Bare86 itself, written in Rust.
+
+The spirit is the one of DOSBox: type the name of a game and play it. The
+difference is under the hood, and shows with demanding late-90s games.
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Building](#building)
+- [Quick start](#quick-start)
+- [Command-line options](#command-line-options)
+- [Configuration file](#configuration-file)
+- [Window, keys and menu](#window-keys-and-menu)
+- [The built-in DOS](#the-built-in-dos)
+- [Booting a real DOS](#booting-a-real-dos)
+- [CD-ROM](#cd-rom)
+- [Network](#network)
+- [Scripted and windowless sessions](#scripted-and-windowless-sessions)
+- [Status and limits](#status-and-limits)
+- [License](#license)
+
+## Features
+
+- **Native speed.** No instruction is emulated in the normal course of things.
+  Doom's `timedemo demo1` runs at about 116 frames per second, and Quake 1.06
+  at 627 frames per second in 640×480 VESA, on a Ryzen AI 9 HX 370. A small x86
+  interpreter only takes over for bursts of accesses that no hardware mapping
+  can serve: planar VGA writes (latches, bit mask, several planes at once) and
+  dense port I/O.
+- **A built-in DOS, nothing to install.** Bare86 provides its own DOS (it
+  reports version 5.00): a host directory becomes drive C:, `.COM` and `.EXE`
+  programs start at once. XMS 3.0, EMS 4.0 (LIM) and the DOS extenders used by
+  games work: DOS/4GW, DOS/32A, PMODE/W, CWSDPMI (DJGPP).
+- **Or a real DOS.** Boot FreeDOS (tested with 1.3, JEMMEX included) or another
+  DOS from floppy and hard disk images, with its own drivers.
+- **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
+  modes), SVGA through VESA VBE 2.0 with a linear framebuffer (or VBE 1.2 with
+  banked windows). Text mode uses the built-in Terminus 8×16 font. The window
+  keeps a 4:3 aspect ratio with sharp scaling.
+- **Sound.** Sound Blaster 16 (DSP 4.05, 8- and 16-bit DMA, mixer) at 220h,
+  IRQ 5, DMA 1 and 5, with the `BLASTER` variable set; OPL3 FM synthesis by
+  [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3); PC speaker.
+- **Input.** Keyboard by physical key position (the DOS sees a US keyboard),
+  mouse (INT 33h driver under the built-in DOS, PS/2 under a real DOS),
+  joystick or game controller on the game port.
+- **Disks.** Floppy images for A: and B:, hard disk image for C:. Several
+  floppies can be given for A: and swapped while a program runs.
+- **CD-ROM.** `.iso` images, and `.cue` sheets with their `.bin` files and
+  audio tracks, which play through the sound mix. MSCDEX is built into the
+  built-in DOS; a real DOS gets an ATAPI drive for its own CD drivers (FreeDOS
+  mounts it as D: without any setup).
+- **Network.** NE2000 network card with user-mode NAT
+  ([libslirp](https://gitlab.freedesktop.org/slirp/libslirp), the one of
+  QEMU): DHCP, DNS, outgoing TCP and UDP, port forwarding, no root rights.
+  mTCP under FreeDOS downloads at about 9.5 MB/s.
+- **Window.** SDL3 window, full screen, mouse capture, an in-window menu to
+  change floppies and CDs, speed and display settings.
+- **Speed control.** Throttle to a given number of millions of instructions per
+  second for games that run too fast, and change it while playing.
+- **Scripting.** Scripted keyboard, screenshots, sound recording and a text
+  screen dump make windowless test runs possible.
+
+## Requirements
+
+- Linux on x86-64, with KVM: the processor's virtualization (Intel VT-x or
+  AMD-V) enabled in the firmware, and `/dev/kvm` accessible to your user
+  (usually through the `kvm` group).
+- To build: a recent stable Rust toolchain (edition 2024), a C compiler,
+  GNU binutils (`as`, `ld`, `objcopy`, which assemble the BIOS ROM),
+  `pkg-config`, and the SDL3 and libslirp development files.
+
+On Arch Linux:
+
+```sh
+sudo pacman -S rust base-devel sdl3 libslirp
+```
+
+`xorriso` is optional: some tests use it to build CD images, and are skipped
+without it.
+
+## Building
+
+```sh
+cargo build --release
+```
+
+The executable is `target/release/bare86`. `cargo test --release` runs the test
+suite (it needs `/dev/kvm`).
+
+## Quick start
+
+```sh
+bare86                                    # built-in DOS shell, current directory as C:
+bare86 --window ~/games/doom/DOOM.EXE     # run a game in a window
+bare86 --window --cdrom game.cue GAME.EXE # with its CD in D:
+bare86 --window --hda freedos.img --boot  # boot a real DOS
+```
+
+Options go before the program name: everything after it is passed to the
+program as its command line. Without `--window`, Bare86 runs in the terminal:
+what the program writes through DOS appears there, and the terminal keyboard is
+the DOS keyboard; `--term` shows the whole text screen instead. Graphics and
+sound need the window (or `--shot` and `--wav`).
+
+## Command-line options
+
+**Program and drives**
+
+| Option | Effect |
+|---|---|
+| `--config FILE` | Configuration file to read instead of `./bare86.conf` or `~/.config/bare86/bare86.conf`, see [Configuration file](#configuration-file) |
+| `--mount DIR` | Host directory mounted as C: (default: the program's directory, or the current directory for the shell) |
+| `--fda IMG`, `--fdb IMG` | Floppy image for A: or B:. Repeat `--fda` for a set of floppies, swapped with Ctrl+Alt+D or the menu |
+| `--hda IMG` | Hard disk image for C: (written in place: work on a copy) |
+| `--cdrom IMG` | CD image (`.iso`, or `.cue` with its `.bin` files and audio tracks), see [CD-ROM](#cd-rom) |
+| `--boot` | Boot from the disk images (A: if present, else C:) instead of the built-in DOS |
+| `--net` | NE2000 network card with user-mode NAT, see [Network](#network) |
+| `--net-fwd tcp:HOST:GUEST` | Forward a host port (on 127.0.0.1) to the guest; also `udp:`; implies `--net`; repeatable |
+
+**Machine**
+
+| Option | Effect |
+|---|---|
+| `--mem MB` | Total memory in MB (default 16) |
+| `--ems MB` | EMS memory in MB, in addition (default 4, 0 to 32) |
+| `--mips N` | Throttle to N million instructions per second (default: full speed) |
+| `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
+
+**Display and sound**
+
+| Option | Effect |
+|---|---|
+| `--window` | SDL3 window, with sound |
+| `--fullscreen` | Window, full screen from the start |
+| `--menu-key L` | Letter of the menu shortcut, Ctrl+Alt+L (default M) |
+| `--font F.psf` | PSF font for text mode (default: the built-in Terminus 8×16) |
+| `--term` | Show the text screen live in the terminal |
+| `--screen` | Print the text screen when the program ends |
+| `--shot F.png` | Screenshot when the program ends |
+| `--wav F.wav` | Record the sound to a file (without a window) |
+
+**Scripting and diagnostics**
+
+| Option | Effect |
+|---|---|
+| `--keys SCRIPT` | Scripted keyboard, then end of the session, see [Scripted and windowless sessions](#scripted-and-windowless-sessions) |
+| `--limit S` | Stop after S seconds and print the registers, the code at CS:IP and the screen |
+| `--stats` | Machine counters at the end (VM exits, emulated video memory accesses, I/O ports…) |
+| `--debug` | Debugger: registers, memory, single step |
+| `--trace-int` | Log the interrupts serviced by the host |
+| `--trace-io` | Report I/O ports with no device |
+| `--no-interp` | No interpreter bursts: one VM exit per emulated video memory access (to measure what the interpreter brings) |
+| `-h`, `--help` | Print the options |
+
+## Configuration file
+
+A configuration file holds the options of a game, one per line, written as
+`option = value`, exactly as on the command line. `option = true` gives an
+option without value, `false` leaves it out. `program = …` and `args = …` name
+the program to run when the command line gives none. Relative paths (`mount`,
+`program`, `fda`, `fdb`, `hda`, `cdrom`, `font`, `shot`, `wav`) start from the
+directory of the file. Comments start with `#` or `;`.
+
+```ini
+# ~/games/doom/bare86.conf
+window = true
+mips = 100
+mount = c
+program = c/DOOM.EXE
+args = -nosound
+```
+
+Bare86 reads `--config FILE` if given, otherwise `./bare86.conf`, otherwise
+`~/.config/bare86/bare86.conf`; only one file is read. Options given on the
+command line take precedence over the file.
+
+## Window, keys and menu
+
+A click in the window captures the mouse; the middle button, Ctrl+Alt+G or
+leaving the window releases it. Bare86's own shortcuts all use Ctrl+Alt, so
+that the function keys and their Ctrl combinations stay free for the DOS
+programs and the desktop:
+
+| Keys | Action |
+|---|---|
+| Ctrl+Alt+M | Menu (the letter can be changed with `--menu-key`) |
+| Alt+Enter or Ctrl+Alt+F | Full screen |
+| Ctrl+Alt+S | Screenshot (`bare86_NNN.png` in the current directory) |
+| Ctrl+Alt+G | Release the mouse |
+| Ctrl+Alt+D | Next floppy in A: (when `--fda` was repeated) |
+| Ctrl+Alt+− / Ctrl+Alt++ | Slower / faster (3 to 400 MIPS, then full speed) |
+
+The menu opens over the running program, which keeps running but no longer
+receives the keyboard. It changes the floppy in A: and the CD (a small file
+browser lists the images of the right type), ejects the CD, sets the speed and
+full screen, takes a screenshot and recalls the shortcuts. Arrows choose,
+Enter confirms, left and right change the speed, Escape closes.
+
+## The built-in DOS
+
+Without `--boot`, Bare86 runs its own DOS. A host directory is drive C: (the
+program's directory, or `--mount DIR`). Host file names that are valid 8.3
+names appear in upper case; longer names get a short name (`LONGNA~1.TXT`).
+The shell, started without a program, knows `DIR`, `CD`, `MD`, `RD`, `DEL`,
+`REN`, `TYPE`, `ECHO`, `SET`, `CLS`, `VER` and `EXIT`, and runs programs. Its
+messages are in French for now.
+
+Memory: 640 KB of conventional memory, XMS through the built-in HIMEM-like
+driver, EMS in a page frame at E000h. The environment holds
+`BLASTER=A220 I5 D1 H5 T6`, so that games find the Sound Blaster.
+
+## Booting a real DOS
+
+With `--boot`, Bare86 starts the boot sector of A: (or of C: without a floppy)
+like a PC BIOS. The DOS then uses its own drivers: XMS and EMS come from its
+memory managers, the mouse from its driver (PS/2 mouse), the CD from its CD
+drivers. FreeDOS 1.3 installs from its own installation floppies, and runs
+with JEMMEX; DOS/4GW games run under it at the same speed.
+
+```sh
+cp freedos.img work.img                  # Bare86 writes to the image
+bare86 --window --hda work.img --boot
+```
+
+## CD-ROM
+
+`--cdrom IMAGE` takes an `.iso` file, or a `.cue` sheet with its `.bin` files
+(one or several, with data and audio tracks, `PREGAP` and `INDEX` lines). File
+names in the sheet are also found when their case differs.
+
+- **Built-in DOS:** the CD is drive D:, with MSCDEX 2.23 built in: games find
+  it, read files through DOS, and play the audio tracks.
+- **Real DOS (`--boot`):** the CD is an ATAPI drive on the secondary IDE
+  channel (ports 170h–177h and 376h, IRQ 15). FreeDOS loads its UDVD2 and
+  SHSUCDX drivers at boot and mounts it as D:.
+
+The audio tracks are mixed with the Sound Blaster. The menu (Ctrl+Alt+M)
+changes or ejects the CD while a program runs.
+
+## Network
+
+`--net` adds an NE2000 card at port 300h, IRQ 3, behind a user-mode NAT: the
+guest is 10.0.2.15 (by DHCP), the gateway 10.0.2.2 (it also reaches the host),
+the DNS server 10.0.2.3. Outgoing TCP and UDP connections go through the host;
+no root rights are needed. `--net-fwd tcp:2323:23` makes a guest server
+reachable on the host's port 2323.
+
+Under a real DOS, load a packet driver for the card, for example the free
+Crynwr driver, then the network programs:
+
+```bat
+NE2000 0x60 3 0x300
+SET MTCPCFG=C:\NET\MTCP.CFG
+DHCP
+HTGET -o PAGE.HTM http://example.com/
+```
+
+## Scripted and windowless sessions
+
+Without a window, Bare86 can run a program from a script and keep the
+results: useful for tests and for checking a program quickly.
+
+```sh
+bare86 --keys "{until:C:\>}DIR{enter}" --screen
+bare86 --hda work.img --boot --keys "{until:C:\>}cd \DOOM{enter}doom -timedemo demo1{enter}{until:timed}" --wav /dev/null --screen
+```
+
+The `--keys` script types its text as is, and understands:
+
+| Item | Meaning |
+|---|---|
+| `{enter}`, `{esc}`, `{tab}`, `{f1}`, `{up}`, `{alt+f}`, `{ctrl+c}`… | Named keys and combinations |
+| `{wait:MS}` | Pause for MS milliseconds |
+| `{until:TEXT}` | Wait until TEXT appears on the text screen |
+| `{speed:MIPS}`, `{speed:max}` | Change the speed |
+| `{disk}`, `{fda:IMG}` | Next floppy in A:, or a given image |
+| `{cd:IMG}`, `{cd:}` | Change the CD, or eject it |
+| `{mouse:DX,DY,BUTTONS}` | Mouse motion and buttons |
+| `{{` | A literal `{` |
+
+The session ends once the script is typed and the program is waiting for a
+key. `--limit` stops a run that hangs.
+
+## Status and limits
+
+Bare86 is young and under active development. What works is listed above;
+among what does not, yet:
+
+- Linux x86-64 hosts only. Windows (WHPX) and Intel macOS hosts are planned
+  behind the same virtual machine interface; Apple silicon is out of scope.
+- No IPX network for multiplayer games yet.
+- Under FreeDOS, a CD changed while running is not seen by the UDVD2 and
+  SHSUCDX drivers (the built-in DOS sees it).
+- Fonts loaded by programs (code pages, text-mode games that redefine
+  characters) are not shown yet in text mode.
+- Windows 95/98 is the next big step.
+
+The design journal, with the decisions, measurements and the progress of
+each step, is in [docs/JOURNAL.md](docs/JOURNAL.md) (in French).
+
+## License
+
+Bare86 is free software, under the GNU General Public License version 3 or
+later, see `LICENSE`. It includes Nuked-OPL3 (LGPL 2.1 or later) in
+`third_party/`, and the Terminus font (SIL Open Font License 1.1) in
+`fonts/`.
+
+Bare86 is by Nicolas BAUW, developed with [Claude Code](https://claude.com/claude-code).

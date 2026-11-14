@@ -169,7 +169,7 @@ impl Mmio for MmioBus<'_> {
     }
 }
 
-/// Suivi du mappage de la fenêtre A0000 (FAISABILITE, « décision sur la
+/// Suivi du mappage de la fenêtre A0000 (docs/JOURNAL.md, « décision sur la
 /// mémoire vidéo ») : linéaire tout de suite, plan unique après
 /// `MAP_THRESHOLD` accès émulés sans quitter le mode « un plan » (les
 /// changements de plan ne remettent pas le compte à zéro), puis

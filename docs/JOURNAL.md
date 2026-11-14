@@ -1,6 +1,6 @@
-# Bare86 — étude de faisabilité d'un émulateur DOS sans émulation x86
+# Bare86 — journal de conception
 
-*Rédigée le 2026-11-09. Écrite de mémoire, sans recherche web : les détails techniques et les liens sont à vérifier.*
+*Anciennement `FAISABILITE.md` (déplacé et renommé le 2026-11-14) : l'étude de faisabilité du 2026-11-09 ouvre ce journal, suivie de l'architecture, des étapes, de l'avancement et du point de reprise. L'étude initiale a été écrite de mémoire, sans recherche web : ses détails techniques et ses liens sont à vérifier.*
 
 Objectif : un programme dans l'esprit de DOSBox, mais **sans émulation du CPU x86**. Le code DOS s'exécute directement sur le CPU hôte (x86-64 moderne uniquement). Seuls le BIOS, DOS et le matériel PC sont fournis en logiciel.
 
