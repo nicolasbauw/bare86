@@ -218,6 +218,22 @@ browser lists the images of the right type), ejects the CD, sets the speed and
 full screen, takes a screenshot and recalls the shortcuts. Arrows choose,
 Enter confirms, left and right change the speed, Escape closes.
 
+## Game music: FM or General MIDI
+
+DOS games play their music in one of two ways, chosen in their own setup
+program:
+
+- **AdLib or Sound Blaster**: the game drives the card's FM chip itself. This
+  is the sound of the original hardware, and the one that changes with the
+  card (`--sb`) and the chip (`--opl`): OPL2, OPL3, ESS ESFM, Creative CQM.
+- **General MIDI (MPU-401)**: the game sends notes to port 330h. A real PC
+  then needed a separate synthesizer (a Roland Sound Canvas, a wavetable
+  daughterboard); the card's FM chip was not involved. Bare86 plays these
+  notes with a modern FM synthesizer (libADLMIDI), whose timbres can be
+  chosen (`--midi-bank`; default: the FM synthesizer of Windows 95/98).
+
+For the original experience, set the game to Sound Blaster and pick the card.
+
 ## Launcher
 
 `bare86 --launcher ~/games` opens a window listing the games of `~/games`: each
@@ -232,9 +248,11 @@ built-in DOS directly.
 | Enter on "+ New game..." | Choose the game's program (.EXE, .COM, .BAT) in a file browser; the profile goes into the game's directory (the subdirectory of the games directory that holds the program), then the editor opens |
 | Escape | Quit |
 
-The profile editor sets, without typing: the program (chosen in a file
+The profile editor shows a one-line help for the selected setting, and sets,
+without typing: the program (chosen in a file
 browser), real DOS boot and hard disk image, CD and floppy images, sound card,
-FM chip, MIDI music and its instrument bank, speed, memory, network and full
+FM chip, General MIDI synthesizer and its timbres (a short list: Windows
+95/98, Windows 3.x, Doom, Miles, HMI, Apogee), speed, memory, network and full
 screen. Left and right change a value, Enter opens the file browser or toggles,
 Delete clears a setting, Escape leaves without saving. Saving rewrites
 `bare86.conf` in place: comments and options the editor does not handle are

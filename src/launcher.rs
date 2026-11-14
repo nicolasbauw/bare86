@@ -140,7 +140,20 @@ fn choices(f: Field) -> Option<(&'static str, &'static [(Option<&'static str>, &
     Some(match f {
         Field::Sound => ("sb", &[(None, "Sound Blaster 16"), (Some("pro2"), "Sound Blaster Pro 2"), (Some("pro1"), "Sound Blaster Pro 1"), (Some("ess"), "ESS AudioDrive")]),
         Field::Fm => ("opl", &[(None, "celle de la carte"), (Some("opl2"), "OPL2"), (Some("dualopl2"), "deux OPL2"), (Some("opl3"), "OPL3"), (Some("cqm"), "Creative CQM"), (Some("esfm"), "ESS ESFM")]),
-        Field::Midi => ("midi", &[(None, "jouée sur OPL3"), (Some("off"), "coupée")]),
+        Field::Midi => ("midi", &[(None, "synthèse FM"), (Some("off"), "aucun")]),
+        // Choix restreint de timbres parlants (numéros de `--midi-bank list`) ;
+        // une autre valeur écrite à la main reste affichée telle quelle.
+        Field::MidiBank => (
+            "midi-bank",
+            &[
+                (None, "Windows 95/98"),
+                (Some("77"), "Windows 3.x"),
+                (Some("14"), "Doom (DMX, Bobby Prince)"),
+                (Some("0"), "Miles (Origin, Sierra...)"),
+                (Some("2"), "HMI (Descent...)"),
+                (Some("62"), "Apogee (Duke Nukem 3D)"),
+            ],
+        ),
         Field::Speed => ("mips", &[(None, "sans bridage"), (Some("3"), "3 MIPS"), (Some("6"), "6 MIPS"), (Some("12"), "12 MIPS"), (Some("25"), "25 MIPS"), (Some("50"), "50 MIPS"), (Some("100"), "100 MIPS"), (Some("200"), "200 MIPS"), (Some("400"), "400 MIPS")]),
         Field::Memory => ("mem", &[(Some("4"), "4 Mo"), (Some("8"), "8 Mo"), (None, "16 Mo"), (Some("32"), "32 Mo"), (Some("64"), "64 Mo")]),
         _ => return None,
@@ -211,7 +224,18 @@ impl Editor {
     fn value(&self, f: Field) -> String {
         if let Some((key, list)) = choices(f) {
             let cur = self.doc.get(key);
-            return list.iter().find(|(v, _)| v.map(str::to_string) == cur).map_or_else(|| cur.unwrap_or_default(), |(_, l)| l.to_string());
+            if let Some((_, l)) = list.iter().find(|(v, _)| v.map(str::to_string) == cur) {
+                return l.to_string();
+            }
+            // Valeur hors liste (fichier écrit à la main) : telle quelle,
+            // avec le nom de la banque MIDI.
+            let cur = cur.unwrap_or_default();
+            if f == Field::MidiBank {
+                let names = crate::midisynth::bank_names();
+                let name = cur.parse::<usize>().ok().and_then(|n| names.get(n).cloned()).unwrap_or_default();
+                return format!("{cur} {name}");
+            }
+            return cur;
         }
         if let Some(key) = toggle_key(f) {
             return if is_true(self.doc.get(key)) { "oui".into() } else { "non".into() };
@@ -220,11 +244,6 @@ impl Editor {
             return self.doc.get(key).unwrap_or_else(|| "(aucun)".into());
         }
         match f {
-            Field::MidiBank => {
-                let names = crate::midisynth::bank_names();
-                let n = self.doc.get("midi-bank").and_then(|b| b.parse::<usize>().ok()).unwrap_or(crate::midisynth::DEFAULT_BANK as usize);
-                format!("{n} {}", names.get(n).map_or("", String::as_str))
-            }
             _ => String::new(),
         }
     }
@@ -238,14 +257,35 @@ impl Editor {
             Field::Floppy => "Disquette A:",
             Field::Sound => "Carte son",
             Field::Fm => "Puce FM",
-            Field::Midi => "Musique MIDI",
-            Field::MidiBank => "Banque MIDI",
+            Field::Midi => "Synthé General MIDI",
+            Field::MidiBank => "Timbres General MIDI",
             Field::Speed => "Vitesse",
             Field::Memory => "Mémoire",
             Field::Network => "Réseau",
             Field::Fullscreen => "Plein écran",
             Field::Save => "[ Enregistrer ]",
             Field::SaveAndRun => "[ Enregistrer et lancer ]",
+        }
+    }
+
+    /// Aide d'un réglage (ligne du bas de l'éditeur).
+    fn hint(f: Field) -> &'static str {
+        match f {
+            Field::Program => "Programme lancé par le DOS intégré",
+            Field::Boot => "Démarre le disque dur (FreeDOS...) au lieu du DOS intégré",
+            Field::HardDisk => "Image de disque dur pour C:, avec un vrai DOS",
+            Field::Cdrom => "Image .iso ou .cue du CD du jeu (lecteur D:)",
+            Field::Floppy => "Image de disquette pour A:",
+            Field::Sound => "Son numérique et musique FM (réglage Sound Blaster du jeu)",
+            Field::Fm => "Puce FM : « celle de la carte » convient presque toujours",
+            Field::Midi => "Seulement si le jeu est réglé sur General MIDI",
+            Field::MidiBank => "Sonorité du synthé General MIDI (sans matériel d'époque)",
+            Field::Speed => "Bride le processeur pour les jeux trop rapides",
+            Field::Memory => "Mémoire totale de la machine",
+            Field::Network => "Carte réseau NE2000, accès à Internet",
+            Field::Fullscreen => "Démarre en plein écran (Alt+Entrée bascule)",
+            Field::Save => "Écrit bare86.conf dans le dossier du jeu",
+            Field::SaveAndRun => "Écrit bare86.conf et lance le jeu",
         }
     }
 
@@ -260,12 +300,6 @@ impl Editor {
         } else if let Some(key) = toggle_key(f) {
             let on = is_true(self.doc.get(key));
             self.doc.set(key, (!on).then_some("true"));
-        } else if f == Field::MidiBank {
-            let n = crate::midisynth::bank_names().len() as i64;
-            let cur = self.doc.get("midi-bank").and_then(|b| b.parse::<i64>().ok()).unwrap_or(i64::from(crate::midisynth::DEFAULT_BANK));
-            let next = (cur + if forward { 1 } else { -1 }).rem_euclid(n);
-            let v = next.to_string();
-            self.doc.set("midi-bank", (next != i64::from(crate::midisynth::DEFAULT_BANK)).then_some(v.as_str()));
         }
     }
 
@@ -384,8 +418,6 @@ impl Ui {
                             ed.doc.set(k, None);
                         } else if let Some(k) = toggle_key(f) {
                             ed.doc.set(k, None);
-                        } else if f == Field::MidiBank {
-                            ed.doc.set("midi-bank", None);
                         }
                     }
                     Key::Enter => match f {
@@ -456,6 +488,7 @@ impl Ui {
                     };
                     s.item(2 + i, &text, i == ed.sel);
                 }
+                s.text(ROWS - 3, 3, Editor::hint(FIELDS[ed.sel]), 0x1B);
                 s.footer("←→ changer  Entrée choisir  Suppr effacer  Échap annuler");
             }
         }
@@ -588,5 +621,23 @@ mod tests {
         // Programme posé à la racine, ou ailleurs : son propre dossier.
         assert_eq!(game_dir(root, Path::new("/jeux/JEU.EXE")), Path::new("/jeux"));
         assert_eq!(game_dir(root, Path::new("/autre/x/JEU.EXE")), Path::new("/autre/x"));
+    }
+
+    #[test]
+    fn midi_timbres_are_a_short_list() {
+        let dir = std::env::temp_dir().join(format!("bare86-timbres-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(PROFILE), "midi-bank = 72\n").unwrap();
+        let mut ed = Editor::open(dir.clone());
+        // Valeur écrite à la main : gardée, affichée avec le nom de la banque.
+        assert!(ed.value(Field::MidiBank).starts_with("72 WOPL (DMXOPL3"), "{}", ed.value(Field::MidiBank));
+        ed.doc.set("midi-bank", None);
+        assert_eq!(ed.value(Field::MidiBank), "Windows 95/98");
+        ed.step(Field::MidiBank, true);
+        assert_eq!((ed.value(Field::MidiBank), ed.doc.get("midi-bank")), ("Windows 3.x".to_string(), Some("77".to_string())));
+        ed.step(Field::MidiBank, false);
+        ed.step(Field::MidiBank, false);
+        assert_eq!(ed.doc.get("midi-bank").as_deref(), Some("62"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
