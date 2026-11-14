@@ -118,11 +118,13 @@ pub struct Config {
     pub sb_pro: bool,
     /// Enregistrement de la musique MIDI (MPU-401) en fichier MIDI standard.
     pub midi_out: Option<std::path::PathBuf>,
+    /// Banque du synthétiseur General MIDI sur OPL3 ; `None` : pas de synthèse.
+    pub midi_bank: Option<u32>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, midi_out: None }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -314,6 +316,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Tailles de la mémoire (octets) et de l'EMS (Ko), pour un redémarrage.
     mem_size: usize,
     ems_kb: usize,
+    /// Synthétiseur General MIDI sur OPL3 (derrière la MPU-401).
+    midi: Option<crate::midisynth::SharedSynth>,
     /// Disque compact et lecture de ses pistes audio.
     cd: Option<(crate::cdrom::SharedDisc, crate::cdrom::SharedPlayer)>,
     /// Canal IDE secondaire et son lecteur de CD.
@@ -399,11 +403,20 @@ impl<B: Backend> Pc<B> {
         let sb = Rc::new(RefCell::new(crate::sb16::Sb16::new()));
         sb.borrow_mut().pro = cfg.sb_pro;
         // Interface MIDI MPU-401 (UART), comme sur la SB16.
-        let sink: Option<Box<dyn crate::mpu401::MidiSink>> = match &cfg.midi_out {
-            Some(p) => Some(Box::new(crate::mpu401::MidiFile::create(p).map_err(|e| format!("{} : {e}", p.display()))?)),
+        // Sorties : synthétiseur General MIDI sur OPL3, enregistrement.
+        let mut sinks: Vec<Box<dyn crate::mpu401::MidiSink>> = Vec::new();
+        let midi = match cfg.midi_bank {
+            Some(bank) => {
+                let synth = crate::midisynth::Synth::new(crate::audio::RATE, bank)?.shared();
+                sinks.push(Box::new(crate::midisynth::SynthSink(synth.clone())));
+                Some(synth)
+            }
             None => None,
         };
-        let mpu = crate::mpu401::Mpu401::new(sink).shared();
+        if let Some(p) = &cfg.midi_out {
+            sinks.push(Box::new(crate::mpu401::MidiFile::create(p).map_err(|e| format!("{} : {e}", p.display()))?));
+        }
+        let mpu = crate::mpu401::Mpu401::new(sinks).shared();
         io.map(crate::mpu401::BASE..=crate::mpu401::BASE + 1, Box::new(crate::mpu401::MpuPorts(mpu)));
         // DSP et mixeur ; 228h–229h reviennent à la FM.
         io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, Box::new(crate::sb16::Sb16Ports(sb.clone())));
@@ -429,6 +442,7 @@ impl<B: Backend> Pc<B> {
             None => None,
         };
         let mut pc = Self {
+            midi,
             cd,
             ide,
             nic,
@@ -727,8 +741,17 @@ impl<B: Backend> Pc<B> {
             self.vm.set_single_step(true)?;
         }
         let mut cd = self.cd.as_ref().map(|(_, p)| p.borrow_mut());
-        self.mixer.advance(now, &mut sb, &mut self.opl.borrow_mut(), &mut self.dma.borrow_mut(), self.vm.mem(), speaker, cd.as_deref_mut());
-        drop(cd);
+        let mut midi = self.midi.as_ref().map(|m| m.borrow_mut());
+        let mut sources: Vec<&mut dyn crate::audio::AudioSource> = Vec::new();
+        if let Some(c) = cd.as_deref_mut() {
+            sources.push(c);
+        }
+        if let Some(m) = midi.as_deref_mut() {
+            sources.push(m);
+        }
+        self.mixer.advance(now, &mut sb, &mut self.opl.borrow_mut(), &mut self.dma.borrow_mut(), self.vm.mem(), speaker, &mut sources);
+        drop(sources);
+        drop((cd, midi));
         if sb.take_irq() {
             self.pic.borrow_mut().raise(crate::sb16::IRQ);
         }

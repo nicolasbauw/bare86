@@ -15,6 +15,14 @@ use crate::opl::{FmSynth, Opl, Write};
 use crate::sb16::Sb16;
 
 pub const RATE: u32 = 48_000;
+
+/// Source ajoutée au mélange (pistes audio du CD, synthétiseur MIDI).
+pub trait AudioSource {
+    /// Ajoute `out.len() / 2` trames stéréo entrelacées à `rate` Hz.
+    fn render(&mut self, rate: u32, out: &mut [f32]);
+    /// Avance de `frames` trames sans les rendre (retard du mixeur rattrapé).
+    fn skip(&mut self, _frames: u64, _rate: u32) {}
+}
 /// Au-delà de ce retard (pause, débogueur), le temps perdu est sauté.
 const MAX_LAG: Duration = Duration::from_millis(200);
 /// Rendu par tranches d'au moins 1 ms, blocs confiés au thread audio par
@@ -85,7 +93,7 @@ impl Mixer {
     /// Produit les trames dues à `now`.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
-    pub fn advance(&mut self, now: Instant, sb: &mut Sb16, opl: &mut Opl, dma: &mut Dma, mem: &GuestMem, speaker: Option<f64>, cd: Option<&mut crate::cdrom::Player>) {
+    pub fn advance(&mut self, now: Instant, sb: &mut Sb16, opl: &mut Opl, dma: &mut Dma, mem: &GuestMem, speaker: Option<f64>, sources: &mut [&mut dyn AudioSource]) {
         if now < self.next_due {
             return;
         }
@@ -97,12 +105,11 @@ impl Mixer {
             return;
         }
         let max = MAX_LAG.as_millis() as u64 * u64::from(RATE) / 1000;
-        let mut cd = cd;
         if lag > max {
             self.flush(sb, opl);
             // Le disque, lui, continue de tourner pendant le temps sauté.
-            if let Some(cd) = cd.as_deref_mut() {
-                cd.skip(lag - max / 4, RATE);
+            for s in sources.iter_mut() {
+                s.skip(lag - max / 4, RATE);
             }
             self.produced = target - max / 4;
         }
@@ -116,8 +123,8 @@ impl Mixer {
         self.buf.resize(at + n * 2, 0.0);
         let out = &mut self.buf[at..];
         sb.render(dma, mem, RATE, out);
-        if let Some(cd) = cd {
-            cd.render(RATE, out);
+        for s in sources.iter_mut() {
+            s.render(RATE, out);
         }
         // Haut-parleur : onde carrée ; au-delà de 20 kHz (modulation de
         // largeur d'impulsion), silence.

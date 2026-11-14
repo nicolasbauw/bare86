@@ -1,0 +1,3 @@
+libADLMIDI (https://github.com/Wohlstand/libADLMIDI), commit 7e6e045d4e3f2614963a545e4bdfc95677e32673 (2026-11-09).
+Sous-ensemble vendu : synthèse MIDI temps réel, émulateur Nuked OPL3, banques embarquées (sans séquenceur de fichiers ni autres émulateurs).
+Licences : voir LICENSE.txt, LICENSE.LGPL-2.1.txt, src/chips/LICENSE.txt, src/chips/nuked/LICENSE, src/*/LICENSE*. Les banques FM embarquées ont leurs propres conditions (README du projet d origine).

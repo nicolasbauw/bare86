@@ -218,6 +218,16 @@ impl Disc {
     }
 }
 
+impl crate::audio::AudioSource for Player {
+    fn render(&mut self, rate: u32, out: &mut [f32]) {
+        self.render_into(rate, out);
+    }
+
+    fn skip(&mut self, frames: u64, rate: u32) {
+        self.skip_frames(frames, rate);
+    }
+}
+
 /// État de la lecture audio (codes de READ SUB-CHANNEL).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioState {
@@ -327,7 +337,7 @@ impl Player {
     }
 
     /// Ajoute la musique à `out` (trames stéréo entrelacées à `rate` Hz).
-    pub fn render(&mut self, rate: u32, out: &mut [f32]) {
+    pub fn render_into(&mut self, rate: u32, out: &mut [f32]) {
         if self.state != AudioState::Playing {
             return;
         }
@@ -350,7 +360,7 @@ impl Player {
 
     /// Avance de `frames` trames de sortie sans les rendre (retard du
     /// mixeur rattrapé : la musique continue pendant le temps sauté).
-    pub fn skip(&mut self, frames: u64, rate: u32) {
+    pub fn skip_frames(&mut self, frames: u64, rate: u32) {
         if self.state != AudioState::Playing {
             return;
         }
@@ -819,7 +829,7 @@ pub(crate) mod tests {
         // Piste 2, 5 secteurs (2940 trames à 44,1 kHz ≈ 3200 à 48 kHz).
         assert_eq!(d.command(&cmd(&[0x45, 0, 0, 0, 0, 190, 0, 0, 5])), Ok(Reply::Done));
         let mut out = vec![0f32; 2 * 1000];
-        d.player.borrow_mut().render(48_000, &mut out);
+        d.player.borrow_mut().render_into(48_000, &mut out);
         assert!((out[1000] - 8000.0 / 32768.0).abs() < 1e-3 && (out[1001] + 8000.0 / 32768.0).abs() < 1e-3);
         let sub = cmd(&[0x42, 0, 0x40, 1, 0, 0, 0, 0, 16]);
         let Ok(Reply::DataIn(q)) = d.command(&sub) else { panic!() };
@@ -827,26 +837,26 @@ pub(crate) mod tests {
         // Pause : rien n'est ajouté.
         d.command(&cmd(&[0x4B, 0, 0, 0, 0, 0, 0, 0, 0])).unwrap();
         let mut silent = vec![0f32; 200];
-        d.player.borrow_mut().render(48_000, &mut silent);
+        d.player.borrow_mut().render_into(48_000, &mut silent);
         assert!(silent.iter().all(|&x| x == 0.0));
         let Ok(Reply::DataIn(q)) = d.command(&sub) else { panic!() };
         assert_eq!(q[1], 0x12);
         // Reprise jusqu'au bout : terminé (13h) une fois, puis aucun état.
         d.command(&cmd(&[0x4B, 0, 0, 0, 0, 0, 0, 0, 1])).unwrap();
         let mut rest = vec![0f32; 2 * 4000];
-        d.player.borrow_mut().render(48_000, &mut rest);
+        d.player.borrow_mut().render_into(48_000, &mut rest);
         let Ok(Reply::DataIn(q)) = d.command(&sub) else { panic!() };
         assert_eq!(q[1], 0x13);
         let Ok(Reply::DataIn(q)) = d.command(&sub) else { panic!() };
         assert_eq!(q[1], 0x15);
         // Retard du mixeur rattrapé : 1 s sautée = 75 secteurs de plus.
         d.command(&cmd(&[0x45, 0, 0, 0, 0, 190, 0, 0, 100])).unwrap();
-        d.player.borrow_mut().skip(48_000, 48_000);
+        d.player.borrow_mut().skip_frames(48_000, 48_000);
         assert_eq!(d.player.borrow().pos, 265);
         // PLAY AUDIO MSF : piste 3 (00:06:00 = 450 − 150 = 300).
         d.command(&cmd(&[0x47, 0, 0, 0, 6, 0, 0, 6, 50])).unwrap();
         let mut out = vec![0f32; 200];
-        d.player.borrow_mut().render(48_000, &mut out);
+        d.player.borrow_mut().render_into(48_000, &mut out);
         assert!((out[100] - 16000.0 / 32768.0).abs() < 1e-3);
     }
 

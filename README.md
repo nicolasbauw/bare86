@@ -47,8 +47,10 @@ difference is under the hood, and shows with demanding late-90s games.
   IRQ 5, DMA 1 and 5, with the `BLASTER` variable set, or a Sound Blaster Pro
   (`--sb pro`); OPL3 FM synthesis by
   [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3); PC speaker; MPU-401
-  MIDI interface at 330h (UART mode), whose General MIDI music can be recorded
-  to a standard MIDI file (`--midi-out`).
+  MIDI interface at 330h (UART mode), whose General MIDI music is played on
+  OPL3 FM chips by [libADLMIDI](https://github.com/Wohlstand/libADLMIDI), with
+  79 instrument banks (default: the Windows 9x FM synthesizer), and can be
+  recorded to a standard MIDI file (`--midi-out`).
 - **Input.** Keyboard by physical key position (the DOS sees a US keyboard),
   mouse (INT 33h driver under the built-in DOS, PS/2 under a real DOS),
   joystick or game controller on the game port.
@@ -135,6 +137,8 @@ sound need the window (or `--shot` and `--wav`).
 | `--mips N` | Throttle to N million instructions per second (default: full speed) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
 | `--sb pro\|16` | Sound card: Sound Blaster 16 (default) or Sound Blaster Pro (DSP 3.02, no 16-bit DMA) |
+| `--midi opl3\|off` | General MIDI music played on OPL3 FM chips (default), or not played |
+| `--midi-bank N` | FM instrument bank (default 58, the Windows 9x FM synthesizer; 14 is the bank of Doom); `--midi-bank list` prints them |
 | `--midi-out F.mid` | Record the MIDI music sent to the MPU-401 to a standard MIDI file (valid at any time, even if the session stops abruptly) |
 
 **Display and sound**
@@ -310,8 +314,6 @@ among what does not, yet:
 - Linux x86-64 hosts only. Windows (WHPX) and Intel macOS hosts are planned
   behind the same virtual machine interface; Apple silicon is out of scope.
 - No IPX network for multiplayer games yet.
-- MIDI music is recorded, not played yet: a General MIDI synthesizer on the
-  OPL3 is planned.
 - Under FreeDOS, a CD changed while running is not seen by the UDVD2 and
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine
@@ -324,8 +326,9 @@ each step, is in [docs/JOURNAL.md](docs/JOURNAL.md) (in French).
 ## License
 
 Bare86 is free software, under the GNU General Public License version 3 or
-later, see `LICENSE`. It includes Nuked-OPL3 (LGPL 2.1 or later) in
-`third_party/`, and the Terminus font (SIL Open Font License 1.1) in
-`fonts/`.
+later, see `LICENSE`. It includes in `third_party/` Nuked-OPL3 (LGPL 2.1 or
+later) and a subset of libADLMIDI (LGPL 2.1 or later, GPL 3, MIT: see its
+license files; its embedded FM banks carry their own terms), and the Terminus
+font (SIL Open Font License 1.1) in `fonts/`.
 
 Bare86 is by Nicolas BAUW, developed with [Claude Code](https://claude.com/claude-code).

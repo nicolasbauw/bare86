@@ -5,9 +5,9 @@
 //! la musique General MIDI du programme. Pas de mode intelligent ni d'IRQ
 //! (les jeux s'en passent en UART).
 //!
-//! Sortie : pour l'instant un enregistrement en fichier MIDI standard
-//! (`--midi-out`), lisible par n'importe quel lecteur ; un synthétiseur
-//! General MIDI sur OPL3 viendra s'y brancher.
+//! Sorties (`MidiSink`) : le synthétiseur General MIDI sur OPL3
+//! (`midisynth.rs`) et, sur demande, un enregistrement en fichier MIDI
+//! standard (`--midi-out`), lisible par n'importe quel lecteur.
 
 use crate::io::IoDevice;
 use std::cell::RefCell;
@@ -24,6 +24,8 @@ const ACK: u8 = 0xFE;
 /// Messages MIDI complets, avec l'instant de leur dernier octet.
 pub trait MidiSink {
     fn message(&mut self, at: Instant, msg: &[u8]);
+    /// Réinitialisation de l'interface (commande FFh) : notes coupées.
+    fn reset(&mut self) {}
 }
 
 /// Découpe le flux d'octets en messages (statut courant, SysEx).
@@ -158,13 +160,14 @@ pub struct Mpu401 {
     uart: bool,
     out: VecDeque<u8>,
     parser: Parser,
-    sink: Option<Box<dyn MidiSink>>,
+    sinks: Vec<Box<dyn MidiSink>>,
     pub bytes: u64,
 }
 
 impl Mpu401 {
-    pub fn new(sink: Option<Box<dyn MidiSink>>) -> Self {
-        Self { uart: false, out: VecDeque::new(), parser: Parser::default(), sink, bytes: 0 }
+    /// Sorties : synthétiseur, enregistrement… (aucune : octets perdus).
+    pub fn new(sinks: Vec<Box<dyn MidiSink>>) -> Self {
+        Self { uart: false, out: VecDeque::new(), parser: Parser::default(), sinks, bytes: 0 }
     }
 
     pub fn shared(self) -> Rc<RefCell<Self>> {
@@ -182,10 +185,11 @@ impl Mpu401 {
     pub fn write_port(&mut self, port: u16, v: u8) {
         if port == BASE {
             self.bytes += 1;
-            if let Some(msg) = self.parser.feed(v)
-                && let Some(sink) = &mut self.sink
-            {
-                sink.message(Instant::now(), &msg);
+            if let Some(msg) = self.parser.feed(v) {
+                let now = Instant::now();
+                for s in &mut self.sinks {
+                    s.message(now, &msg);
+                }
             }
             return;
         }
@@ -193,6 +197,9 @@ impl Mpu401 {
             0xFF => {
                 self.uart = false;
                 self.parser = Parser::default();
+                for s in &mut self.sinks {
+                    s.reset();
+                }
                 self.out.clear();
                 self.out.push_back(ACK);
             }
@@ -236,7 +243,7 @@ mod tests {
     #[test]
     fn uart_handshake_and_messages() {
         let log = Log::default();
-        let mut m = Mpu401::new(Some(Box::new(log.clone())));
+        let mut m = Mpu401::new(vec![Box::new(log.clone())]);
         assert_eq!(m.read_port(BASE + 1), 0x80);
         m.write_port(BASE + 1, 0xFF);
         assert_eq!(m.read_port(BASE + 1), 0x00);

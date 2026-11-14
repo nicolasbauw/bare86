@@ -29,6 +29,7 @@ mod machine;
 mod mem;
 mod menu;
 mod mouse;
+mod midisynth;
 mod mpu401;
 mod ne2000;
 mod net;
@@ -75,7 +76,11 @@ usage: bare86 [options] [program [arguments…]]
   --net-fwd tcp:HOST:GUEST   forward a host port (127.0.0.1) to the
                  guest (also udp:…; implies --net; repeatable)
   --sb pro|16    sound card: Sound Blaster 16 (default) or Pro (DSP 3.02)
-  --midi-out F.mid   record the MIDI music sent to the MPU-401 (330h)
+  --midi opl3|off   General MIDI music (MPU-401, 330h) played on OPL3 FM
+                 chips (default) or not played
+  --midi-bank N  FM instrument bank (default 58: Windows 9x FM synth);
+                 --midi-bank list prints the banks
+  --midi-out F.mid   record the MIDI music sent to the MPU-401
   --mips N       throttle to N million instructions per second
   --mem MB       total memory in MB (default 16)
   --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
@@ -216,6 +221,33 @@ fn main() -> ExitCode {
                 Some("16") => cfg.sb_pro = false,
                 _ => {
                     eprintln!("--sb : pro ou 16 attendu");
+                    return ExitCode::from(2);
+                }
+            },
+            "--midi" => match args.next().as_deref() {
+                Some("opl3") => cfg.midi_bank = cfg.midi_bank.or(Some(midisynth::DEFAULT_BANK)),
+                Some("off") => cfg.midi_bank = None,
+                _ => {
+                    eprintln!("--midi : opl3 ou off attendu");
+                    return ExitCode::from(2);
+                }
+            },
+            "--midi-bank" => match args.next().as_deref() {
+                Some("list") => {
+                    for (i, n) in midisynth::bank_names().iter().enumerate() {
+                        println!("{i:3}  {n}");
+                    }
+                    return ExitCode::SUCCESS;
+                }
+                Some(n) => match n.parse() {
+                    Ok(b) => cfg.midi_bank = Some(b),
+                    Err(_) => {
+                        eprintln!("--midi-bank : numéro ou « list » attendu");
+                        return ExitCode::from(2);
+                    }
+                },
+                None => {
+                    eprintln!("--midi-bank : numéro ou « list » attendu");
                     return ExitCode::from(2);
                 }
             },
