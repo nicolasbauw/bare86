@@ -32,17 +32,24 @@ use process::{Process, PspInit, psp, psp_addr};
 
 pub use shell::Action;
 
-/// Segment des données du DOS (List of Lists, drapeau InDOS).
+/// Segment des données du DOS : zone « swappable » (SDA) en tête, dont
+/// l'octet 1 est le drapeau InDOS, puis la List of Lists.
 const DOS_SEG: u16 = 0x0060;
-const INDOS_OFF: u16 = 0x0001;
-const LOL_OFF: u16 = 0x0020;
+const SDA_OFF: u16 = 0x0000;
+const INDOS_OFF: u16 = SDA_OFF + 0x01;
+/// SDA : DTA courante (dword), PSP courant (word) ; taille annoncée par
+/// INT 21h AX=5D06h (CX : toujours sauvegardée, DX : pendant un appel).
+const SDA_DTA: u16 = SDA_OFF + 0x0C;
+const SDA_PSP: u16 = SDA_OFF + 0x10;
+const SDA_SIZE: u16 = 0x18;
+const LOL_OFF: u16 = 0x0080;
 const NUL_DEVICE_OFF: u16 = LOL_OFF + 0x22;
 
 /// Environnement maître du shell racine.
 const MASTER_ENV_SB16: &[u8] = b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0PROMPT=$P$G\0BLASTER=A220 I5 D1 H5 P330 T6\0";
 /// Sound Blaster Pro (`--sb pro`) : pas de DMA 16 bits, type 4.
 const MASTER_ENV_PRO: &[u8] = b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0PROMPT=$P$G\0BLASTER=A220 I5 D1 T4\0";
-const MASTER_ENV_PARAS: u16 = 0x20;
+pub(super) const MASTER_ENV_PARAS: u16 = 0x20;
 
 const ERR_INVALID_FUNCTION: u16 = 0x01;
 const ERR_CURRENT_DIR: u16 = 0x10;
@@ -244,6 +251,16 @@ impl Dos {
         self.procs = vec![Process { psp: root, parent_cpu: None }];
         self.current_psp = root;
         self.dta = (root, 0x80);
+        self.sync_sda(mem);
+    }
+
+    /// Recopie le PSP et la DTA courants dans la SDA, où les lisent les
+    /// hôtes DPMI (HDPMI, de HX, y prend le PSP pour convertir son
+    /// environnement en sélecteur).
+    fn sync_sda(&self, mem: &GuestMem) {
+        mem.write_u16(lin(DOS_SEG, SDA_PSP), self.current_psp);
+        mem.write_u16(lin(DOS_SEG, SDA_DTA), self.dta.1);
+        mem.write_u16(lin(DOS_SEG, SDA_DTA + 2), self.dta.0);
     }
 
     /// Lance un programme du disque depuis l'hôte (sa fin termine la session).
@@ -324,6 +341,7 @@ impl Dos {
         self.procs.push(Process { psp: seg, parent_cpu });
         self.current_psp = seg;
         self.dta = (seg, 0x80);
+        self.sync_sda(mem);
         Ok(cpu)
     }
 
@@ -347,6 +365,7 @@ impl Dos {
         let parent = self.procs.last().expect("parent").psp;
         self.current_psp = parent;
         self.dta = (parent, 0x80);
+        self.sync_sda(mem);
         match p.parent_cpu {
             Some(mut parent_cpu) => {
                 parent_cpu.seg_dirty = true;
@@ -360,6 +379,12 @@ impl Dos {
 
     /// Vecteurs servis par le DOS ; `None` : pas une interruption du DOS.
     pub fn call(&mut self, vector: u8, cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Option<Flow>> {
+        let flow = self.call_inner(vector, cpu, mem, host);
+        self.sync_sda(mem);
+        flow
+    }
+
+    fn call_inner(&mut self, vector: u8, cpu: &mut Cpu, mem: &GuestMem, host: &mut Host) -> Result<Option<Flow>> {
         let out = match vector {
             0x20 => self.terminate(cpu, mem, 0, 0),
             0x21 => self.int21(cpu, mem, host)?,
@@ -1139,6 +1164,45 @@ impl Dos {
                 Out::Keep
             }
             0x5A => self.create_temp(cpu, mem),
+            // Créer un PSP enfant en DX (bloc déjà réservé par l'appelant),
+            // fin de mémoire SI ; il devient le PSP courant. Handles hérités
+            // comme par EXEC, environnement partagé avec le parent.
+            0x55 => {
+                let parent = self.current_psp;
+                let mut jft = [handles::UNUSED; process::JFT_SIZE];
+                for (h, idx) in handles::all(mem, parent) {
+                    let inherit = self.sft.get(idx).is_some_and(|e| e.mode & 0x80 == 0);
+                    if usize::from(h) < jft.len() && inherit {
+                        jft[usize::from(h)] = idx;
+                        self.sft.add_ref(idx);
+                    }
+                }
+                let init = PspInit {
+                    parent,
+                    env: mem.read_u16(psp_addr(parent, psp::ENV)),
+                    top: cpu.w(SI),
+                    jft,
+                    tail: &[],
+                    fcb1: process::BLANK_FCB,
+                    fcb2: process::BLANK_FCB,
+                };
+                process::build_psp(mem, dx, &init);
+                self.current_psp = dx;
+                Out::Keep
+            }
+            // Adresse de la SDA (DS:SI), tailles en CX et DX.
+            0x5D if al == 0x06 => {
+                cpu.set_sreg(DS, DOS_SEG);
+                cpu.set_w(SI, SDA_OFF);
+                cpu.set_w(CX, SDA_SIZE);
+                cpu.set_w(DX, SDA_SIZE);
+                Out::Ok
+            }
+            // Erreur étendue fixée par l'appelant (DS:DX → AX) : seul le code est gardé.
+            0x5D if al == 0x0A => {
+                self.last_error = mem.read_u16(lin(ds, dx));
+                Out::Ok
+            }
             0x60 => {
                 let path = read_asciiz(mem, lin(ds, cpu.w(SI)));
                 match self.drives.split(&path) {

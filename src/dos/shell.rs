@@ -133,18 +133,28 @@ impl Dos {
                 out(b"\r\n");
             }
             _ if eq(cmd, "SET") && arg.is_empty() => {
-                let env = mem.read_u16(psp_addr(self.procs[0].psp, psp::ENV));
-                let mut at = usize::from(env) << 4;
-                loop {
-                    let var = super::read_asciiz(mem, at);
-                    if var.is_empty() {
-                        break;
-                    }
-                    at += var.len() + 1;
+                for var in self.master_vars(mem) {
                     out(&var);
                     out(b"\r\n");
                 }
             }
+            // SET NOM=VALEUR : nom en majuscules, valeur telle quelle ; une
+            // valeur vide retire la variable.
+            _ if eq(cmd, "SET") => match arg.iter().position(|&c| c == b'=') {
+                Some(i) if i > 0 => {
+                    let name = arg[..i].trim_ascii().to_ascii_uppercase();
+                    let value = &arg[i + 1..];
+                    let mut vars: Vec<Vec<u8>> =
+                        self.master_vars(mem).into_iter().filter(|v| !v.starts_with(&[&name[..], b"="].concat())).collect();
+                    if !value.is_empty() {
+                        vars.push([&name[..], b"=", value].concat());
+                    }
+                    if !self.write_master_vars(mem, &vars) {
+                        out(b"Espace d'environnement insuffisant\r\n");
+                    }
+                }
+                _ => out(b"Syntaxe incorrecte\r\n"),
+            },
             _ if eq(cmd, "CD") || eq(cmd, "CHDIR") => {
                 if arg.is_empty() {
                     let d = self.drives.current;
@@ -200,7 +210,7 @@ impl Dos {
                 // Programme : tout le premier mot, chemin compris (« C:\JEU\X.EXE »).
                 let end = line.iter().position(|&c| c == b' ' || c == b'\t').unwrap_or(line.len());
                 let (word, args) = line.split_at(end);
-                return Ok(match self.find_program(word) {
+                return Ok(match self.find_program(word, mem) {
                     Some(path) => Action::Run(path, args.to_vec()),
                     None => {
                         out(BAD_COMMAND);
@@ -212,22 +222,57 @@ impl Dos {
         Ok(Action::Continue)
     }
 
-    /// Programme à lancer : dans le répertoire courant, puis à la racine de
-    /// C: (le PATH maître) ; extensions .COM puis .EXE.
-    fn find_program(&self, name: &[u8]) -> Option<Vec<u8>> {
+    /// Variables de l'environnement maître (celui du shell, hérité par les
+    /// programmes qu'il lance).
+    fn master_vars(&self, mem: &GuestMem) -> Vec<Vec<u8>> {
+        let env = mem.read_u16(psp_addr(self.procs[0].psp, psp::ENV));
+        let mut at = usize::from(env) << 4;
+        let mut vars = Vec::new();
+        loop {
+            let var = super::read_asciiz(mem, at);
+            if var.is_empty() {
+                break;
+            }
+            at += var.len() + 1;
+            vars.push(var);
+        }
+        vars
+    }
+
+    /// Réécrit l'environnement maître ; faux s'il ne tient pas dans son bloc.
+    fn write_master_vars(&self, mem: &GuestMem, vars: &[Vec<u8>]) -> bool {
+        let mut block: Vec<u8> = vars.iter().flat_map(|v| v.iter().copied().chain([0])).collect();
+        block.push(0);
+        if block.len() > usize::from(super::MASTER_ENV_PARAS) * 16 {
+            return false;
+        }
+        let env = mem.read_u16(psp_addr(self.procs[0].psp, psp::ENV));
+        let at = usize::from(env) << 4;
+        mem.fill(at, usize::from(super::MASTER_ENV_PARAS) * 16, 0);
+        mem.write(at, &block);
+        true
+    }
+
+    /// Programme à lancer : dans le répertoire courant, puis dans les
+    /// répertoires du PATH maître ; extensions .COM puis .EXE.
+    fn find_program(&self, name: &[u8], mem: &GuestMem) -> Option<Vec<u8>> {
         let has_ext = name.iter().rposition(|&c| c == b'.').is_some_and(|i| !name[i..].contains(&b'\\'));
         let candidates: Vec<Vec<u8>> = if has_ext {
             vec![name.to_vec()]
         } else {
             [&b".COM"[..], b".EXE"].iter().map(|e| [name, e].concat()).collect()
         };
-        let dirs: [&[u8]; 2] = [b"", b"C:\\"];
-        for dir in dirs {
+        let path = self.master_vars(mem).into_iter().find_map(|v| v.strip_prefix(b"PATH=").map(<[u8]>::to_vec)).unwrap_or_default();
+        let mut dirs: Vec<Vec<u8>> = vec![Vec::new()];
+        for d in path.split(|&c| c == b';').map(<[u8]>::trim_ascii).filter(|d| !d.is_empty()) {
+            dirs.push(if d.ends_with(b"\\") { d.to_vec() } else { [d, b"\\"].concat() });
+        }
+        for dir in &dirs {
             if !dir.is_empty() && name.contains(&b'\\') {
                 break;
             }
             for c in &candidates {
-                let path = [dir, c].concat();
+                let path = [&dir[..], c].concat();
                 if let Ok(Target::Path { exists: true, host, dos }) = self.drives.resolve(&path)
                     && vfs::is_file(&host)
                 {
