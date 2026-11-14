@@ -111,7 +111,8 @@ usage: bare86 [options] [program [arguments…]]
                  Ctrl+Alt+- slower, Ctrl+Alt++ faster
   --menu-key L   letter of the menu shortcut (Ctrl+Alt+L, default M)
   --launcher [DIR]  list the games of DIR (default: current directory),
-                 each a subdirectory with a bare86.conf, and run the chosen one
+                 each a subdirectory with a bare86.conf, run the chosen one,
+                 create or edit their profiles
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
@@ -145,11 +146,9 @@ fn main() -> ExitCode {
     // Lanceur, seulement sur demande : le profil choisi devient
     // `--config PROFIL --window`, le reste de la ligne de commande est gardé.
     if let Some(root) = launcher::root_of(&cli) {
-        let profiles = launcher::scan(&root);
-        let lines: Vec<String> = profiles.iter().map(launcher::line).collect();
-        let empty = format!("Aucun jeu : pas de sous-répertoire avec un {} dans {}", launcher::PROFILE, root.display());
-        match sdl::launcher("Bare86", &lines, &empty) {
-            Ok(Some(i)) => cli = launcher::command_line(&cli, &profiles[i].conf),
+        let mut ui = launcher::Ui::new(root);
+        match sdl::launcher(&mut ui) {
+            Ok(Some(conf)) => cli = launcher::command_line(&cli, &conf),
             Ok(None) => return ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("lanceur : {e}");

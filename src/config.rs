@@ -65,6 +65,72 @@ pub fn parse(text: &str, dir: &Path) -> Result<Config, String> {
     Ok(c)
 }
 
+/// Fichier de configuration modifiable (lanceur) : les lignes sont gardées
+/// telles quelles (commentaires, options non gérées) ; `set` remplace,
+/// ajoute ou retire une option.
+pub struct Document {
+    lines: Vec<String>,
+}
+
+/// Clé d'une ligne « option = valeur » (sans « -- », en minuscules).
+fn line_key(line: &str) -> Option<String> {
+    let body = line.split(['#', ';']).next().unwrap_or("");
+    let (k, _) = body.split_once('=')?;
+    Some(k.trim().trim_start_matches("--").to_ascii_lowercase())
+}
+
+impl Document {
+    pub fn parse(text: &str) -> Self {
+        Self { lines: text.lines().map(str::to_string).collect() }
+    }
+
+    /// Fichier lu, ou document vide s'il n'existe pas encore.
+    pub fn load(path: &Path) -> Self {
+        Self::parse(&std::fs::read_to_string(path).unwrap_or_default())
+    }
+
+    /// Valeur de l'option (la dernière l'emporte, comme à la lecture).
+    pub fn get(&self, key: &str) -> Option<String> {
+        self.lines.iter().rev().find(|l| line_key(l).as_deref() == Some(key)).map(|l| {
+            let body = l.split(['#', ';']).next().unwrap_or("");
+            body.split_once('=').map(|(_, v)| v.trim().to_string()).unwrap_or_default()
+        })
+    }
+
+    /// Option posée (en place de la première occurrence, les autres
+    /// retirées), ou retirée (`None`).
+    pub fn set(&mut self, key: &str, value: Option<&str>) {
+        let mut first = None;
+        let mut i = 0;
+        while i < self.lines.len() {
+            if line_key(&self.lines[i]).as_deref() == Some(key) {
+                if first.is_none() {
+                    first = Some(i);
+                    i += 1;
+                } else {
+                    self.lines.remove(i);
+                }
+            } else {
+                i += 1;
+            }
+        }
+        match (first, value) {
+            (Some(i), Some(v)) => self.lines[i] = format!("{key} = {v}"),
+            (Some(i), None) => {
+                self.lines.remove(i);
+            }
+            (None, Some(v)) => self.lines.push(format!("{key} = {v}")),
+            (None, None) => {}
+        }
+    }
+
+    pub fn text(&self) -> String {
+        let mut t = self.lines.join("\n");
+        t.push('\n');
+        t
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +143,19 @@ mod tests {
         assert_eq!(c.program.as_deref(), Some("/jeux/doom/c/DOOM.EXE"));
         assert_eq!(c.args.as_deref(), Some("-nosound"));
         assert!(parse("mips 50", Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn document_keeps_comments_and_unknown_options() {
+        let mut d = Document::parse("# Doom\nmips = 50 ; rapide\n--sb = pro\nvbe1 = true\nmips = 60\n");
+        assert_eq!(d.get("mips").as_deref(), Some("60"));
+        assert_eq!(d.get("sb").as_deref(), Some("pro"));
+        d.set("mips", Some("100"));
+        d.set("sb", None);
+        d.set("cdrom", Some("DOOM.CUE"));
+        assert_eq!(d.text(), "# Doom\nmips = 100\nvbe1 = true\ncdrom = DOOM.CUE\n");
+        // Relu par l'analyseur ordinaire.
+        let c = parse(&d.text(), Path::new("/j")).unwrap();
+        assert_eq!(c.options, ["--mips", "100", "--vbe1", "--cdrom", "/j/DOOM.CUE"]);
     }
 }

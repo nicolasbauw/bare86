@@ -3,9 +3,13 @@
 //! sans argument reste un lancement direct. Un profil est le `bare86.conf`
 //! du répertoire d'un jeu (format de `config.rs`, chemins relatifs à son
 //! répertoire) ; le lanceur liste les sous-répertoires du répertoire des
-//! jeux qui en ont un, et lance celui qu'on choisit.
+//! jeux qui en ont un, lance celui qu'on choisit, et crée ou modifie un
+//! profil (`Ui`, logique sans SDL ; écran dans `sdl::launcher`).
 
 use std::path::{Path, PathBuf};
+
+use crate::config::Document;
+use crate::menu::{Browsed, Browser, COLS, Key, ROWS, Screen, Target};
 
 pub const PROFILE: &str = "bare86.conf";
 
@@ -92,6 +96,371 @@ pub fn root_of(cli: &[String]) -> Option<PathBuf> {
     })
 }
 
+/// Réglage d'un profil, dans l'ordre de l'éditeur.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Field {
+    Program,
+    Boot,
+    HardDisk,
+    Cdrom,
+    Floppy,
+    Sound,
+    Fm,
+    Midi,
+    MidiBank,
+    Speed,
+    Memory,
+    Network,
+    Fullscreen,
+    Save,
+    SaveAndRun,
+}
+
+const FIELDS: [Field; 15] = [
+    Field::Program,
+    Field::Boot,
+    Field::HardDisk,
+    Field::Cdrom,
+    Field::Floppy,
+    Field::Sound,
+    Field::Fm,
+    Field::Midi,
+    Field::MidiBank,
+    Field::Speed,
+    Field::Memory,
+    Field::Network,
+    Field::Fullscreen,
+    Field::Save,
+    Field::SaveAndRun,
+];
+
+/// Choix d'un réglage à liste : clé du fichier et valeurs (`None` : option
+/// absente, valeur par défaut), avec leurs libellés.
+fn choices(f: Field) -> Option<(&'static str, &'static [(Option<&'static str>, &'static str)])> {
+    Some(match f {
+        Field::Sound => ("sb", &[(None, "Sound Blaster 16"), (Some("pro2"), "Sound Blaster Pro 2"), (Some("pro1"), "Sound Blaster Pro 1"), (Some("ess"), "ESS AudioDrive")]),
+        Field::Fm => ("opl", &[(None, "celle de la carte"), (Some("opl2"), "OPL2"), (Some("dualopl2"), "deux OPL2"), (Some("opl3"), "OPL3"), (Some("cqm"), "Creative CQM"), (Some("esfm"), "ESS ESFM")]),
+        Field::Midi => ("midi", &[(None, "jouée sur OPL3"), (Some("off"), "coupée")]),
+        Field::Speed => ("mips", &[(None, "sans bridage"), (Some("3"), "3 MIPS"), (Some("6"), "6 MIPS"), (Some("12"), "12 MIPS"), (Some("25"), "25 MIPS"), (Some("50"), "50 MIPS"), (Some("100"), "100 MIPS"), (Some("200"), "200 MIPS"), (Some("400"), "400 MIPS")]),
+        Field::Memory => ("mem", &[(Some("4"), "4 Mo"), (Some("8"), "8 Mo"), (None, "16 Mo"), (Some("32"), "32 Mo"), (Some("64"), "64 Mo")]),
+        _ => return None,
+    })
+}
+
+/// Réglages oui/non : clé du fichier.
+fn toggle_key(f: Field) -> Option<&'static str> {
+    Some(match f {
+        Field::Boot => "boot",
+        Field::Network => "net",
+        Field::Fullscreen => "fullscreen",
+        _ => return None,
+    })
+}
+
+/// Réglages fichier : clé et type d'image.
+fn file_field(f: Field) -> Option<(&'static str, Target)> {
+    Some(match f {
+        Field::Program => ("program", Target::Program),
+        Field::HardDisk => ("hda", Target::HardDisk),
+        Field::Cdrom => ("cdrom", Target::Cd),
+        Field::Floppy => ("fda", Target::Floppy),
+        _ => return None,
+    })
+}
+
+fn is_true(v: Option<String>) -> bool {
+    v.is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "yes" | "on"))
+}
+
+/// Profil en cours de création ou de modification.
+struct Editor {
+    name: String,
+    dir: PathBuf,
+    conf: PathBuf,
+    doc: Document,
+    sel: usize,
+}
+
+impl Editor {
+    fn open(dir: PathBuf) -> Self {
+        let conf = dir.join(PROFILE);
+        let name = dir.file_name().map_or("?".into(), |n| n.to_string_lossy().into_owned());
+        Self { name, doc: Document::load(&conf), conf, dir, sel: 0 }
+    }
+
+    /// Chemin écrit dans le profil : relatif au dossier du jeu s'il y est.
+    fn store_path(&self, p: &Path) -> String {
+        p.strip_prefix(&self.dir).map_or_else(|_| p.to_string_lossy().into_owned(), |r| r.to_string_lossy().into_owned())
+    }
+
+    fn resolve(&self, v: &str) -> PathBuf {
+        let p = Path::new(v);
+        if p.is_relative() { self.dir.join(p) } else { p.to_path_buf() }
+    }
+
+    fn value(&self, f: Field) -> String {
+        if let Some((key, list)) = choices(f) {
+            let cur = self.doc.get(key);
+            return list.iter().find(|(v, _)| v.map(str::to_string) == cur).map_or_else(|| cur.unwrap_or_default(), |(_, l)| l.to_string());
+        }
+        if let Some(key) = toggle_key(f) {
+            return if is_true(self.doc.get(key)) { "oui".into() } else { "non".into() };
+        }
+        if let Some((key, _)) = file_field(f) {
+            return self.doc.get(key).unwrap_or_else(|| "(aucun)".into());
+        }
+        match f {
+            Field::MidiBank => {
+                let names = crate::midisynth::bank_names();
+                let n = self.doc.get("midi-bank").and_then(|b| b.parse::<usize>().ok()).unwrap_or(crate::midisynth::DEFAULT_BANK as usize);
+                format!("{n} {}", names.get(n).map_or("", String::as_str))
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn label(f: Field) -> &'static str {
+        match f {
+            Field::Program => "Programme",
+            Field::Boot => "Démarrer un vrai DOS",
+            Field::HardDisk => "Disque dur C:",
+            Field::Cdrom => "CD-ROM",
+            Field::Floppy => "Disquette A:",
+            Field::Sound => "Carte son",
+            Field::Fm => "Puce FM",
+            Field::Midi => "Musique MIDI",
+            Field::MidiBank => "Banque MIDI",
+            Field::Speed => "Vitesse",
+            Field::Memory => "Mémoire",
+            Field::Network => "Réseau",
+            Field::Fullscreen => "Plein écran",
+            Field::Save => "[ Enregistrer ]",
+            Field::SaveAndRun => "[ Enregistrer et lancer ]",
+        }
+    }
+
+    /// Valeur suivante (ou précédente) d'un réglage à liste ou oui/non.
+    fn step(&mut self, f: Field, forward: bool) {
+        if let Some((key, list)) = choices(f) {
+            let cur = self.doc.get(key);
+            let i = list.iter().position(|(v, _)| v.map(str::to_string) == cur).unwrap_or(0);
+            let n = list.len();
+            let j = if forward { (i + 1) % n } else { (i + n - 1) % n };
+            self.doc.set(key, list[j].0);
+        } else if let Some(key) = toggle_key(f) {
+            let on = is_true(self.doc.get(key));
+            self.doc.set(key, (!on).then_some("true"));
+        } else if f == Field::MidiBank {
+            let n = crate::midisynth::bank_names().len() as i64;
+            let cur = self.doc.get("midi-bank").and_then(|b| b.parse::<i64>().ok()).unwrap_or(i64::from(crate::midisynth::DEFAULT_BANK));
+            let next = (cur + if forward { 1 } else { -1 }).rem_euclid(n);
+            let v = next.to_string();
+            self.doc.set("midi-bank", (next != i64::from(crate::midisynth::DEFAULT_BANK)).then_some(v.as_str()));
+        }
+    }
+
+    fn save(&self) -> Result<(), String> {
+        std::fs::write(&self.conf, self.doc.text()).map_err(|e| format!("{} : {e}", self.conf.display()))
+    }
+}
+
+/// Ce que l'écran du lanceur doit faire après une touche.
+#[derive(Debug, PartialEq)]
+pub enum UiAction {
+    None,
+    Launch(PathBuf),
+    Quit,
+}
+
+enum Page {
+    List,
+    /// Explorateur : dossier d'un nouveau jeu, ou fichier d'un réglage.
+    Browse(Browser, Option<Field>),
+    Edit(Editor),
+}
+
+/// Lanceur : liste des jeux, création et modification des profils.
+pub struct Ui {
+    root: PathBuf,
+    profiles: Vec<Profile>,
+    sel: usize,
+    page: Page,
+    /// Éditeur mis de côté pendant le choix d'un fichier pour un réglage.
+    parked: Option<Editor>,
+    message: Option<String>,
+}
+
+const NEW_GAME: &str = "+ Nouveau jeu...";
+
+impl Ui {
+    pub fn new(root: PathBuf) -> Self {
+        let root = root.canonicalize().unwrap_or(root);
+        Self { profiles: scan(&root), root, sel: 0, page: Page::List, parked: None, message: None }
+    }
+
+    fn refresh(&mut self, select: Option<&Path>) {
+        self.profiles = scan(&self.root);
+        if let Some(i) = select.and_then(|c| self.profiles.iter().position(|p| p.conf == c)) {
+            self.sel = i;
+        }
+        self.sel = self.sel.min(self.profiles.len());
+    }
+
+    pub fn key(&mut self, key: Key) -> UiAction {
+        self.message = None;
+        match &mut self.page {
+            Page::List => {
+                let last = self.profiles.len(); // la ligne « Nouveau jeu »
+                match key {
+                    Key::Esc => return UiAction::Quit,
+                    Key::Up => self.sel = self.sel.saturating_sub(1),
+                    Key::Down => self.sel = (self.sel + 1).min(last),
+                    Key::PageUp => self.sel = self.sel.saturating_sub(10),
+                    Key::PageDown => self.sel = (self.sel + 10).min(last),
+                    Key::Home => self.sel = 0,
+                    Key::End => self.sel = last,
+                    Key::Enter if self.sel < last => return UiAction::Launch(self.profiles[self.sel].conf.clone()),
+                    Key::Enter => self.page = Page::Browse(Browser::open(Target::Directory, self.root.clone(), None), None),
+                    Key::Edit if self.sel < last => {
+                        let dir = self.profiles[self.sel].conf.parent().map(Path::to_path_buf).unwrap_or_default();
+                        self.page = Page::Edit(Editor::open(dir));
+                    }
+                    _ => {}
+                }
+            }
+            Page::Browse(b, field) => {
+                let field = *field;
+                match b.key(key) {
+                    Browsed::Pending => {}
+                    // Retour à l'éditeur qui avait ouvert l'explorateur, ou à la liste.
+                    Browsed::Cancelled => {
+                        self.page = match self.parked.take() {
+                            Some(ed) => Page::Edit(ed),
+                            None => Page::List,
+                        }
+                    }
+                    Browsed::Chosen(path) => match (field, self.parked.take()) {
+                        (Some(f), Some(mut ed)) => {
+                            if let Some((k, _)) = file_field(f) {
+                                let v = ed.store_path(&path);
+                                ed.doc.set(k, Some(&v));
+                            }
+                            self.page = Page::Edit(ed);
+                        }
+                        _ => self.page = Page::Edit(Editor::open(path)),
+                    },
+                }
+            }
+            Page::Edit(ed) => {
+                let f = FIELDS[ed.sel];
+                match key {
+                    Key::Esc => self.page = Page::List,
+                    Key::Up => ed.sel = (ed.sel + FIELDS.len() - 1) % FIELDS.len(),
+                    Key::Down => ed.sel = (ed.sel + 1) % FIELDS.len(),
+                    Key::Home => ed.sel = 0,
+                    Key::End => ed.sel = FIELDS.len() - 1,
+                    Key::Left | Key::Right => ed.step(f, key == Key::Right),
+                    Key::Delete | Key::Backspace => {
+                        if let Some((k, _)) = file_field(f).or(choices(f).map(|(k, _)| (k, Target::Directory))) {
+                            ed.doc.set(k, None);
+                        } else if let Some(k) = toggle_key(f) {
+                            ed.doc.set(k, None);
+                        } else if f == Field::MidiBank {
+                            ed.doc.set("midi-bank", None);
+                        }
+                    }
+                    Key::Enter => match f {
+                        Field::Save | Field::SaveAndRun => {
+                            let conf = ed.conf.clone();
+                            match ed.save() {
+                                Ok(()) => {
+                                    self.page = Page::List;
+                                    self.refresh(Some(&conf));
+                                    if f == Field::SaveAndRun {
+                                        return UiAction::Launch(conf);
+                                    }
+                                    if !conf.starts_with(&self.root) || !self.profiles.iter().any(|p| p.conf == conf) {
+                                        self.message = Some("Enregistré (hors du répertoire des jeux : absent de la liste)".into());
+                                    }
+                                }
+                                Err(e) => self.message = Some(e),
+                            }
+                        }
+                        _ if file_field(f).is_some() => {
+                            let (key, target) = file_field(f).unwrap_or(("", Target::Program));
+                            let current = ed.doc.get(key).map(|v| ed.resolve(&v));
+                            let start = current.as_deref().and_then(Path::parent).map_or_else(|| ed.dir.clone(), Path::to_path_buf);
+                            let browser = Browser::open(target, start, current.as_deref());
+                            let Page::Edit(ed) = std::mem::replace(&mut self.page, Page::List) else { unreachable!() };
+                            self.page = Page::Browse(browser, Some(f));
+                            self.parked = Some(ed);
+                        }
+                        _ => ed.step(f, true),
+                    },
+                    _ => {}
+                }
+            }
+        }
+        UiAction::None
+    }
+
+    /// Cellules de l'écran.
+    pub fn render(&self) -> Vec<(u8, u8)> {
+        let mut s = Screen::new();
+        match &self.page {
+            Page::List => {
+                let mut lines: Vec<String> = self.profiles.iter().map(line).collect();
+                lines.push(NEW_GAME.into());
+                // Titre : nom du répertoire des jeux (le chemin complet ne
+                // tiendrait pas dans le cadre).
+                let name = self.root.file_name().map_or_else(|| self.root.display().to_string(), |n| n.to_string_lossy().into_owned());
+                let name: String = name.chars().take(COLS - 20).collect();
+                return crate::menu::list_page(
+                    &format!("Bare86 : {name}"),
+                    &lines,
+                    self.sel,
+                    "",
+                    "Entrée lancer   E modifier   Échap quitter",
+                )
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| self.overlay_message(i, c))
+                .collect();
+            }
+            Page::Browse(b, _) => b.draw(&mut s),
+            Page::Edit(ed) => {
+                s.frame(&format!("Profil : {}", ed.name));
+                for (i, f) in FIELDS.iter().enumerate() {
+                    let text = match f {
+                        Field::Save | Field::SaveAndRun => Editor::label(*f).to_string(),
+                        _ => format!("{:<22}{}", Editor::label(*f), ed.value(*f)),
+                    };
+                    s.item(2 + i, &text, i == ed.sel);
+                }
+                s.footer("←→ changer  Entrée choisir  Suppr effacer  Échap annuler");
+            }
+        }
+        let mut cells = s.cells;
+        for (i, c) in cells.iter_mut().enumerate() {
+            *c = self.overlay_message(i, *c);
+        }
+        cells
+    }
+
+    /// Message (enregistrement, erreur) sur l'avant-dernière ligne.
+    fn overlay_message(&self, i: usize, c: (u8, u8)) -> (u8, u8) {
+        let Some(m) = &self.message else { return c };
+        let (row, col) = (i / COLS, i % COLS);
+        if row != ROWS - 3 || col < 3 {
+            return c;
+        }
+        match m.chars().nth(col - 3) {
+            Some(ch) if col < COLS - 2 => (crate::menu::cp437_of(ch), 0x1C),
+            _ => c,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +488,73 @@ mod tests {
         let bare: Vec<String> = vec!["--launcher".into()];
         assert_eq!(root_of(&bare), Some(PathBuf::from(".")));
         assert_eq!(root_of(&[]), None);
+    }
+
+    fn keys(ui: &mut Ui, keys: &[Key]) -> UiAction {
+        let mut last = UiAction::None;
+        for &k in keys {
+            last = ui.key(k);
+        }
+        last
+    }
+
+    fn screen(ui: &Ui) -> String {
+        ui.render().chunks(COLS).map(|r| r.iter().map(|&(c, _)| crate::bios::cp437(c)).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn edit_and_create_profiles() {
+        let root = std::env::temp_dir().join(format!("bare86-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("doom")).unwrap();
+        std::fs::create_dir_all(root.join("wolf")).unwrap();
+        std::fs::write(root.join("doom/DOOM.EXE"), b"").unwrap();
+        std::fs::write(root.join("wolf/WOLF3D.EXE"), b"").unwrap();
+        std::fs::write(root.join("doom").join(PROFILE), "# mon Doom\nvbe1 = true\n").unwrap();
+        let mut ui = Ui::new(root.clone());
+        let t = screen(&ui);
+        assert!(t.contains("doom") && t.contains("Nouveau jeu") && !t.contains("wolf"), "{t}");
+
+        // Modifier Doom : carte son → SB Pro 2 (Sound : 6e réglage), vitesse
+        // → 3 MIPS, réseau → oui ; programme choisi dans l'explorateur.
+        ui.key(Key::Edit);
+        assert!(screen(&ui).contains("Profil : doom"));
+        keys(&mut ui, &[Key::Down; 5]);
+        ui.key(Key::Right);
+        keys(&mut ui, &[Key::Down; 4]);
+        ui.key(Key::Right);
+        keys(&mut ui, &[Key::Down; 2]);
+        ui.key(Key::Enter);
+        let t = screen(&ui);
+        assert!(t.contains("Sound Blaster Pro 2") && t.contains("3 MIPS"), "{t}");
+        // Programme : explorateur dans le dossier du jeu, DOOM.EXE (après « .. »).
+        ui.key(Key::Home);
+        ui.key(Key::Enter);
+        assert!(screen(&ui).contains("DOOM.EXE"));
+        // Échap : retour à l'éditeur, rien de changé ; puis choix réel.
+        ui.key(Key::Esc);
+        assert!(screen(&ui).contains("Profil : doom"));
+        ui.key(Key::Enter);
+        keys(&mut ui, &[Key::Down, Key::Enter]);
+        assert!(screen(&ui).contains("DOOM.EXE"), "{}", screen(&ui));
+        // Enregistrer (avant-dernière ligne).
+        ui.key(Key::End);
+        ui.key(Key::Up);
+        assert_eq!(ui.key(Key::Enter), UiAction::None);
+        let text = std::fs::read_to_string(root.join("doom").join(PROFILE)).unwrap();
+        assert_eq!(text, "# mon Doom\nvbe1 = true\nsb = pro2\nmips = 3\nnet = true\nprogram = DOOM.EXE\n");
+
+        // Nouveau jeu : dossier « wolf » (« [ ce dossier ] », « .. », doom/, wolf/).
+        keys(&mut ui, &[Key::End, Key::Enter]);
+        keys(&mut ui, &[Key::Down, Key::Down, Key::Down, Key::Enter]);
+        keys(&mut ui, &[Key::Home, Key::Enter]);
+        assert!(screen(&ui).contains("Profil : wolf"), "{}", screen(&ui));
+        ui.key(Key::Enter);
+        keys(&mut ui, &[Key::Down, Key::Enter]);
+        // Enregistrer et lancer (dernière ligne).
+        ui.key(Key::End);
+        assert_eq!(ui.key(Key::Enter), UiAction::Launch(root.canonicalize().unwrap().join("wolf").join(PROFILE)));
+        assert!(screen(&ui).contains("wolf"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

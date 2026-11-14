@@ -510,35 +510,28 @@ where
     }
 }
 
-/// Lanceur : liste des profils dans une fenêtre ; rend le n° choisi, ou
+/// Lanceur dans une fenêtre (`launcher::Ui`) : rend le profil à lancer, ou
 /// `None` (Échap, fenêtre fermée).
-pub fn launcher(title: &str, lines: &[String], empty: &str) -> Result<Option<usize>, String> {
+pub fn launcher(ui: &mut crate::launcher::Ui) -> Result<Option<std::path::PathBuf>, String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
-    let window = video.window(title, 960, 720).position_centered().resizable().build().map_err(|e| e.to_string())?;
+    let window = video.window("Bare86", 960, 720).position_centered().resizable().build().map_err(|e| e.to_string())?;
     let mut canvas = window.into_canvas();
     let creator = canvas.texture_creator();
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
     let font = crate::font::Font::builtin();
-    let mut sel = 0usize;
     let mut redraw = true;
     loop {
         while let Some(ev) = events.poll_event() {
-            use crate::menu::Key;
             match ev {
                 Event::Quit { .. } => return Ok(None),
                 Event::KeyDown { scancode: Some(sc), .. } => {
-                    let last = lines.len().saturating_sub(1);
-                    match menu_key(sc) {
-                        Some(Key::Esc) => return Ok(None),
-                        Some(Key::Enter) if !lines.is_empty() => return Ok(Some(sel)),
-                        Some(Key::Up) => sel = sel.saturating_sub(1),
-                        Some(Key::Down) => sel = (sel + 1).min(last),
-                        Some(Key::PageUp) => sel = sel.saturating_sub(10),
-                        Some(Key::PageDown) => sel = (sel + 10).min(last),
-                        Some(Key::Home) => sel = 0,
-                        Some(Key::End) => sel = last,
-                        _ => {}
+                    if let Some(key) = menu_key(sc) {
+                        match ui.key(key) {
+                            crate::launcher::UiAction::None => {}
+                            crate::launcher::UiAction::Quit => return Ok(None),
+                            crate::launcher::UiAction::Launch(conf) => return Ok(Some(conf)),
+                        }
                     }
                     redraw = true;
                 }
@@ -551,8 +544,7 @@ pub fn launcher(title: &str, lines: &[String], empty: &str) -> Result<Option<usi
             continue;
         }
         redraw = false;
-        let cells = crate::menu::list_page(title, lines, sel, empty, "↑↓ choisir   Entrée lancer   Échap quitter");
-        let (w, h, px) = crate::menu::rasterize(&cells, &font);
+        let (w, h, px) = crate::menu::rasterize(&ui.render(), &font);
         let mut t = creator.create_texture_streaming(PixelFormat::XRGB8888, w as u32, h as u32).map_err(|e| e.to_string())?;
         t.set_scale_mode(sdl3::render::ScaleMode::Nearest);
         let bytes: Vec<u8> = px.iter().flat_map(|p| p.to_le_bytes()).collect();
@@ -616,6 +608,8 @@ fn menu_key(sc: Scancode) -> Option<crate::menu::Key> {
         Scancode::Home | Scancode::Kp7 => Key::Home,
         Scancode::End | Scancode::Kp1 => Key::End,
         Scancode::Backspace => Key::Backspace,
+        Scancode::Delete => Key::Delete,
+        Scancode::E | Scancode::F2 => Key::Edit,
         _ => return None,
     })
 }

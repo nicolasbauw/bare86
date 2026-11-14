@@ -26,6 +26,10 @@ pub enum Key {
     Home,
     End,
     Backspace,
+    /// Modifier (lanceur : E ou F2).
+    Edit,
+    /// Effacer un champ (Suppr).
+    Delete,
 }
 
 #[derive(Debug, PartialEq)]
@@ -73,10 +77,17 @@ enum Item {
     Quit,
 }
 
+/// Ce que cherche l'explorateur de fichiers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Target {
+pub(crate) enum Target {
     Floppy,
     Cd,
+    /// Programme DOS (.EXE, .COM, .BAT).
+    Program,
+    /// Image de disque dur.
+    HardDisk,
+    /// Un dossier (ligne « [ ce dossier ] »).
+    Directory,
 }
 
 impl Target {
@@ -84,12 +95,36 @@ impl Target {
         match self {
             Target::Floppy => &["img", "ima", "vfd", "flp", "dsk"],
             Target::Cd => &["iso", "cue"],
+            Target::Program => &["exe", "com", "bat"],
+            Target::HardDisk => &["img", "ima", "hdd", "vhd"],
+            Target::Directory => &[],
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Target::Floppy => "Image de disquette pour A:",
+            Target::Cd => "Image de CD (.iso, .cue)",
+            Target::Program => "Programme à lancer (.EXE, .COM, .BAT)",
+            Target::HardDisk => "Image de disque dur pour C:",
+            Target::Directory => "Dossier du jeu",
         }
     }
 }
 
-struct Browser {
-    target: Target,
+/// Fin d'une navigation dans l'explorateur.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Browsed {
+    Pending,
+    Chosen(PathBuf),
+    Cancelled,
+}
+
+/// Nom de la ligne qui choisit le dossier courant (cible `Directory`).
+const HERE: &str = "[ ce dossier ]";
+
+pub(crate) struct Browser {
+    pub(crate) target: Target,
     dir: PathBuf,
     /// Entrées : nom, répertoire.
     entries: Vec<(String, bool)>,
@@ -99,7 +134,7 @@ struct Browser {
 
 impl Browser {
     /// Liste de `dir`, l'image `current` présélectionnée si elle y est.
-    fn open(target: Target, dir: PathBuf, current: Option<&Path>) -> Self {
+    pub(crate) fn open(target: Target, dir: PathBuf, current: Option<&Path>) -> Self {
         let mut b = Self { target, dir, entries: Vec::new(), sel: 0, top: 0 };
         b.load();
         let name = current.and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
@@ -132,6 +167,9 @@ impl Browser {
         dirs.sort_by_key(|n| n.to_lowercase());
         files.sort_by_key(|n| n.to_lowercase());
         self.entries = Vec::new();
+        if self.target == Target::Directory {
+            self.entries.push((HERE.into(), true));
+        }
         if self.dir.parent().is_some() {
             self.entries.push(("..".into(), true));
         }
@@ -143,6 +181,9 @@ impl Browser {
 
     fn enter(&mut self) -> Option<PathBuf> {
         let (name, is_dir) = self.entries.get(self.sel)?.clone();
+        if name == HERE {
+            return Some(self.dir.clone());
+        }
         if !is_dir {
             return Some(self.dir.join(name));
         }
@@ -155,6 +196,61 @@ impl Browser {
             self.sel = i;
         }
         None
+    }
+
+    /// Touche de navigation : Entrée choisit (ou entre dans un dossier), ←
+    /// ou Retour arrière remonte, Échap abandonne.
+    pub(crate) fn key(&mut self, key: Key) -> Browsed {
+        let n = self.entries.len();
+        match key {
+            Key::Esc => return Browsed::Cancelled,
+            Key::Up => self.sel = self.sel.saturating_sub(1),
+            Key::Down => self.sel = (self.sel + 1).min(n.saturating_sub(1)),
+            Key::PageUp => self.sel = self.sel.saturating_sub(LIST_ROWS),
+            Key::PageDown => self.sel = (self.sel + LIST_ROWS).min(n.saturating_sub(1)),
+            Key::Home => self.sel = 0,
+            Key::End => self.sel = n.saturating_sub(1),
+            Key::Backspace | Key::Left => {
+                if let Some(i) = self.entries.iter().position(|(n, _)| n == "..") {
+                    self.sel = i;
+                    self.enter();
+                }
+            }
+            Key::Edit | Key::Delete => {}
+            Key::Enter | Key::Right => {
+                let here = self.entries.get(self.sel).is_some_and(|(n, _)| n == HERE);
+                if let Some(path) = self.enter().filter(|_| key == Key::Enter || !here) {
+                    return Browsed::Chosen(path);
+                }
+            }
+        }
+        if self.sel < self.top {
+            self.top = self.sel;
+        } else if self.sel >= self.top + LIST_ROWS {
+            self.top = self.sel + 1 - LIST_ROWS;
+        }
+        Browsed::Pending
+    }
+
+    /// Cadre, dossier courant et liste.
+    pub(crate) fn draw(&self, s: &mut Screen) {
+        s.frame(self.target.title());
+        let dir = self.dir.to_string_lossy();
+        let dir: String = if dir.chars().count() > COLS - 6 {
+            let tail: String = dir.chars().rev().take(COLS - 9).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("...{tail}")
+        } else {
+            dir.into_owned()
+        };
+        s.text(2, 3, &dir, ATTR_TITLE);
+        if self.entries.is_empty() {
+            s.text(4, 3, "(rien ici)", ATTR_TEXT);
+        }
+        for (row, (i, (name, is_dir))) in self.entries.iter().enumerate().skip(self.top).take(LIST_ROWS).enumerate() {
+            let text = if *is_dir && name != HERE { format!("{name}/") } else { name.clone() };
+            s.item(4 + row, &text, i == self.sel);
+        }
+        s.footer("Entrée choisir   ← dossier parent   Échap retour");
     }
 }
 
@@ -207,10 +303,6 @@ impl Menu {
     }
 
     pub fn key(&mut self, key: Key, st: &State) -> Action {
-        if key == Key::Esc && matches!(self.page, Page::Browse(_)) {
-            self.page = Page::Main;
-            return Action::None;
-        }
         match &mut self.page {
             Page::Keys => {
                 if matches!(key, Key::Esc | Key::Enter | Key::Backspace) {
@@ -218,40 +310,21 @@ impl Menu {
                 }
                 Action::None
             }
-            Page::Browse(b) => {
-                let n = b.entries.len();
-                match key {
-                    Key::Esc => {}
-                    Key::Up => b.sel = b.sel.saturating_sub(1),
-                    Key::Down => b.sel = (b.sel + 1).min(n.saturating_sub(1)),
-                    Key::PageUp => b.sel = b.sel.saturating_sub(LIST_ROWS),
-                    Key::PageDown => b.sel = (b.sel + LIST_ROWS).min(n.saturating_sub(1)),
-                    Key::Home => b.sel = 0,
-                    Key::End => b.sel = n.saturating_sub(1),
-                    Key::Backspace | Key::Left => {
-                        if b.entries.first().is_some_and(|(n, _)| n == "..") {
-                            b.sel = 0;
-                            b.enter();
-                        }
-                    }
-                    Key::Enter | Key::Right => {
-                        if let Some(path) = b.enter().filter(|_| key == Key::Enter) {
-                            let target = b.target;
-                            self.page = Page::Main;
-                            return match target {
-                                Target::Floppy => Action::Floppy(path),
-                                Target::Cd => Action::Cd(Some(path)),
-                            };
-                        }
+            Page::Browse(b) => match b.key(key) {
+                Browsed::Pending => Action::None,
+                Browsed::Cancelled => {
+                    self.page = Page::Main;
+                    Action::None
+                }
+                Browsed::Chosen(path) => {
+                    let target = b.target;
+                    self.page = Page::Main;
+                    match target {
+                        Target::Cd => Action::Cd(Some(path)),
+                        _ => Action::Floppy(path),
                     }
                 }
-                if b.sel < b.top {
-                    b.top = b.sel;
-                } else if b.sel >= b.top + LIST_ROWS {
-                    b.top = b.sel + 1 - LIST_ROWS;
-                }
-                Action::None
-            }
+            },
             Page::Main => {
                 let items = Self::items(st);
                 self.sel = self.sel.min(items.len() - 1);
@@ -343,28 +416,7 @@ impl Menu {
                 }
                 s.footer("Échap retour");
             }
-            Page::Browse(b) => {
-                s.frame(match b.target {
-                    Target::Floppy => "Image de disquette pour A:",
-                    Target::Cd => "Image de CD (.iso, .cue)",
-                });
-                let dir = b.dir.to_string_lossy();
-                let dir: String = if dir.chars().count() > COLS - 6 {
-                    let tail: String = dir.chars().rev().take(COLS - 9).collect::<Vec<_>>().into_iter().rev().collect();
-                    format!("...{tail}")
-                } else {
-                    dir.into_owned()
-                };
-                s.text(2, 3, &dir, ATTR_TITLE);
-                if b.entries.is_empty() {
-                    s.text(4, 3, "(rien ici)", ATTR_TEXT);
-                }
-                for (row, (i, (name, is_dir))) in b.entries.iter().enumerate().skip(b.top).take(LIST_ROWS).enumerate() {
-                    let text = if *is_dir { format!("{name}/") } else { name.clone() };
-                    s.item(4 + row, &text, i == b.sel);
-                }
-                s.footer("Entrée choisir   ← dossier parent   Échap retour");
-            }
+            Page::Browse(b) => b.draw(&mut s),
         }
         if let Some(m) = &st.message {
             s.text(ROWS - 3, 3, m, ATTR_MESSAGE);
@@ -397,7 +449,7 @@ const ATTR_SEL: u8 = 0x70;
 const ATTR_MESSAGE: u8 = 0x1C;
 
 /// CP437 d'un caractère ; lettre sans accent à défaut.
-fn cp437_of(c: char) -> u8 {
+pub(crate) fn cp437_of(c: char) -> u8 {
     if c.is_ascii() && !c.is_ascii_control() {
         return c as u8;
     }
@@ -416,12 +468,12 @@ fn cp437_of(c: char) -> u8 {
     plain as u8
 }
 
-struct Screen {
-    cells: Vec<(u8, u8)>,
+pub(crate) struct Screen {
+    pub(crate) cells: Vec<(u8, u8)>,
 }
 
 impl Screen {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { cells: vec![(b' ', ATTR_TEXT); COLS * ROWS] }
     }
 
@@ -431,7 +483,7 @@ impl Screen {
         }
     }
 
-    fn text(&mut self, row: usize, col: usize, text: &str, attr: u8) {
+    pub(crate) fn text(&mut self, row: usize, col: usize, text: &str, attr: u8) {
         for (i, ch) in text.chars().enumerate() {
             if col + i >= COLS - 1 {
                 break;
@@ -441,7 +493,7 @@ impl Screen {
     }
 
     /// Cadre double, titre centré.
-    fn frame(&mut self, title: &str) {
+    pub(crate) fn frame(&mut self, title: &str) {
         for col in 0..COLS {
             self.put(0, col, 0xCD, ATTR_BOX);
             self.put(ROWS - 1, col, 0xCD, ATTR_BOX);
@@ -454,13 +506,13 @@ impl Screen {
         self.put(0, COLS - 1, 0xBB, ATTR_BOX);
         self.put(ROWS - 1, 0, 0xC8, ATTR_BOX);
         self.put(ROWS - 1, COLS - 1, 0xBC, ATTR_BOX);
-        let t = format!(" {title} ");
+        let t: String = format!(" {title} ").chars().take(COLS - 4).collect();
         let col = (COLS - t.chars().count()) / 2;
         self.text(0, col, &t, ATTR_TITLE);
     }
 
     /// Ligne de menu, en vidéo inverse si choisie.
-    fn item(&mut self, row: usize, text: &str, selected: bool) {
+    pub(crate) fn item(&mut self, row: usize, text: &str, selected: bool) {
         let attr = if selected { ATTR_SEL } else { ATTR_TEXT };
         for col in 2..COLS - 2 {
             self.put(row, col, b' ', attr);
@@ -468,7 +520,7 @@ impl Screen {
         self.text(row, 3, text, attr);
     }
 
-    fn footer(&mut self, text: &str) {
+    pub(crate) fn footer(&mut self, text: &str) {
         let col = (COLS - text.chars().count()) / 2;
         self.text(ROWS - 2, col, text, ATTR_BOX);
     }

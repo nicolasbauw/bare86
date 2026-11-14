@@ -221,10 +221,24 @@ Enter confirms, left and right change the speed, Escape closes.
 ## Launcher
 
 `bare86 --launcher ~/games` opens a window listing the games of `~/games`: each
-subdirectory that holds a `bare86.conf` is a game, shown with its program or
-its CD. Enter runs the chosen game with its configuration file, in a window;
-other options given on the command line still apply. The launcher only opens
-when asked: `bare86` alone starts the built-in DOS directly.
+subdirectory that holds a `bare86.conf` is a game, shown with its program, CD
+or real DOS boot. The launcher only opens when asked: `bare86` alone starts the
+built-in DOS directly.
+
+| Keys | Action |
+|---|---|
+| Enter | Run the game, in a window, with its configuration file (other command-line options still apply) |
+| E or F2 | Edit the game's profile |
+| Enter on "+ New game..." | Choose the game's directory, then edit its new profile |
+| Escape | Quit |
+
+The profile editor sets, without typing: the program (chosen in a file
+browser), real DOS boot and hard disk image, CD and floppy images, sound card,
+FM chip, MIDI music and its instrument bank, speed, memory, network and full
+screen. Left and right change a value, Enter opens the file browser or toggles,
+Delete clears a setting, Escape leaves without saving. Saving rewrites
+`bare86.conf` in place: comments and options the editor does not handle are
+kept, and paths inside the game's directory are written relative to it.
 
 ## The built-in DOS
 
