@@ -35,6 +35,17 @@ fn main() {
         .opt_level(2)
         .warnings(false)
         .compile("nuked_opl3");
+    // Réseau : libslirp (NAT en espace utilisateur), par un petit shim C.
+    println!("cargo:rerun-if-changed=src/net/slirp_shim.c");
+    let flags = Command::new("pkg-config").args(["--cflags", "slirp"]).output().expect("pkg-config");
+    assert!(flags.status.success(), "libslirp introuvable (pkg-config slirp)");
+    let mut shim = cc::Build::new();
+    shim.file("src/net/slirp_shim.c").opt_level(2);
+    for f in String::from_utf8_lossy(&flags.stdout).split_whitespace() {
+        shim.flag(f);
+    }
+    shim.compile("bare86_slirp");
+    println!("cargo:rustc-link-lib=slirp");
     for dir in ["asm/tests", "asm/bench"] {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();

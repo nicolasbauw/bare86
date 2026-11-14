@@ -24,6 +24,8 @@ mod kvm;
 mod machine;
 mod mem;
 mod mouse;
+mod ne2000;
+mod net;
 mod opl;
 mod pic;
 mod pit;
@@ -58,6 +60,10 @@ usage: bare86 [options] [program [arguments…]]
   --hda IMG      hard disk image for drive C:
   --boot         boot from the disk images (A: if present, else C:)
                  instead of the built-in DOS
+  --net          NE2000 network card (port 300h, IRQ 3) with user-mode NAT:
+                 guest 10.0.2.15 by DHCP, gateway 10.0.2.2, DNS 10.0.2.3
+  --net-fwd tcp:HOST:GUEST   forward a host port (127.0.0.1) to the
+                 guest (also udp:…; implies --net; repeatable)
   --mips N       throttle to N million instructions per second
   --mem MB       total memory in MB (default 16)
   --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
@@ -172,6 +178,20 @@ fn main() -> ExitCode {
                 }
             },
             "--boot" => boot = true,
+            "--net" => {
+                cfg.net.get_or_insert_with(Vec::new);
+            }
+            "--net-fwd" => match args.next().map(|f| f.parse::<net::Forward>()) {
+                Some(Ok(f)) => cfg.net.get_or_insert_with(Vec::new).push(f),
+                Some(Err(e)) => {
+                    eprintln!("--net-fwd : {e}");
+                    return ExitCode::from(2);
+                }
+                None => {
+                    eprintln!("--net-fwd : tcp:HÔTE:INVITÉ attendu");
+                    return ExitCode::from(2);
+                }
+            },
             "--no-interp" => cfg.interp = false,
             "--vbe1" => cfg.vbe2 = false,
             "--debug" => debug = true,

@@ -9,8 +9,10 @@ use crate::mem::GuestMem;
 
 /// Raison du retour de l'invité vers l'hôte.
 pub enum Exit<'a> {
-    IoOut { port: u16, data: &'a [u8] },
-    IoIn { port: u16, data: &'a mut [u8] },
+    /// `size` : taille d'un accès (1, 2 ou 4) ; `data` en contient
+    /// plusieurs pour une instruction de chaîne (`rep insw`, `rep outsb`…).
+    IoOut { port: u16, size: u8, data: &'a [u8] },
+    IoIn { port: u16, size: u8, data: &'a mut [u8] },
     MmioRead { addr: u64, data: &'a mut [u8] },
     MmioWrite { addr: u64, data: &'a [u8] },
     Hlt,

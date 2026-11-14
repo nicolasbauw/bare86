@@ -33,25 +33,32 @@ impl IoBus {
         }
     }
 
-    pub fn read(&mut self, port: u16, data: &mut [u8]) {
-        let size = data.len() as u8;
-        let v = match self.find(port) {
-            Some(d) => d.read(port, size),
-            None => {
-                self.note_unmapped(port, "IN");
-                u32::MAX
-            }
-        };
-        data.copy_from_slice(&v.to_le_bytes()[..data.len()]);
+    /// `data` : un ou plusieurs accès de `size` octets (instruction de chaîne).
+    pub fn read(&mut self, port: u16, size: u8, data: &mut [u8]) {
+        let size = size.clamp(1, 4);
+        for chunk in data.chunks_mut(usize::from(size)) {
+            let v = match self.find(port) {
+                Some(d) => d.read(port, size),
+                None => {
+                    self.note_unmapped(port, "IN");
+                    u32::MAX
+                }
+            };
+            let n = chunk.len();
+            chunk.copy_from_slice(&v.to_le_bytes()[..n]);
+        }
     }
 
-    pub fn write(&mut self, port: u16, data: &[u8]) {
-        let mut b = [0u8; 4];
-        b[..data.len()].copy_from_slice(data);
-        let v = u32::from_le_bytes(b);
-        match self.find(port) {
-            Some(d) => d.write(port, data.len() as u8, v),
-            None => self.note_unmapped(port, "OUT"),
+    pub fn write(&mut self, port: u16, size: u8, data: &[u8]) {
+        let size = size.clamp(1, 4);
+        for chunk in data.chunks(usize::from(size)) {
+            let mut b = [0u8; 4];
+            b[..chunk.len()].copy_from_slice(chunk);
+            let v = u32::from_le_bytes(b);
+            match self.find(port) {
+                Some(d) => d.write(port, size, v),
+                None => self.note_unmapped(port, "OUT"),
+            }
         }
     }
 }

@@ -109,11 +109,14 @@ pub struct Config {
     /// Images de A:, B: et C: (`--fda`, `--fdb`, `--hda`) ; plusieurs pour
     /// A: (changement de disquette).
     pub disks: [Vec<std::path::PathBuf>; 3],
+    /// Carte NE2000 et NAT en espace utilisateur (`--net`), avec les ports
+    /// de l'hôte redirigés vers l'invité.
+    pub net: Option<Vec<crate::net::Forward>>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default() }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None }
     }
 }
 
@@ -281,6 +284,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Tailles de la mémoire (octets) et de l'EMS (Ko), pour un redémarrage.
     mem_size: usize,
     ems_kb: usize,
+    /// Carte réseau et lien avec le thread réseau.
+    nic: Option<(Rc<RefCell<crate::ne2000::Ne2000>>, crate::net::NetLink)>,
 }
 
 impl Pc<KvmVm> {
@@ -345,7 +350,17 @@ impl<B: Backend> Pc<B> {
         for ports in [0x388..=0x38B, crate::sb16::BASE..=crate::sb16::BASE + 3, crate::sb16::BASE + 8..=crate::sb16::BASE + 9] {
             io.map(ports, Box::new(crate::opl::OplPorts(opl.clone())));
         }
+        let nic = match &cfg.net {
+            Some(forwards) => {
+                let nic = crate::ne2000::Ne2000::new().shared();
+                let base = crate::ne2000::BASE;
+                io.map(base..=base + 0x1F, Box::new(crate::ne2000::Ne2000Ports(nic.clone())));
+                Some((nic, crate::net::NetLink::start(forwards).map_err(|e| format!("réseau : {e}"))?))
+            }
+            None => None,
+        };
         let mut pc = Self {
+            nic,
             vm,
             io,
             host,
@@ -591,7 +606,24 @@ impl<B: Backend> Pc<B> {
         if sb.take_irq() {
             self.pic.borrow_mut().raise(crate::sb16::IRQ);
         }
+        drop(sb);
+        self.service_net();
         Ok(())
+    }
+
+    /// Trames émises par la carte vers le thread réseau, et inversement.
+    fn service_net(&mut self) {
+        let Some((nic, link)) = &self.nic else { return };
+        let mut nic = nic.borrow_mut();
+        for frame in nic.outbox.drain(..) {
+            link.send(frame);
+        }
+        while let Some(frame) = link.try_recv() {
+            nic.deliver(frame);
+        }
+        if nic.take_irq() {
+            self.pic.borrow_mut().raise(crate::ne2000::IRQ);
+        }
     }
 
     /// Entrées de l'hôte → scancodes → 8042 → IRQ 1. Une frappe à la fois :
@@ -770,13 +802,13 @@ impl<B: Backend> Pc<B> {
             let mut mmio = false;
             match self.vm.run()? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
-                Exit::IoOut { port: HOST_KBD_PORT, data } => {
+                Exit::IoOut { port: HOST_KBD_PORT, data, .. } => {
                     let code = data[0];
                     self.bios.scancode(self.vm.mem(), code);
                 }
-                Exit::IoOut { port, data } => {
+                Exit::IoOut { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
-                    self.io.write(port, data);
+                    self.io.write(port, size, data);
                     if matches!(port, 0x60 | 0x64 | 0x92) {
                         self.sync_a20()?;
                         if self.kbc.borrow().reset
@@ -789,9 +821,9 @@ impl<B: Backend> Pc<B> {
                         self.stats.page_flips = self.vga.borrow().start_writes;
                     }
                 }
-                Exit::IoIn { port, data } => {
+                Exit::IoIn { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
-                    self.io.read(port, data)
+                    self.io.read(port, size, data)
                 }
                 Exit::MmioRead { addr, data } => {
                     let mut vga = self.vga.borrow_mut();

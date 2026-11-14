@@ -158,6 +158,14 @@ impl KvmVm {
     }
 }
 
+/// Taille d'un accès de la sortie d'E/S en cours.
+///
+/// SAFETY: `run` désigne le kvm_run mappé du vCPU, dont la sortie en cours
+/// est KVM_EXIT_IO (champ `io` de l'union).
+unsafe fn io_size(run: *const kvm_bindings::kvm_run) -> u8 {
+    unsafe { (*run).__bindgen_anon_1.io.size }
+}
+
 impl Backend for KvmVm {
     fn mem(&self) -> &GuestMem {
         &self.mem
@@ -168,9 +176,19 @@ impl Backend for KvmVm {
             // KVM ne pose TF que si RIP est celui mémorisé par cet appel.
             self.arm_single_step()?;
         }
+        // Le mappage de kvm_run est fixe pour toute la vie du vCPU.
+        let kvm_run: *const kvm_bindings::kvm_run = self.vcpu.get_kvm_run();
         Ok(match self.vcpu.run() {
-            Ok(VcpuExit::IoOut(port, data)) => Exit::IoOut { port, data },
-            Ok(VcpuExit::IoIn(port, data)) => Exit::IoIn { port, data },
+            // kvm-ioctls ne rend pas la taille d'un accès : elle est relue
+            // dans kvm_run.
+            Ok(VcpuExit::IoOut(port, data)) => {
+                // SAFETY: sortie d'E/S en cours.
+                Exit::IoOut { port, size: unsafe { io_size(kvm_run) }, data }
+            }
+            Ok(VcpuExit::IoIn(port, data)) => {
+                // SAFETY: sortie d'E/S en cours.
+                Exit::IoIn { port, size: unsafe { io_size(kvm_run) }, data }
+            }
             Ok(VcpuExit::MmioRead(addr, data)) => Exit::MmioRead { addr, data },
             Ok(VcpuExit::MmioWrite(addr, data)) => Exit::MmioWrite { addr, data },
             Ok(VcpuExit::Hlt) => Exit::Hlt,
