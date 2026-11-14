@@ -8,8 +8,10 @@
 
 mod fcb;
 mod fs;
+mod vfs;
 mod handles;
 mod memory;
+mod mscdex;
 mod process;
 mod shell;
 
@@ -93,6 +95,8 @@ const MAX_SEARCHES: usize = 64;
 
 pub struct Dos {
     drives: Drives,
+    /// Lecteur de CD (image ISO) et extensions MSCDEX.
+    cd: Option<mscdex::Mscdex>,
     sft: Sft,
     /// Pile des processus ; le premier est le shell racine.
     procs: Vec<Process>,
@@ -141,11 +145,36 @@ impl Dos {
             con_line: VecDeque::new(),
             line_edit: None,
             flushed: false,
+            cd: None,
         }
     }
 
     pub fn mount(&mut self, drive: u8, root: PathBuf) {
         self.drives.mount(drive, root);
+    }
+
+    /// Monte une image ISO comme lecteur de CD (lecture seule), servie par
+    /// les extensions MSCDEX.
+    pub fn mount_cd(&mut self, mem: &GuestMem, drive: u8, image: &std::path::Path) -> std::result::Result<(), String> {
+        let iso = crate::iso9660::IsoFs::new(crate::cdrom::Disc::open(image)?)?;
+        let root = vfs::mount_iso(drive, iso);
+        self.drives.mount(drive, root.clone());
+        let cd = mscdex::Mscdex::new(drive, root);
+        cd.install(mem);
+        self.cd = Some(cd);
+        Ok(())
+    }
+
+    /// Étiquette de volume d'un lecteur (celle du CD).
+    fn volume_label(&self, drive: u8) -> Option<String> {
+        let cd = self.cd.as_ref().filter(|cd| cd.drive == drive)?;
+        let label = vfs::iso_at(&cd.root)?.volume_label();
+        (!label.is_empty()).then_some(label)
+    }
+
+    /// INT 2Fh : MSCDEX (AH=15h) ; `None` pour les autres fonctions.
+    pub fn int2f(&mut self, cpu: &mut Cpu, mem: &GuestMem) -> Option<crate::hle::Flow> {
+        self.cd.as_mut()?.int2f(cpu, mem)
     }
 
     /// Chemin DOS d'un fichier hôte situé sous un lecteur monté.
@@ -217,8 +246,8 @@ impl Dos {
     /// Fichier d'un programme : contenu et chemin DOS canonique.
     fn read_program(&self, path: &[u8]) -> std::result::Result<(Vec<u8>, Vec<u8>), u16> {
         match self.drives.resolve(path)? {
-            Target::Path { host, exists: true, dos } if host.is_file() => {
-                std::fs::read(&host).map(|d| (d, dos)).map_err(|e| io_err(&e))
+            Target::Path { host, exists: true, dos } if vfs::is_file(&host) => {
+                vfs::read(&host).map(|d| (d, dos)).map_err(|e| io_err(&e))
             }
             _ => Err(fs::ERR_FILE_NOT_FOUND),
         }
@@ -428,7 +457,7 @@ impl Dos {
                 self.new_handle(mem, kind, mode)
             }
             Target::Path { host, exists, .. } => {
-                if exists && host.is_dir() {
+                if exists && vfs::is_dir(&host) {
                     return Err(fs::ERR_ACCESS_DENIED);
                 }
                 if create == 2 && exists {
@@ -437,14 +466,13 @@ impl Dos {
                 if create == 0 && !exists {
                     return Err(fs::ERR_FILE_NOT_FOUND);
                 }
-                let mut o = std::fs::OpenOptions::new();
-                match (create, mode & 3) {
-                    (0, 0) => o.read(true),
-                    (0, 1) => o.write(true),
-                    (0, _) => o.read(true).write(true),
-                    _ => o.read(true).write(true).create(true).truncate(true),
+                let access = match (create, mode & 3) {
+                    (0, 0) => vfs::Access { read: true, write: false, create: false },
+                    (0, 1) => vfs::Access { read: false, write: true, create: false },
+                    (0, _) => vfs::Access { read: true, write: true, create: false },
+                    _ => vfs::Access { read: true, write: true, create: true },
                 };
-                let file = o.open(&host).map_err(|e| io_err(&e))?;
+                let file = vfs::open(&host, access).map_err(|e| io_err(&e))?;
                 let mode = if create != 0 { (mode & 0x80) | 2 } else { mode };
                 self.new_handle(mem, Kind::File(fs::OpenFile { file }), mode)
             }
@@ -604,8 +632,22 @@ impl Dos {
             let attr = cpu.lo(CX);
             let (dir, pattern) = self.drives.search(&path)?;
             let mut results = Vec::new();
+            let (drive, comps) = self.drives.split(&path)?;
+            let at_root = comps.len() <= 1;
+            // Étiquette de volume, rangée comme un nom 8.3 (« BARE86TE.ST »).
+            if attr & fs::ATTR_VOLUME != 0
+                && at_root
+                && let Some(label) = self.volume_label(drive)
+            {
+                let mut name: Vec<u8> = label.bytes().take(8).collect();
+                if label.len() > 8 {
+                    name.push(b'.');
+                    name.extend(label.bytes().skip(8).take(3));
+                }
+                let (time, date) = fs::dos_time(std::time::SystemTime::now());
+                results.push(Found { name, attr: fs::ATTR_VOLUME, time, date, size: 0 });
+            }
             if attr != fs::ATTR_VOLUME {
-                let at_root = self.drives.split(&path).map(|(_, c)| c.len() <= 1).unwrap_or(true);
                 if attr & fs::ATTR_DIR != 0 && !at_root {
                     for dot in [&b"."[..], b".."] {
                         if fs::fcb_matches(&pattern, dot) {
@@ -894,13 +936,13 @@ impl Dos {
                 if exists {
                     return Err(fs::ERR_ACCESS_DENIED);
                 }
-                std::fs::create_dir(h).map_err(|e| io_err(&e))
+                vfs::create_dir(&h).map_err(|e| io_err(&e))
             })),
             0x3A => Out::from(self.path_arg(mem, ds, dx).and_then(|(h, exists)| {
                 if !exists {
                     return Err(fs::ERR_PATH_NOT_FOUND);
                 }
-                std::fs::remove_dir(h).map_err(|e| match io_err(&e) {
+                vfs::remove_dir(&h).map_err(|e| match io_err(&e) {
                     fs::ERR_ACCESS_DENIED => ERR_CURRENT_DIR,
                     other => other,
                 })
@@ -926,10 +968,10 @@ impl Dos {
                 Self::ax_result(cpu, r)
             }
             0x41 => Out::from(self.path_arg(mem, ds, dx).and_then(|(h, exists)| {
-                if !exists || h.is_dir() {
+                if !exists || vfs::is_dir(&h) {
                     return Err(fs::ERR_FILE_NOT_FOUND);
                 }
-                std::fs::remove_file(h).map_err(|e| io_err(&e))
+                vfs::remove_file(&h).map_err(|e| io_err(&e))
             })),
             0x42 => Out::from(self.seek(cpu, mem)),
             // COMMAND.COM virtuel (voir `virtual_comspec`) : présent, archive.
@@ -942,13 +984,11 @@ impl Dos {
                     if !exists {
                         return Err(fs::ERR_FILE_NOT_FOUND);
                     }
-                    let meta = std::fs::metadata(&h).map_err(|e| io_err(&e))?;
+                    let meta = vfs::metadata(&h).map_err(|e| io_err(&e))?;
                     if al == 0 {
                         return Ok(Some(u16::from(fs::attributes(&meta))));
                     }
-                    let mut perm = meta.permissions();
-                    perm.set_readonly(cpu.lo(CX) & fs::ATTR_READONLY != 0);
-                    std::fs::set_permissions(&h, perm).map_err(|e| io_err(&e))?;
+                    vfs::set_readonly(&h, cpu.lo(CX) & fs::ATTR_READONLY != 0).map_err(|e| io_err(&e))?;
                     Ok(None)
                 });
                 match r {
@@ -1046,7 +1086,7 @@ impl Dos {
                     (Err(e), _) | (_, Err(e)) => Err(e),
                     (Ok((_, false)), _) => Err(fs::ERR_FILE_NOT_FOUND),
                     (Ok((_, true)), Ok((_, true))) => Err(fs::ERR_ACCESS_DENIED),
-                    (Ok((a, true)), Ok((b, false))) => std::fs::rename(a, b).map_err(|e| {
+                    (Ok((a, true)), Ok((b, false))) => vfs::rename(&a, &b).map_err(|e| {
                         if e.kind() == std::io::ErrorKind::CrossesDevices { ERR_NOT_SAME_DEVICE } else { io_err(&e) }
                     }),
                 })

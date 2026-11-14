@@ -6,8 +6,9 @@
 //! un nom court généré (`LONGNO~1.TXT`), stable tant que le répertoire ne
 //! change pas. Les fichiers cachés hôtes (`.git`…) sont ignorés.
 
-use std::fs;
 use std::path::{Path, PathBuf};
+
+use super::vfs::{self, Meta};
 use std::time::SystemTime;
 
 pub const ERR_FILE_NOT_FOUND: u16 = 0x02;
@@ -22,7 +23,7 @@ pub const ATTR_DIR: u8 = 0x10;
 pub const ATTR_ARCHIVE: u8 = 0x20;
 
 pub struct OpenFile {
-    pub file: fs::File,
+    pub file: vfs::VFile,
 }
 
 /// Périphériques reconnus dans les noms de fichiers.
@@ -86,34 +87,28 @@ fn native_83(name: &str) -> Option<Vec<u8>> {
 pub struct DirEntry {
     pub short: Vec<u8>,
     pub host: PathBuf,
-    pub meta: fs::Metadata,
+    pub meta: Meta,
 }
 
 /// Entrées d'un répertoire hôte, triées, avec leurs noms courts.
 pub fn list(dir: &Path) -> Vec<DirEntry> {
-    let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
-    let mut names: Vec<(String, PathBuf)> = rd
-        .filter_map(|e| e.ok())
-        .filter_map(|e| Some((e.file_name().into_string().ok()?, e.path())))
-        .filter(|(n, _)| !n.starts_with('.'))
-        .collect();
-    names.sort();
+    let Ok(rd) = vfs::read_dir(dir) else { return Vec::new() };
+    let mut names: Vec<(String, PathBuf, Meta)> = rd.into_iter().filter(|(n, _, _)| !n.starts_with('.')).collect();
+    names.sort_by(|a, b| a.0.cmp(&b.0));
     let mut taken: Vec<Vec<u8>> = Vec::new();
     let mut out = Vec::new();
     // Les noms natifs d'abord, pour qu'un nom généré ne leur prenne pas leur place.
     let mut pending = Vec::new();
-    for (name, path) in names {
+    for (name, path, meta) in names {
         match native_83(&name) {
             Some(s) if !taken.contains(&s) => {
                 taken.push(s.clone());
-                if let Ok(meta) = fs::metadata(&path) {
-                    out.push(DirEntry { short: s, host: path, meta });
-                }
+                out.push(DirEntry { short: s, host: path, meta });
             }
-            _ => pending.push((name, path)),
+            _ => pending.push((name, path, meta)),
         }
     }
-    for (name, path) in pending {
+    for (name, path, meta) in pending {
         let up = name.as_bytes().to_ascii_uppercase();
         let (stem, ext) = match up.iter().rposition(|&c| c == b'.') {
             Some(i) if i > 0 => (&up[..i], &up[i + 1..]),
@@ -135,9 +130,7 @@ pub fn list(dir: &Path) -> Vec<DirEntry> {
         });
         let Some(short) = short else { continue };
         taken.push(short.clone());
-        if let Ok(meta) = fs::metadata(&path) {
-            out.push(DirEntry { short, host: path, meta });
-        }
+        out.push(DirEntry { short, host: path, meta });
     }
     out
 }
@@ -169,9 +162,9 @@ impl Drives {
 
     /// Chemin DOS d'un fichier hôte situé sous un lecteur monté.
     pub fn dos_path_of(&self, host: &Path) -> Option<Vec<u8>> {
-        let host = host.canonicalize().ok()?;
+        let host = vfs::canonicalize(host)?;
         for (drive, root) in self.roots.iter().enumerate() {
-            let Some(root) = root.as_ref().and_then(|r| r.canonicalize().ok()) else { continue };
+            let Some(root) = root.as_ref().and_then(|r| vfs::canonicalize(r)) else { continue };
             let Ok(rel) = host.strip_prefix(&root) else { continue };
             let mut dir = root.clone();
             let mut comps = Vec::new();
@@ -315,10 +308,10 @@ pub fn fcb_matches(pattern: &[u8; 11], name: &[u8]) -> bool {
     pattern.iter().zip(n).all(|(&p, c)| p == b'?' || p == c)
 }
 
-/// Attributs DOS d'un fichier hôte.
-pub fn attributes(meta: &fs::Metadata) -> u8 {
+/// Attributs DOS d'un fichier.
+pub fn attributes(meta: &Meta) -> u8 {
     let mut a = if meta.is_dir() { ATTR_DIR } else { ATTR_ARCHIVE };
-    if meta.permissions().readonly() {
+    if meta.readonly() {
         a |= ATTR_READONLY;
     }
     a
@@ -359,6 +352,7 @@ pub fn from_dos_time(time: u16, date: u16) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn names() {

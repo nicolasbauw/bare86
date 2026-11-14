@@ -165,6 +165,18 @@ fn bios_info() {
 }
 
 #[test]
+fn mscdex_on_iso() {
+    let Some((iso, dir)) = crate::iso9660::tests::xorriso_iso("ESSAI", &[("lisez.txt", b"Bonjour du CD")]) else { return };
+    let out = Capture::default();
+    let mut pc = Pc::new(&Config::default(), Host::headless(Box::new(out.clone()))).expect("machine");
+    pc.mount_cd(3, &iso).expect("montage du CD");
+    pc.load_com(program!("mscdex")).expect("chargement");
+    let code = pc.run().expect("exécution");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/mscdex.S)");
+}
+
+#[test]
 fn xms_driver() {
     assert_eq!(run(program!("xms")).0, 0, "n° du contrôle en échec (voir asm/tests/xms.S)");
 }

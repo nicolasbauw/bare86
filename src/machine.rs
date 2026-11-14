@@ -466,6 +466,11 @@ impl<B: Backend> Pc<B> {
         self.dos.mount(drive, root);
     }
 
+    /// Monte une image ISO comme lecteur de CD du DOS intégré (MSCDEX).
+    pub fn mount_cd(&mut self, drive: u8, image: &std::path::Path) -> Result<()> {
+        self.dos.mount_cd(self.vm.mem(), drive, image).map_err(Into::into)
+    }
+
     /// Charge un programme en mémoire sous le nom DOS `path` (sans disque).
     #[cfg(test)]
     pub fn load_image(&mut self, image: &[u8], path: &[u8], tail: &[u8]) -> Result<()> {
@@ -1045,7 +1050,10 @@ impl<B: Backend> Pc<B> {
             self.polled_after_drain = true;
         }
         let driver = match vector {
-            0x2F if self.dos_hle => self.xms.int2f(&mut cpu, (ROM_SEG, bios::XMS_ENTRY)),
+            0x2F if self.dos_hle => match self.xms.int2f(&mut cpu, (ROM_SEG, bios::XMS_ENTRY)) {
+                Some(f) => Some(f),
+                None => self.dos.int2f(&mut cpu, mem),
+            },
             0x67 if self.dos_hle => Some(self.ems.int67(&mut cpu, mem)),
             // Pas à pas sans débogueur dans l'invité (TF resté empilé après
             // notre propre pas à pas) : TF effacé au retour.

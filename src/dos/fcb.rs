@@ -17,6 +17,7 @@ use crate::interp::Cpu;
 use crate::mem::GuestMem;
 
 use super::fs::{self, Target};
+use super::vfs;
 use super::handles::Kind;
 use super::{Dos, Found};
 
@@ -96,15 +97,12 @@ impl Dos {
     fn fcb_open(&mut self, mem: &GuestMem, f: &Fcb, create: bool) -> bool {
         let path = fcb_path(mem, f.at, self.drives.current);
         let Ok(Target::Path { host, exists, .. }) = self.drives.resolve(&path) else { return false };
-        if (!exists && !create) || host.is_dir() {
+        if (!exists && !create) || vfs::is_dir(&host) {
             return false;
         }
-        let mut o = std::fs::OpenOptions::new();
-        o.read(true).write(true);
-        if create {
-            o.create(true).truncate(true);
-        }
-        let Ok(file) = o.open(&host).or_else(|_| std::fs::File::open(&host)) else { return false };
+        let rw = vfs::Access { read: true, write: true, create };
+        let ro = vfs::Access { read: true, write: false, create: false };
+        let Ok(file) = vfs::open(&host, rw).or_else(|_| vfs::open(&host, ro)) else { return false };
         let meta = file.metadata().ok();
         let Some(idx) = self.sft.insert(Kind::File(fs::OpenFile { file }), 2) else { return false };
         if mem.read_u8(f.at) == 0 {
@@ -254,7 +252,7 @@ impl Dos {
                             .into_iter()
                             .filter(|e| e.meta.is_file() && fs::fcb_matches(&pattern, &e.short))
                             .collect();
-                        let deleted = victims.iter().filter(|e| std::fs::remove_file(&e.host).is_ok()).count();
+                        let deleted = victims.iter().filter(|e| vfs::remove_file(&e.host).is_ok()).count();
                         if deleted > 0 { 0 } else { 0xFF }
                     }
                     Err(_) => 0xFF,
@@ -273,7 +271,7 @@ impl Dos {
                 let to = [&from[..2], &to[2..]].concat();
                 match (self.drives.resolve(&from), self.drives.resolve(&to)) {
                     (Ok(Target::Path { host: a, exists: true, .. }), Ok(Target::Path { host: b, exists: false, .. }))
-                        if std::fs::rename(&a, &b).is_ok() =>
+                        if vfs::rename(&a, &b).is_ok() =>
                     {
                         0
                     }
@@ -289,7 +287,7 @@ impl Dos {
                 let path = fcb_path(mem, f.at, self.drives.current);
                 match self.drives.resolve(&path) {
                     Ok(Target::Path { host, exists: true, .. }) => {
-                        let len = std::fs::metadata(host).map_or(0, |m| m.len());
+                        let len = vfs::metadata(&host).map_or(0, |m| m.len());
                         let size = Self::record_size(mem, f.at);
                         Self::set_random_record(mem, f.at, len.div_ceil(size));
                         0

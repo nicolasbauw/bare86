@@ -8,6 +8,7 @@ use crate::keyboard;
 use crate::mem::GuestMem;
 
 use super::fs::{self, Target};
+use super::vfs;
 use super::{Dos, con_out, process::psp, psp_addr};
 
 /// Suite à donner à une ligne de commande.
@@ -151,15 +152,15 @@ impl Dos {
                 }
             }
             _ if eq(cmd, "MD") || eq(cmd, "MKDIR") => match self.drives.resolve(arg) {
-                Ok(Target::Path { host: h, exists: false, .. }) if std::fs::create_dir(&h).is_ok() => {}
+                Ok(Target::Path { host: h, exists: false, .. }) if vfs::create_dir(&h).is_ok() => {}
                 _ => out(b"Impossible de creer le repertoire\r\n"),
             },
             _ if eq(cmd, "RD") || eq(cmd, "RMDIR") => match self.drives.resolve(arg) {
-                Ok(Target::Path { host: h, exists: true, .. }) if std::fs::remove_dir(&h).is_ok() => {}
+                Ok(Target::Path { host: h, exists: true, .. }) if vfs::remove_dir(&h).is_ok() => {}
                 _ => out(b"Chemin non valide, ou repertoire non vide\r\n"),
             },
             _ if eq(cmd, "DEL") || eq(cmd, "ERASE") => match self.drives.resolve(arg) {
-                Ok(Target::Path { host: h, exists: true, .. }) if h.is_file() && std::fs::remove_file(&h).is_ok() => {}
+                Ok(Target::Path { host: h, exists: true, .. }) if vfs::is_file(&h) && vfs::remove_file(&h).is_ok() => {}
                 _ => out(b"Fichier introuvable\r\n"),
             },
             // REN source nouveau-nom : le nouveau nom reste dans le répertoire de la source.
@@ -170,7 +171,7 @@ impl Dos {
                         Ok(Target::Path { host: h, exists: true, .. }) => {
                             let name = String::from_utf8_lossy(to).to_ascii_uppercase();
                             let dest = h.with_file_name(name);
-                            !dest.exists() && std::fs::rename(&h, dest).is_ok()
+                            !vfs::exists(&dest) && vfs::rename(&h, &dest).is_ok()
                         }
                         _ => false,
                     },
@@ -181,8 +182,8 @@ impl Dos {
                 }
             }
             _ if eq(cmd, "TYPE") => match self.drives.resolve(arg) {
-                Ok(Target::Path { host: h, exists: true, .. }) if h.is_file() => {
-                    let data = std::fs::read(h).unwrap_or_default();
+                Ok(Target::Path { host: h, exists: true, .. }) if vfs::is_file(&h) => {
+                    let data = vfs::read(&h).unwrap_or_default();
                     // Le texte s'arrête au premier Ctrl-Z, comme sous DOS.
                     let end = data.iter().position(|&c| c == 0x1A).unwrap_or(data.len());
                     out(&data[..end]);
@@ -223,7 +224,7 @@ impl Dos {
             for c in &candidates {
                 let path = [dir, c].concat();
                 if let Ok(Target::Path { exists: true, host, dos }) = self.drives.resolve(&path)
-                    && host.is_file()
+                    && vfs::is_file(&host)
                 {
                     let ext = dos.rsplit(|&b| b == b'.').next().unwrap_or(b"");
                     if eq(ext, "COM") || eq(ext, "EXE") {
@@ -241,7 +242,7 @@ impl Dos {
             // Un répertoire seul : son contenu.
             let a = arg.split(|&c| c == b'/').next().unwrap_or(b"").trim_ascii();
             match self.drives.resolve(a) {
-                Ok(Target::Path { host: h, exists: true, .. }) if h.is_dir() && !a.is_empty() => {
+                Ok(Target::Path { host: h, exists: true, .. }) if vfs::is_dir(&h) && !a.is_empty() => {
                     [a, b"\\*.*"].concat()
                 }
                 _ if a.is_empty() => b"*.*".to_vec(),
@@ -261,7 +262,14 @@ impl Dos {
         };
         out(b"\r\n Le volume dans le lecteur ");
         out(&shown[..1]);
-        out(b" n'a pas de nom\r\n Repertoire de ");
+        match self.volume_label(shown[0].wrapping_sub(b'A')) {
+            Some(label) => {
+                out(b" est ");
+                out(label.as_bytes());
+                out(b"\r\n Repertoire de ");
+            }
+            None => out(b" n'a pas de nom\r\n Repertoire de "),
+        }
         out(&shown);
         out(b"\r\n\r\n");
         let (mut files, mut bytes) = (0u32, 0u64);
