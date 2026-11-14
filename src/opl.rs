@@ -219,4 +219,28 @@ mod tests {
         let peak = out.iter().fold(0f32, |m, x| m.max(x.abs()));
         assert!(peak > 0.05, "crête {peak}");
     }
+
+    /// Hauteur juste à 48 kHz (la puce tourne à 49 716 Hz) : sinusoïde pure
+    /// (modulateur éteint), F-number 408, bloc 4 → 408 × 49 716 / 2^16 ≈ 309,5 Hz.
+    #[test]
+    fn pitch_at_48_khz() {
+        let t = Instant::now();
+        let mut o = Opl::new();
+        let w = |o: &mut Opl, reg: u16, v: u8| {
+            o.address = reg;
+            o.write_data(v, t);
+        };
+        for (reg, v) in [(0x20, 0x01), (0x23, 0x01), (0x40, 0x3F), (0x43, 0x00), (0x60, 0xF0), (0x63, 0xF0), (0x80, 0x0F), (0x83, 0x0F), (0xC0, 0x30), (0xA0, 0x98), (0xB0, 0x31)] {
+            w(&mut o, reg, v);
+        }
+        let mut fm = FmSynth::new(48_000);
+        fm.queue(o.take_writes());
+        let mut out = vec![0f32; 2 * 48_000];
+        fm.render(t, [1.0, 1.0], &mut out);
+        // Passages par zéro montants sur la dernière demi-seconde (après l'attaque).
+        let left: Vec<f32> = out.iter().step_by(2).copied().skip(24_000).collect();
+        let ups = left.windows(2).filter(|p| p[0] < 0.0 && p[1] >= 0.0).count();
+        let freq = ups as f64 / 0.5;
+        assert!((freq - 309.5).abs() < 3.0, "{freq} Hz");
+    }
 }
