@@ -82,6 +82,12 @@ const FRAME_PERIOD: Duration = Duration::from_micros(14_286);
 /// Période de rafraîchissement de l'écran du terminal.
 const TERM_FRAME: Duration = Duration::from_millis(33);
 
+/// Scrutation du PIT (`Pc::pit_poll`) : écart maximal entre deux lectures
+/// d'une même série, durée de série avant de céder, temps cédé par lecture.
+const PIT_POLL_GAP: Duration = Duration::from_micros(100);
+const PIT_POLL_AFTER: Duration = Duration::from_millis(2);
+const PIT_POLL_SLEEP: Duration = Duration::from_micros(100);
+
 /// Instructions sans accès VRAM avant que l'interpréteur rende la main.
 const IDLE_LIMIT: u64 = 256;
 /// Plafond d'instructions par rafale interprétée.
@@ -262,6 +268,8 @@ pub struct Stats {
     pub page_flips: u64,
     /// Accès aux ports servis en rafale par l'interpréteur (sans sortie).
     pub burst_ports: u64,
+    /// Temps cédés à l'hôte pendant une attente active sur le PIT.
+    pub pit_yields: u64,
     /// Sorties d'E/S par port (lectures et écritures).
     pub io_ports: std::collections::HashMap<u16, u64>,
 }
@@ -280,6 +288,7 @@ impl std::fmt::Debug for Stats {
             .field("vram_unmaps", &self.vram_unmaps)
             .field("page_flips", &self.page_flips)
             .field("burst_ports", &self.burst_ports)
+            .field("pit_yields", &self.pit_yields)
             .field("io_ports", &ports)
             .finish()
     }
@@ -355,6 +364,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Scrutation du clavier à vide (INT 16h AH=01h/11h sans touche) : début
     /// de la série et dernier appel.
     idle_polls: Option<(Instant, Instant)>,
+    /// Scrutation du compteur du PIT : début de la série et dernière lecture.
+    pit_polls: Option<(Instant, Instant)>,
     /// Souris PS/2 de l'interface du BIOS (vrai DOS).
     ps2: crate::mouse::Ps2,
     /// DOS fourni par l'hôte ; faux après un démarrage sur image disque.
@@ -545,6 +556,7 @@ impl<B: Backend> Pc<B> {
             unhandled: BTreeSet::new(),
             a20: None,
             idle_polls: None,
+            pit_polls: None,
             ps2: Default::default(),
             dos_hle: true,
             boot_drive: 0,
@@ -1102,6 +1114,9 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::IoIn { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
+                    if matches!(port, 0x40..=0x42) && Self::pit_poll(&mut self.pit_polls) {
+                        self.stats.pit_yields += 1;
+                    }
                     self.io.read(port, size, data);
                     port_burst = data.len() == usize::from(size) && self.io.starts_burst(port);
                 }
@@ -1336,6 +1351,26 @@ impl<B: Backend> Pc<B> {
         self.sync_a20()?;
         self.vm.set_state(&cpu)?;
         Ok(None)
+    }
+
+    /// Attente active sur le compteur du PIT (Quake entre deux images, à
+    /// 72 i/s : ≈ 70 000 lectures par seconde, trois sorties chacune) : au-delà
+    /// de `PIT_POLL_AFTER` de lectures rapprochées, chaque lecture cède
+    /// `PIT_POLL_SLEEP` à l'hôte. Le compteur suit le temps réel : le
+    /// programme voit simplement le temps passer. Les temporisations courtes
+    /// (pilotes, détection AdLib) ne sont pas touchées.
+    fn pit_poll(polls: &mut Option<(Instant, Instant)>) -> bool {
+        let now = Instant::now();
+        let start = match *polls {
+            Some((start, last)) if now - last < PIT_POLL_GAP => start,
+            _ => now,
+        };
+        let yields = now - start > PIT_POLL_AFTER;
+        if yields {
+            std::thread::sleep(PIT_POLL_SLEEP);
+        }
+        *polls = Some((start, Instant::now()));
+        yields
     }
 
     /// Boucle d'attente d'une touche par scrutation (FreeCOM à l'invite) :
