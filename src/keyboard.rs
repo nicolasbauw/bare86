@@ -119,7 +119,8 @@ pub fn text_scancodes(c: u8) -> Vec<u8> {
 /// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
 /// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
 /// `{ctrl+c}`…), pauses (`{wait:500}`, en ms), vitesse (`{speed:25}` en
-/// MIPS, `{speed:max}`), disquette suivante (`{disk}`), souris
+/// MIPS, `{speed:max}`), disquette suivante (`{disk}`), disquette ou CD
+/// choisis (`{fda:IMAGE}`, `{cd:IMAGE}`, `{cd:}` pour éjecter), souris
 /// (`{mouse:dx,dy,boutons}`), attente
 /// d'un texte à l'écran (`{until:Press a key}`), `{{` pour une accolade. Une
 /// fin de session suit le script.
@@ -156,6 +157,15 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
         }
         if name == "disk" {
             out.push(crate::host::InputEvent::NextDisk);
+            continue;
+        }
+        if name.starts_with("fda:") {
+            out.push(crate::host::InputEvent::InsertFloppy(raw["fda:".len()..].into()));
+            continue;
+        }
+        if name.starts_with("cd:") {
+            let path = &raw["cd:".len()..];
+            out.push(crate::host::InputEvent::InsertCd((!path.is_empty()).then(|| path.into())));
             continue;
         }
         if let Some(v) = name.strip_prefix("speed:") {

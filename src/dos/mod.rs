@@ -97,6 +97,8 @@ pub struct Dos {
     drives: Drives,
     /// Lecteur de CD (image ISO) et extensions MSCDEX.
     cd: Option<mscdex::Mscdex>,
+    /// Changements de disque demandés pendant que le shell attendait une ligne.
+    pub pending_media: Vec<crate::host::InputEvent>,
     sft: Sft,
     /// Pile des processus ; le premier est le shell racine.
     procs: Vec<Process>,
@@ -146,6 +148,7 @@ impl Dos {
             line_edit: None,
             flushed: false,
             cd: None,
+            pending_media: Vec::new(),
         }
     }
 
@@ -158,17 +161,26 @@ impl Dos {
     pub fn mount_cd(&mut self, mem: &GuestMem, drive: u8, disc: crate::cdrom::SharedDisc, player: crate::cdrom::SharedPlayer) -> std::result::Result<(), String> {
         let iso = std::sync::Arc::new(crate::iso9660::IsoFs::new(disc)?);
         let root = vfs::mount_iso(drive, iso.clone());
-        self.drives.mount(drive, root);
-        let cd = mscdex::Mscdex::new(drive, iso, player);
+        self.drives.mount(drive, root.clone());
+        let cd = mscdex::Mscdex::new(drive, root, iso, player);
         cd.install(mem);
         self.cd = Some(cd);
+        Ok(())
+    }
+
+    /// Nouveau disque dans le lecteur de CD (ou éjection), si D: est monté.
+    pub fn change_cd(&mut self, disc: Option<crate::cdrom::SharedDisc>) -> std::result::Result<(), String> {
+        let Some(cd) = self.cd.as_mut() else { return Ok(()) };
+        let iso = disc.map(crate::iso9660::IsoFs::new).transpose()?.map(std::sync::Arc::new);
+        let root = cd.change(iso);
+        self.drives.mount(cd.drive, root);
         Ok(())
     }
 
     /// Étiquette de volume d'un lecteur (celle du CD).
     fn volume_label(&self, drive: u8) -> Option<String> {
         let cd = self.cd.as_ref().filter(|cd| cd.drive == drive)?;
-        let label = cd.volume_label();
+        let label = cd.volume_label()?;
         (!label.is_empty()).then_some(label)
     }
 

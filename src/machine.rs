@@ -476,6 +476,49 @@ impl<B: Backend> Pc<B> {
         self.dos.mount(drive, root);
     }
 
+    /// Disquette ou CD choisi dans le menu.
+    fn media_event(&mut self, e: InputEvent) {
+        match e {
+            InputEvent::InsertFloppy(path) => {
+                if let Err(e) = self.bios.disks.insert_floppy(&path) {
+                    eprintln!("[disque] {e}");
+                }
+            }
+            InputEvent::InsertCd(path) => {
+                if let Err(e) = self.change_cd(path.as_deref()) {
+                    eprintln!("[cd] {e}");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Change le disque du lecteur (ou l'éjecte) : lecteur ATAPI, musique,
+    /// et D: du DOS intégré s'il est monté. Le programme l'apprend comme sur
+    /// un vrai lecteur (UNIT ATTENTION, MSCDEX IOCTL 9).
+    pub fn change_cd(&mut self, image: Option<&std::path::Path>) -> Result<()> {
+        let Some((_, player)) = &self.cd else { return Err("pas de lecteur de CD (option --cdrom au lancement)".into()) };
+        let disc = image.map(crate::cdrom::Disc::open).transpose()?.map(std::sync::Arc::new);
+        let player = player.clone();
+        {
+            let mut p = player.borrow_mut();
+            p.stop();
+            p.disc = disc.clone();
+        }
+        if let Some(ide) = &self.ide {
+            ide.borrow_mut().drive_mut().insert(disc.clone());
+        }
+        self.dos.change_cd(disc.clone())?;
+        if let (Some(d), Some(cd)) = (disc, self.cd.as_mut()) {
+            cd.0 = d;
+        }
+        match image {
+            Some(p) => eprintln!("[cd] {}", p.display()),
+            None => eprintln!("[cd] disque éjecté"),
+        }
+        Ok(())
+    }
+
     /// Monte une image ISO comme lecteur de CD du DOS intégré (MSCDEX).
     pub fn mount_cd(&mut self, drive: u8) -> Result<()> {
         let (disc, player) = self.cd.clone().ok_or("pas d'image de CD (--cdrom)")?;
@@ -570,6 +613,10 @@ impl<B: Backend> Pc<B> {
                 }
             };
             let Some(line) = self.dos.shell_read(mem, &mut self.host, &mut redraw) else { return Ok(code) };
+            for e in std::mem::take(&mut self.dos.pending_media) {
+                self.media_event(e);
+            }
+            let mem = self.vm.mem();
             match self.dos.shell_command(mem, &mut self.host, &line)? {
                 dos::Action::Continue => {}
                 dos::Action::Exit => return Ok(code),
@@ -730,6 +777,7 @@ impl<B: Backend> Pc<B> {
                     Err(e) => eprintln!("bridage : {e}"),
                 },
                 Some(InputEvent::NextDisk) => self.bios.disks.next_floppy(),
+                Some(e @ (InputEvent::InsertFloppy(_) | InputEvent::InsertCd(_))) => self.media_event(e),
                 Some(InputEvent::Until(text)) => {
                     self.until_text = Some((text, Instant::now() - Duration::from_secs(1)));
                     break;

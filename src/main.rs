@@ -26,6 +26,7 @@ mod keyboard;
 mod kvm;
 mod machine;
 mod mem;
+mod menu;
 mod mouse;
 mod ne2000;
 mod net;
@@ -91,12 +92,14 @@ usage: bare86 [options] [program [arguments…]]
   window keys:   Alt+Enter full screen, Ctrl+F5 screenshot,
                  Ctrl+F11 slower, Ctrl+Shift+F11 (or Ctrl+F12) faster,
                  Ctrl+F10 or middle button releases the mouse,
-                 Ctrl+F4 next floppy in A:
+                 Ctrl+F4 next floppy in A:, Ctrl+F1 menu (floppy and CD
+                 change, speed, full screen, screenshot, shortcuts)
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
                  {wait:MS} pause, {speed:MIPS} or {speed:max} speed change,
-                 {disk} next floppy in A:, {until:TEXT} wait for TEXT on
+                 {disk} next floppy in A:, {fda:IMG} {cd:IMG} {cd:} change
+                 floppy or CD (empty: eject), {until:TEXT} wait for TEXT on
                  the text screen, {mouse:DX,DY,BUTTONS} mouse motion
   --bench | --throttle | --remap   step 0 measurement benches";
 
@@ -268,8 +271,16 @@ fn main() -> ExitCode {
     let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats, boot };
     let result = if window {
         let host_keys = keys;
-        let mips = opts.cfg.mips;
-        sdl::run("Bare86", mips, fullscreen, move |mut host| {
+        let menu = menu::State {
+            floppy: opts.cfg.disks[0].first().cloned(),
+            floppies: opts.cfg.disks[0].clone(),
+            cd_drive: opts.cfg.cdrom.is_some(),
+            cd: opts.cfg.cdrom.clone(),
+            speed: opts.cfg.mips,
+            fullscreen,
+            message: None,
+        };
+        sdl::run("Bare86", menu, move |mut host| {
             if let Some(ev) = host_keys {
                 host.input = Box::new(host::ScriptedInput(ev.into()));
             }

@@ -95,7 +95,6 @@ impl Ide {
         Rc::new(RefCell::new(self))
     }
 
-    #[allow(dead_code)] // changement de disque à chaud, à venir
     pub fn drive_mut(&mut self) -> &mut Drive {
         &mut self.drive
     }

@@ -59,7 +59,7 @@ impl InputSource for ChannelInput {
 const SPEEDS: [f64; 8] = [3.0, 6.0, 12.0, 25.0, 50.0, 100.0, 200.0, 400.0];
 
 /// Cran suivant (`faster`) ou précédent de l'échelle des vitesses.
-fn step_speed(current: Option<f64>, faster: bool) -> Option<f64> {
+pub(crate) fn step_speed(current: Option<f64>, faster: bool) -> Option<f64> {
     let i = current.map_or(SPEEDS.len(), |m| SPEEDS.iter().position(|&s| s >= m).unwrap_or(SPEEDS.len()));
     if faster {
         SPEEDS.get(i + 1).copied()
@@ -177,7 +177,7 @@ fn send_key(tx: &Sender<InputEvent>, scancode: Option<Scancode>, release: bool) 
 /// Ouvre la fenêtre et exécute `machine` (qui construit et lance la
 /// machine avec l'hôte fourni) sur le thread du vCPU. Rend son résultat, ou
 /// 0 si la fenêtre est fermée avant la fin du programme.
-pub fn run<F>(title: &str, initial_mips: Option<f64>, start_fullscreen: bool, machine: F) -> Result<u8, String>
+pub fn run<F>(title: &str, mut menu_state: crate::menu::State, machine: F) -> Result<u8, String>
 where
     F: FnOnce(Host) -> Result<u8, String> + Send + 'static,
 {
@@ -253,8 +253,14 @@ where
     // Raccourcis (Ctrl+F5, F10, F11, F12, Alt+Entrée) : leur relâchement
     // n'est pas transmis à l'invité.
     let mut swallowed: Vec<Scancode> = Vec::new();
-    let mut speed = initial_mips;
-    let mut fullscreen = start_fullscreen;
+    let mut speed = menu_state.speed;
+    let mut fullscreen = menu_state.fullscreen;
+    // Menu (Ctrl+F1) : ouvert ou non, et touches enfoncées côté invité (leur
+    // relâchement lui est transmis même menu ouvert).
+    let mut menu: Option<crate::menu::Menu> = None;
+    let menu_font = crate::font::Font::builtin();
+    let mut held: Vec<Scancode> = Vec::new();
+    let mut redraw = false;
     if fullscreen {
         let _ = canvas.window_mut().set_fullscreen(true);
     }
@@ -276,6 +282,73 @@ where
                 Event::Window { win_event: sdl3::event::WindowEvent::FocusLost, .. } if captured => {
                     set_capture(&mut canvas, false, &mut captured, speed);
                 }
+                Event::KeyDown { scancode: Some(Scancode::F1), keymod, repeat: false, .. }
+                    if keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD) =>
+                {
+                    swallowed.push(Scancode::F1);
+                    menu = match menu {
+                        Some(_) => None,
+                        None => {
+                            if captured {
+                                set_capture(&mut canvas, false, &mut captured, speed);
+                            }
+                            menu_state.message = None;
+                            Some(crate::menu::Menu::new())
+                        }
+                    };
+                    redraw = true;
+                }
+                Event::KeyDown { scancode: Some(sc), .. } if menu.is_some() => {
+                    let Some(key) = menu_key(sc) else { continue };
+                    let m = menu.as_mut().expect("menu ouvert");
+                    menu_state.speed = speed;
+                    menu_state.fullscreen = fullscreen;
+                    menu_state.message = None;
+                    redraw = true;
+                    match m.key(key, &menu_state) {
+                        crate::menu::Action::None => {}
+                        crate::menu::Action::Close => menu = None,
+                        crate::menu::Action::Quit => return Ok(0),
+                        crate::menu::Action::Speed(s) => {
+                            speed = s;
+                            let _ = tx.send(InputEvent::Speed(speed));
+                            set_title(&mut canvas, captured, speed);
+                        }
+                        crate::menu::Action::Fullscreen => {
+                            fullscreen = !fullscreen;
+                            let _ = canvas.window_mut().set_fullscreen(fullscreen);
+                        }
+                        crate::menu::Action::Screenshot => screenshot(&frame),
+                        crate::menu::Action::Floppy(p) => match crate::disk::Disk::open(&p, true) {
+                            Ok(_) => {
+                                let _ = tx.send(InputEvent::InsertFloppy(p.clone()));
+                                menu_state.message = Some(format!("A: = {}", p.file_name().unwrap_or_default().to_string_lossy()));
+                                menu_state.floppy = Some(p);
+                            }
+                            Err(e) => menu_state.message = Some(e),
+                        },
+                        crate::menu::Action::Cd(p) => match p.as_deref().map(crate::cdrom::Disc::open).transpose() {
+                            Ok(_) => {
+                                let _ = tx.send(InputEvent::InsertCd(p.clone()));
+                                menu_state.message = Some(match &p {
+                                    Some(p) => format!("CD = {}", p.file_name().unwrap_or_default().to_string_lossy()),
+                                    None => "CD éjecté".into(),
+                                });
+                                menu_state.cd = p;
+                            }
+                            Err(e) => menu_state.message = Some(e),
+                        },
+                    }
+                    menu_state.speed = speed;
+                    menu_state.fullscreen = fullscreen;
+                }
+                Event::KeyUp { scancode: Some(sc), .. } if menu.is_some() => {
+                    if held.contains(&sc) {
+                        held.retain(|&h| h != sc);
+                        send_key(&tx, Some(sc), true);
+                    }
+                    swallowed.retain(|&s| s != sc);
+                }
                 Event::KeyDown { scancode: Some(sc @ (Scancode::F4 | Scancode::F5 | Scancode::F10 | Scancode::F11 | Scancode::F12)), keymod, repeat, .. }
                     if keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD)
                         && (sc != Scancode::F10 || captured) =>
@@ -286,6 +359,12 @@ where
                         Scancode::F5 if !repeat => screenshot(&frame),
                         Scancode::F4 if !repeat => {
                             let _ = tx.send(InputEvent::NextDisk);
+                            // Même rotation que la machine (Disks::next_floppy).
+                            let list = &menu_state.floppies;
+                            if list.len() >= 2 {
+                                let i = menu_state.floppy.as_ref().and_then(|f| list.iter().position(|p| p == f)).unwrap_or(0);
+                                menu_state.floppy = Some(list[(i + 1) % list.len()].clone());
+                            }
                         }
                         // Ctrl+F11 : plus lent ; Ctrl+Maj+F11 (ou Ctrl+F12, souvent pris
                         // par le bureau, KDE par exemple) : plus vite.
@@ -304,6 +383,7 @@ where
                     swallowed.push(Scancode::Return);
                     fullscreen = !fullscreen;
                     let _ = canvas.window_mut().set_fullscreen(fullscreen);
+                    redraw = true;
                 }
                 Event::KeyUp { scancode: Some(sc), .. } if swallowed.contains(&sc) => swallowed.retain(|&s| s != sc),
                 Event::JoyDeviceAdded { which, .. } => open_joystick(which, &mut joystick),
@@ -327,14 +407,25 @@ where
                 Event::MouseButtonUp { mouse_btn: sdl3::mouse::MouseButton::Middle, .. } if swallow_middle => {
                     swallow_middle = false;
                 }
+                // Menu ouvert : la souris reste libre.
+                Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } | Event::MouseMotion { .. } if menu.is_some() => {}
                 Event::MouseButtonDown { .. } if !captured => set_capture(&mut canvas, true, &mut captured, speed),
                 Event::MouseMotion { .. } | Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } if !captured => {}
                 Event::KeyDown { scancode, repeat, .. } => {
                     // Répétition : le clavier PC renvoie l'appui.
                     let _ = repeat;
+                    if let Some(sc) = scancode
+                        && !held.contains(&sc)
+                    {
+                        held.push(sc);
+                    }
                     send_key(&tx, scancode, false);
                 }
-                Event::KeyUp { scancode, .. } => send_key(&tx, scancode, true),
+                Event::KeyUp { scancode, .. } => {
+                    held.retain(|&h| Some(h) != scancode);
+                    send_key(&tx, scancode, true);
+                }
+                Event::Window { win_event: sdl3::event::WindowEvent::PixelSizeChanged(..) | sdl3::event::WindowEvent::Exposed, .. } => redraw = true,
                 Event::MouseMotion { xrel, yrel, .. } => {
                     let _ = tx.send(InputEvent::Mouse { dx: xrel as i32, dy: yrel as i32, buttons });
                 }
@@ -379,6 +470,11 @@ where
             }
             let t = texture.as_mut().expect("texture");
             t.update(None, &bytes, w * 4).map_err(|e| e.to_string())?;
+            redraw = true;
+        }
+        if redraw && let Some(t) = texture.as_ref() {
+            redraw = false;
+            let (w, h) = size;
             // Rapport 4:3, centré.
             let (ww, wh) = canvas.output_size().map_err(|e| e.to_string())?;
             let (ww, wh) = (ww as f32, wh as f32);
@@ -404,11 +500,56 @@ where
             canvas.set_draw_color(sdl3::pixels::Color::RGB(0, 0, 0));
             canvas.clear();
             canvas.copy(up, None, FRect::new((ww - dw) / 2.0, (wh - dh) / 2.0, dw, dh)).map_err(|e| e.to_string())?;
+            if let Some(m) = &menu {
+                draw_menu(&mut canvas, &creator, m, &menu_state, &menu_font, (ww, wh))?;
+            }
             canvas.present();
         } else {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+}
+
+/// Touche SDL → touche du menu.
+fn menu_key(sc: Scancode) -> Option<crate::menu::Key> {
+    use crate::menu::Key;
+    Some(match sc {
+        Scancode::Up | Scancode::Kp8 => Key::Up,
+        Scancode::Down | Scancode::Kp2 => Key::Down,
+        Scancode::Left | Scancode::Kp4 => Key::Left,
+        Scancode::Right | Scancode::Kp6 => Key::Right,
+        Scancode::Return | Scancode::KpEnter | Scancode::Space => Key::Enter,
+        Scancode::Escape => Key::Esc,
+        Scancode::PageUp | Scancode::Kp9 => Key::PageUp,
+        Scancode::PageDown | Scancode::Kp3 => Key::PageDown,
+        Scancode::Home | Scancode::Kp7 => Key::Home,
+        Scancode::End | Scancode::Kp1 => Key::End,
+        Scancode::Backspace => Key::Backspace,
+        _ => return None,
+    })
+}
+
+/// Menu par-dessus l'image : fond assombri, boîte agrandie d'un facteur
+/// entier (net), centrée.
+fn draw_menu(
+    canvas: &mut sdl3::render::Canvas<sdl3::video::Window>,
+    creator: &sdl3::render::TextureCreator<sdl3::video::WindowContext>,
+    menu: &crate::menu::Menu,
+    state: &crate::menu::State,
+    font: &crate::font::Font,
+    (ww, wh): (f32, f32),
+) -> Result<(), String> {
+    let (w, h, px) = crate::menu::rasterize(&menu.render(state), font);
+    let mut t = creator.create_texture_streaming(PixelFormat::XRGB8888, w as u32, h as u32).map_err(|e| e.to_string())?;
+    t.set_scale_mode(sdl3::render::ScaleMode::Nearest);
+    let bytes: Vec<u8> = px.iter().flat_map(|p| p.to_le_bytes()).collect();
+    t.update(None, &bytes, w * 4).map_err(|e| e.to_string())?;
+    canvas.set_blend_mode(sdl3::render::BlendMode::Blend);
+    canvas.set_draw_color(sdl3::pixels::Color::RGBA(0, 0, 0, 140));
+    canvas.fill_rect(FRect::new(0.0, 0.0, ww, wh)).map_err(|e| e.to_string())?;
+    let k = ((ww * 0.92 / w as f32).min(wh * 0.92 / h as f32)).floor().max(1.0);
+    let (mw, mh) = (w as f32 * k, h as f32 * k);
+    canvas.copy(&t, None, FRect::new(((ww - mw) / 2.0).floor(), ((wh - mh) / 2.0).floor(), mw, mh)).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -66,6 +66,11 @@ impl Dos {
                     host.quit = true;
                     return None;
                 }
+                // Disque changé à l'invite : appliqué par la machine avant la commande.
+                e @ (InputEvent::InsertFloppy(_) | InputEvent::InsertCd(_)) => {
+                    self.pending_media.push(e);
+                    None
+                }
                 // Vitesse : sans objet au shell (aucun programme ne tourne).
                 InputEvent::Mouse { .. }
                 | InputEvent::Speed(_)

@@ -177,6 +177,24 @@ fn mscdex_on_iso() {
     assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/mscdex.S)");
 }
 
+/// Changement de CD à chaud (menu) : la machine démarre avec « AUTRE »
+/// (sans fichier), passe sur « ESSAI » ; le programme ne réussit que si D:
+/// et MSCDEX voient le nouveau disque.
+#[test]
+fn cd_change_reaches_dos() {
+    let Some((first, dir1)) = crate::iso9660::tests::xorriso_iso("AUTRE", &[("vide.txt", b"")]) else { return };
+    let Some((second, dir2)) = crate::iso9660::tests::xorriso_iso("ESSAI", &[("lisez.txt", b"Bonjour du CD")]) else { return };
+    let cfg = Config { cdrom: Some(first), ..Config::default() };
+    let mut pc = Pc::new(&cfg, Host::headless(Box::new(Capture::default()))).expect("machine");
+    pc.mount_cd(3).expect("montage du CD");
+    pc.change_cd(Some(&second)).expect("changement de CD");
+    pc.load_com(program!("mscdex")).expect("chargement");
+    let code = pc.run().expect("exécution");
+    std::fs::remove_dir_all(&dir1).unwrap();
+    std::fs::remove_dir_all(&dir2).unwrap();
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/mscdex.S)");
+}
+
 /// Pistes audio par MSCDEX : l'ISO de xorriso en piste de données
 /// MODE1/2352, puis 400 secteurs audio.
 #[test]

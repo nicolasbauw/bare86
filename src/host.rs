@@ -37,6 +37,10 @@ pub enum InputEvent {
     Speed(Option<f64>),
     /// Disquette suivante dans A: (Ctrl+F4, `{disk}`).
     NextDisk,
+    /// Disquette choisie pour A: (menu).
+    InsertFloppy(std::path::PathBuf),
+    /// CD choisi, ou éjection (menu).
+    InsertCd(Option<std::path::PathBuf>),
     /// Script : l'entrée suivante attend que l'écran texte affiche ce texte.
     Until(String),
     /// Joystick : manches branchés (0, 1 ou 2), axe (n°, valeur SDL), bouton.

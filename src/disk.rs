@@ -131,6 +131,18 @@ impl Disks {
         Ok(d)
     }
 
+    /// Met l'image `path` dans A: (choisie dans le menu).
+    pub fn insert_floppy(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let d = Disk::open(path, true)?;
+        self.floppies[0] = Some(d);
+        self.changed[0] = true;
+        if let Some(i) = self.a_images.iter().position(|p| p == path) {
+            self.a_index = i;
+        }
+        eprintln!("[disque] A: = {}", path.display());
+        Ok(())
+    }
+
     /// Change la disquette de A: pour l'image suivante de la liste.
     pub fn next_floppy(&mut self) {
         if self.a_images.len() < 2 {

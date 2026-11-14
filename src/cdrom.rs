@@ -445,7 +445,6 @@ impl Drive {
     }
 
     /// Change de disque (ou l'éjecte) : le pilote le saura au prochain paquet.
-    #[allow(dead_code)] // changement de disque à chaud, à venir
     pub fn insert(&mut self, disc: Option<SharedDisc>) {
         let mut p = self.player.borrow_mut();
         p.stop();

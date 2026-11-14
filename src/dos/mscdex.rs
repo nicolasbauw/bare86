@@ -9,6 +9,7 @@
 //! derrière ses points d'entrée (RETF) : les programmes qui appellent le
 //! pilote directement au lieu de passer par 1510h ne sont pas servis.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cdrom::{AudioState, SECTOR};
@@ -39,7 +40,9 @@ pub struct Mscdex {
     /// Le disque a changé depuis la dernière question (IOCTL 9).
     changed: bool,
     player: crate::cdrom::SharedPlayer,
-    iso: Arc<IsoFs>,
+    /// Disque monté (aucun après une éjection) et sa racine dans `vfs`.
+    iso: Option<Arc<IsoFs>>,
+    root: PathBuf,
 }
 
 /// Adresse « Red Book » (trame, seconde, minute, 0) d'un secteur.
@@ -59,16 +62,29 @@ fn to_lba(mode: u8, addr: u32) -> u32 {
 }
 
 impl Mscdex {
-    pub fn new(drive: u8, iso: Arc<IsoFs>, player: crate::cdrom::SharedPlayer) -> Self {
-        Self { drive, changed: false, player, iso }
+    pub fn new(drive: u8, root: PathBuf, iso: Arc<IsoFs>, player: crate::cdrom::SharedPlayer) -> Self {
+        Self { drive, changed: false, player, iso: Some(iso), root }
     }
 
-    pub fn volume_label(&self) -> String {
-        self.iso.volume_label()
+    pub fn volume_label(&self) -> Option<String> {
+        self.iso.as_ref().map(|i| i.volume_label())
     }
 
     fn iso(&self) -> Option<Arc<IsoFs>> {
-        Some(self.iso.clone())
+        self.iso.clone()
+    }
+
+    /// Nouveau disque (ou éjection) : rend la racine à monter en D:. Après
+    /// une éjection, la racine ne désigne plus rien (accès en erreur).
+    pub fn change(&mut self, iso: Option<Arc<IsoFs>>) -> PathBuf {
+        super::vfs::unmount(&self.root);
+        self.root = match &iso {
+            Some(i) => super::vfs::mount_iso(self.drive, i.clone()),
+            None => PathBuf::from(format!("\0cd:{}:vide", char::from(b'A' + self.drive))),
+        };
+        self.iso = iso;
+        self.changed = true;
+        self.root.clone()
     }
 
     /// En-tête du pilote : caractère, IOCTL ; nom « MSCD001 », une unité.

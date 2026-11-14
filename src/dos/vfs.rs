@@ -25,6 +25,11 @@ pub fn mount_iso(drive: u8, iso: Arc<IsoFs>) -> PathBuf {
     root
 }
 
+/// Oublie l'image montée sur cette racine (disque changé).
+pub fn unmount(root: &Path) {
+    ISOS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(r, _)| r != root);
+}
+
 /// Image et composants d'un chemin sous une racine virtuelle.
 fn iso_path(p: &Path) -> Option<(Arc<IsoFs>, Vec<String>)> {
     let isos = ISOS.lock().unwrap_or_else(|e| e.into_inner());
