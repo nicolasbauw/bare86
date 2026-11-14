@@ -28,12 +28,18 @@ difference is under the hood, and shows with demanding late-90s games.
 ## Features
 
 - **Native speed.** No instruction is emulated in the normal course of things.
-  Doom's `timedemo demo1` runs at about 116 frames per second, and Quake 1.06
-  at about 970 frames per second in 320×200 VGA and 627 in 640×480 VESA, on a
-  Ryzen AI 9 HX 370. A small x86
+  Doom 1.9's `timedemo demo1` runs at about 110 frames per second with the
+  full-width status bar (`screenblocks 10`) and 122 with the default view
+  (`screenblocks 9`), and Quake 1.06 at about 940 frames per second in 320×200
+  VGA and 600 in 640×480 VESA, on a Ryzen AI 9 HX 370. A small x86
   interpreter only takes over for bursts of accesses that no hardware mapping
   can serve: planar VGA writes (latches, bit mask, several planes at once) and
-  dense port I/O.
+  dense port I/O (palette loads, sound and network chips).
+- **Idle when the game waits.** A game that busy-waits for its next frame
+  (polling the timer, the VGA status register, or a tick counter in memory)
+  no longer keeps a host core at 100 %: Bare86 recognizes the wait and sleeps
+  until the next interrupt (Quake at rest: about a third of a core; Doom
+  playing its demos: two thirds, most of it actual work).
 - **A built-in DOS, nothing to install.** Bare86 provides its own DOS (it
   reports version 5.00): a host directory becomes drive C:, `.COM` and `.EXE`
   programs start at once. XMS 3.0, EMS 4.0 (LIM) and the DOS extenders used by
