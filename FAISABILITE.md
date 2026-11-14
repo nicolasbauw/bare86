@@ -572,7 +572,20 @@ Avancement :
      - Correctif général : les instructions de chaîne sur les ports (`rep insw`/`outsw`) arrivent en une seule sortie KVM de plusieurs accès ; la taille unitaire, que kvm-ioctls ne rend pas, est relue dans `kvm_run` et le bus d'E/S découpe (`Exit::IoIn/IoOut { size }`).
      - Tests : `ne2000::tests` (PROM, émission, réception dans l'anneau, anneau plein), `net::tests::slirp_answers_dhcp` (DISCOVER → OFFER, sans réseau réel).
      - Essai : image `~/Dev/dos-progs/net/fd13-net.img` (FreeDOS + `C:\NET` : NE2000.COM, mTCP, `NETUP.BAT` = pilote + DHCP) ; `bare86 --hda COPIE.img --boot --net --keys "{until:C:\>}C:\NET\NETUP{enter}{until:Settings written}C:\NET\PING 10.0.2.2{enter}"`. Paquets FreeDOS d'origine (`crynwr.zip`, `mtcp.zip`, dépôt 1.3/net d'ibiblio) dans `~/Dev/dos-progs/net/pkgs`.
-     - **Reste** : IPX des jeux (Doom, Duke3D) par un pont (pilote ODI/IPX sur le packet driver, ou IPX émulé côté hôte façon DOSBox) ; débit (trames reçues relevées à chaque tour de boucle, HLT jusqu'à 10 ms : un réveil du vCPU par le thread réseau ferait mieux) ; TAP en option.
+     - **Débit (2026-11-14)** : HTGET de 4 Mo vers `NUL`, mesuré par `tools/netbench.sh` (trace `BARE86_NETLOG`, première → dernière trame de données), épinglé sur les cœurs rapides :
+
+       | Étape | Débit | Sorties de VM par trame |
+       |---|---|---|
+       | Trames relevées à chaque tour de boucle | 1,6 Mo/s | ≈ 60 |
+       | + réveil du vCPU par le thread réseau | 3,4 Mo/s | ≈ 60 |
+       | + rafales de ports dans l'interpréteur | 4,8 Mo/s | ≈ 20 |
+       | + INS/OUTS et PIC servis en rafale | **9,5 Mo/s** | ≈ 8 |
+
+       (Une vraie NE2000 ISA plafonne vers 1 Mo/s.) Aucune retransmission ; la limite restante est la fenêtre TCP de mTCP (≈ 9–16 Ko) sur l'aller-retour.
+       - *Réveil* : à l'arrivée de trames, le thread réseau écrit dans un eventfd (attente en HLT par `ppoll`, précise à la ns, au lieu d'un sommeil) et envoie au thread du vCPU le signal du battement (sortie de `KVM_RUN`) ; un seul réveil tant que le vCPU n'a pas relevé les trames.
+       - *Rafales de ports* : le pilote Crynwr intercale `push ax / in al,61h / pop ax` (temporisation ISA) entre ses accès aux registres : ≈ 24 lectures de 61h par trame, une sortie chacune (≈ 4 µs). Une sortie sur un port de la carte lance désormais une rafale de l'interpréteur (comme la VGA), qui sert IN/OUT/INS/OUTS sur les ports déclarés (`IoBus::burst_on` : carte et déclencheurs ; 61h, PIC servis sans déclencher, pour que les boucles d'attente des jeux sur 61h ne passent pas dans l'interpréteur). Droits respectés : CPL ≤ IOPL, sinon (et toujours en V86, cas de JEMMEX) bitmap d'E/S du TSS (`Cpu::tr_base/tr_limit`) ; refus → le processeur exécute l'instruction. Test `port_io_in_bursts` ; difftest inchangé.
+       - *Processeur hybride de l'hôte* (Ryzen AI 9 HX 370 : CPU 0–3 et 12–15 Zen 5 à 5,2 GHz, les 16 autres Zen 5c à 3,3 GHz) : une session ordonnancée sur un cœur Zen 5c tourne ≈ 1,8× moins vite en entier (5,3 contre 9,5 Mo/s ici). Pour toute mesure : `taskset -c 0-3`, sinon des passes « lentes » apparaissent au hasard (sans doute une part du bruit des mesures de Doom).
+     - **Reste** : IPX des jeux (Doom, Duke3D) par un pont (pilote ODI/IPX sur le packet driver, ou IPX émulé côté hôte façon DOSBox) ; TAP en option.
   2. **CD-ROM** : MSCDEX en HLE, images ISO/CUE, pistes audio. Sous un vrai DOS, un MSCDEX de l'hôte ne serait pas joignable (le noyau FreeDOS ne renvoie pas l'INT 2Fh au BIOS) : y ajouter un lecteur ATAPI émulé, servi par les pilotes du DOS (UDVD2, OAKCDROM) et SHSUCDX/MSCDEX, utile aussi à Windows.
   3. **Windows 95/98** (comme rust-dos ; copie de Windows fournie par le propriétaire du projet). Démarrage depuis un vrai DOS (acquis), puis WIN.COM et le VMM32 en mode protégé : c'est Windows qui pilote alors le matériel, avec ses propres pilotes. À prévoir :
      - **contrôleur IDE/ATA** (ports 1F0h–1F7h, 3F6h, IRQ 14) sur l'image disque : sans lui, Windows reste en « mode de compatibilité MS-DOS » pour les disques (INT 13h en V86, lent mais fonctionnel, premier palier possible) ;
@@ -593,7 +606,7 @@ Avancement :
 Essais commodes (clavier scripté) : `bare86 --hda COPIE.img --boot --keys "{until:C:\>}cd \DOOMS{enter}doom -timedemo demo1{enter}{until:timed}" --wav /dev/null` ; `--limit S` affiche registres, compteurs et écran ; `--shot F.png` capture à la fin. En zsh, passer les listes d'options par un tableau (`F=(…)` puis `"${F[@]}"`).
 
 À faire, dans l'ordre convenu :
-1. ~~Réseau~~ : FAIT le 2026-11-14 (`--net`, NE2000 + libslirp ; DHCP, ping, HTGET sous FreeDOS + mTCP). Reste IPX pour les jeux, plus tard.
+1. ~~Réseau~~ : FAIT le 2026-11-14 (`--net`, NE2000 + libslirp ; DHCP, ping, HTGET sous FreeDOS + mTCP ; 9,5 Mo/s après réveil du vCPU et rafales de ports). Reste IPX pour les jeux, plus tard. Mesures : épingler sur les cœurs Zen 5 (`taskset -c 0-3`).
 2. **CD-ROM** : MSCDEX en HLE, ISO/CUE, pistes audio ; lecteur ATAPI pour les vrais DOS (et Windows).
 3. **Windows 95/98** (comme rust-dos) : IDE/ATA, ATAPI, 8042 auxiliaire, VGA puis VBE ; détail dans « Reste ensuite » (étape 9). Trancher d'abord : obtention légale de l'installation officielle, et Windows historique ou Windows intégré façon rust-dos.
 4. Restes mineurs : polices chargées par les programmes et 8×8/8×14 (rendu texte d'après le plan 2) ; Keen 4 sans EMS/XMS et rendu de 160 px de large ; Wolf3D scrute 201h sur « Press a key » ; essais en fenêtre par le propriétaire du projet (souris sous FreeDOS, Ctrl+F4).

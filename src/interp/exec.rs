@@ -1009,10 +1009,59 @@ impl<B: Mmio> Exec<'_, B> {
                     return self.jump(ins.near_branch_target() as u32);
                 }
             }
+            Mn::In | Mn::Out => self.port_io(ins)?,
             _ => return Err(Bail),
         }
         self.cpu.ip = next;
         Ok(())
+    }
+
+    /// IN/OUT sur un port servi par l'hôte pendant la rafale, si le
+    /// programme y a droit (sinon le processeur lèvera la faute).
+    fn port_io(&mut self, ins: &Instruction) -> X {
+        let (acc_op, port_op) = if ins.mnemonic() == Mn::In { (0, 1) } else { (1, 0) };
+        let port = match ins.op_kind(port_op) {
+            OpKind::Immediate8 => u16::from(ins.immediate8()),
+            _ => self.cpu.reg(R::DX) as u16,
+        };
+        let size = ins.op_register(acc_op).size() as u8;
+        if !self.mmio.port_claims(port) || !self.io_allowed(port, size) {
+            return Err(Bail);
+        }
+        let acc = self.loc(ins, acc_op)?;
+        if ins.mnemonic() == Mn::In {
+            let v = self.mmio.port_in(port, size);
+            self.set(acc, u32::from(size), v)?;
+        } else {
+            let v = self.get(acc, u32::from(size))?;
+            self.mmio.port_out(port, size, v);
+        }
+        self.mmio_hits += 1;
+        Ok(())
+    }
+
+    /// Droit d'accès aux ports : toujours en mode réel, si CPL ≤ IOPL en mode
+    /// protégé ; sinon (et toujours en V86) d'après la bitmap du TSS.
+    fn io_allowed(&self, port: u16, size: u8) -> bool {
+        if !self.cpu.protected() {
+            return true;
+        }
+        let iopl = ((self.cpu.flags >> 12) & 3) as u8;
+        if !self.cpu.v86() && self.cpu.cpl() <= iopl {
+            return true;
+        }
+        let byte = |off: u32| -> Option<u8> {
+            if off > self.cpu.tr_limit {
+                return None;
+            }
+            let p = translate(self.cpu, self.mem, self.cpu.tr_base.wrapping_add(off), false, false)? as usize;
+            (p < self.mem.size()).then(|| self.mem.read_u8(p))
+        };
+        let Some(map) = byte(0x66).zip(byte(0x67)).map(|(lo, hi)| u32::from(u16::from_le_bytes([lo, hi]))) else { return false };
+        (0..u32::from(size)).all(|i| {
+            let p = u32::from(port) + i;
+            byte(map + (p >> 3)).is_some_and(|b| b & (1 << (p & 7)) == 0)
+        })
     }
 
     /// Mode protégé : chargements de segment, transferts lointains,
@@ -1089,10 +1138,14 @@ impl<B: Mmio> Exec<'_, B> {
 
     fn string(&mut self, ins: &Instruction, next: u32) -> X {
         let mn = ins.mnemonic();
-        if matches!(mn, Mn::Insb | Mn::Insw | Mn::Insd | Mn::Outsb | Mn::Outsw | Mn::Outsd) {
+        let size = ins.memory_size().size() as u32;
+        let port = self.cpu.reg(R::DX) as u16;
+        // INS/OUTS : seulement sur un port servi en rafale, avec le droit d'accès.
+        if matches!(mn, Mn::Insb | Mn::Insw | Mn::Insd | Mn::Outsb | Mn::Outsw | Mn::Outsd)
+            && (!self.mmio.port_claims(port) || !self.io_allowed(port, size as u8))
+        {
             return Err(Bail);
         }
-        let size = ins.memory_size().size() as u32;
         let (si, di, cx) = if self.addr32 { (R::ESI, R::EDI, R::ECX) } else { (R::SI, R::DI, R::CX) };
         let src = if ins.segment_prefix() != R::None { ins.segment_prefix() } else { R::DS };
         let acc = match size {
@@ -1144,6 +1197,20 @@ impl<B: Mmio> Exec<'_, B> {
                     let a = self.cpu.reg(acc);
                     self.cpu.set_flags(ARITH, sub(a, b, 0, size).1);
                     self.cpu.set_reg(di, d.wrapping_add(delta));
+                }
+                Mn::Insb | Mn::Insw | Mn::Insd => {
+                    // Destination vérifiée avant la lecture du port (effet de bord).
+                    self.lin(R::ES, d, size, true)?;
+                    let v = self.mmio.port_in(port, size as u8);
+                    self.wr(R::ES, d, size, v)?;
+                    self.cpu.set_reg(di, d.wrapping_add(delta));
+                    self.mmio_hits += 1;
+                }
+                Mn::Outsb | Mn::Outsw | Mn::Outsd => {
+                    let v = self.rd(src, s, size)?;
+                    self.mmio.port_out(port, size as u8, v);
+                    self.cpu.set_reg(si, s.wrapping_add(delta));
+                    self.mmio_hits += 1;
                 }
                 _ => return Err(Bail),
             }

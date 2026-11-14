@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -61,17 +62,62 @@ pub struct NetLink {
     /// Écrire un octet réveille le thread ; la fermeture l'arrête.
     wake: OwnedFd,
     incoming: Receiver<Vec<u8>>,
+    kick: Arc<Kick>,
+}
+
+/// Réveil du vCPU à l'arrivée de trames : un eventfd pour l'attente en HLT,
+/// le signal du battement pour sortir de `KVM_RUN`. Un seul réveil tant que
+/// le vCPU n'a pas relevé les trames.
+struct Kick {
+    event: OwnedFd,
+    /// Thread du vCPU.
+    tid: libc::pid_t,
+    pending: AtomicBool,
+}
+
+impl Kick {
+    fn fire(&self) {
+        if self.pending.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let one = 1u64;
+        // SAFETY: écriture de 8 octets dans un eventfd ; signal sans effet
+        // autre que l'interruption d'un appel système (gestionnaire vide).
+        unsafe {
+            libc::write(self.event.as_raw_fd(), (&raw const one).cast(), 8);
+            libc::syscall(libc::SYS_tgkill, libc::getpid(), self.tid, crate::timer::signal());
+        }
+    }
+}
+
+/// Contexte des rappels de slirp, dans le thread réseau.
+struct RxContext {
+    tx: Sender<Vec<u8>>,
+    /// Trames reçues pendant le tour en cours.
+    got: bool,
 }
 
 extern "C" fn on_frame(user: *mut libc::c_void, frame: *const u8, len: usize) {
-    // SAFETY: `user` est le `Sender` du thread réseau, vivant pendant toute
-    // la boucle ; `frame` désigne `len` octets valides pendant l'appel.
-    let (tx, data) = unsafe { (&*(user as *const Sender<Vec<u8>>), std::slice::from_raw_parts(frame, len)) };
-    let _ = tx.send(data.to_vec());
+    // SAFETY: `user` est le `RxContext` du thread réseau, vivant pendant
+    // toute la boucle et seulement utilisé par elle ; `frame` désigne `len`
+    // octets valides pendant l'appel.
+    let (ctx, data) = unsafe { (&mut *(user as *mut RxContext), std::slice::from_raw_parts(frame, len)) };
+    let _ = ctx.tx.send(data.to_vec());
+    ctx.got = true;
+    log_frame("->G", data);
 }
 
 impl NetLink {
+    /// À appeler depuis le thread du vCPU (cible des réveils).
     pub fn start(forwards: &[Forward]) -> Result<Self> {
+        crate::timer::install_handler()?;
+        // SAFETY: eventfd neuf, possédé à partir d'ici.
+        let event = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
+        if event < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: descripteur valide, possédé ; gettid sans condition.
+        let kick = Arc::new(Kick { event: unsafe { OwnedFd::from_raw_fd(event) }, tid: unsafe { libc::gettid() }, pending: AtomicBool::new(false) });
         let mut fds = [0; 2];
         // SAFETY: tableau de deux descripteurs, fourni à pipe2.
         if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) } != 0 {
@@ -84,9 +130,10 @@ impl NetLink {
         let (ready_tx, ready) = mpsc::channel::<std::result::Result<(), String>>();
         let queue = outgoing.clone();
         let forwards = forwards.to_vec();
+        let kicker = kick.clone();
         std::thread::Builder::new().name("net".into()).spawn(move || {
-            let tx: Box<Sender<Vec<u8>>> = Box::new(tx);
-            let user = &*tx as *const Sender<Vec<u8>> as *mut libc::c_void;
+            let mut ctx = Box::new(RxContext { tx, got: false });
+            let user = &mut *ctx as *mut RxContext as *mut libc::c_void;
             // SAFETY: rappel et contexte valides tant que ce thread vit.
             let net = unsafe { bare86_net_new(on_frame, user) };
             if net.is_null() {
@@ -104,12 +151,12 @@ impl NetLink {
             }
             let _ = ready_tx.send(Ok(()));
             // Jusqu'à la fermeture du lien (tube fermé).
-            run(net, &read, &queue);
+            run(net, &read, &queue, user.cast(), &kicker);
             // SAFETY: plus aucun usage de `net` après.
             unsafe { bare86_net_free(net) };
         })?;
         ready.recv().map_err(|_| "thread réseau arrêté")??;
-        Ok(Self { outgoing, wake: write, incoming })
+        Ok(Self { outgoing, wake: write, incoming, kick })
     }
 
     /// Trame émise par l'invité.
@@ -121,13 +168,29 @@ impl NetLink {
         unsafe { libc::write(self.wake.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
     }
 
-    /// Trame destinée à l'invité, s'il y en a une.
-    pub fn try_recv(&self) -> Option<Vec<u8>> {
-        self.incoming.try_recv().ok()
+    /// Trames destinées à l'invité. Réarme le réveil d'abord : une trame
+    /// arrivée pendant la relève en redéclenche un.
+    pub fn receive(&self, mut deliver: impl FnMut(Vec<u8>)) {
+        self.kick.pending.store(false, Ordering::Release);
+        while let Ok(f) = self.incoming.try_recv() {
+            deliver(f);
+        }
+    }
+
+    /// Descripteur lisible quand des trames attendent (attente en HLT).
+    pub fn event_fd(&self) -> libc::c_int {
+        self.kick.event.as_raw_fd()
+    }
+
+    /// Vide l'eventfd après une attente.
+    pub fn clear_event(&self) {
+        let mut v = 0u64;
+        // SAFETY: lecture de 8 octets d'un eventfd non bloquant.
+        unsafe { libc::read(self.kick.event.as_raw_fd(), (&raw mut v).cast(), 8) };
     }
 }
 
-fn run(net: *mut RawNet, wake: &OwnedFd, queue: &Mutex<VecDeque<Vec<u8>>>) {
+fn run(net: *mut RawNet, wake: &OwnedFd, queue: &Mutex<VecDeque<Vec<u8>>>, ctx: *mut RxContext, kick: &Kick) {
     let mut buf = [0u8; 256];
     loop {
         // SAFETY: `net` valide pendant toute la boucle.
@@ -144,8 +207,15 @@ fn run(net: *mut RawNet, wake: &OwnedFd, queue: &Mutex<VecDeque<Vec<u8>>>) {
             Err(_) => return,
         };
         for f in frames {
+            log_frame("G->", &f);
             // SAFETY: trame locale, `net` valide.
             unsafe { bare86_net_input(net, f.as_ptr(), f.len()) };
+        }
+        // SAFETY: contexte des rappels, utilisé seulement par ce thread et
+        // hors de tout rappel ici.
+        let ctx = unsafe { &mut *ctx };
+        if std::mem::take(&mut ctx.got) {
+            kick.fire();
         }
     }
 }
@@ -171,7 +241,9 @@ mod tests {
         link.send(dhcp_discover());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let offer = loop {
-            if let Some(f) = link.try_recv() {
+            let mut got = None;
+            link.receive(|f| got = got.take().or(Some(f)));
+            if let Some(f) = got {
                 break f;
             }
             assert!(std::time::Instant::now() < deadline, "pas de réponse DHCP");
@@ -209,4 +281,25 @@ mod tests {
         eth.extend_from_slice(&ip);
         eth
     }
+}
+
+/// Trace des segments TCP (`BARE86_NETLOG=1`) : instant en µs, sens (G =
+/// invité), numéros de séquence et d'acquittement, fenêtre, charge utile.
+/// Sert à mesurer le débit (`tools/netbench.sh`).
+fn log_frame(dir: &str, f: &[u8]) {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    static T0: OnceLock<std::time::Instant> = OnceLock::new();
+    // IPv4 (0800h), TCP (protocole 6), en-tête IP de 20 octets.
+    if !*ON.get_or_init(|| std::env::var_os("BARE86_NETLOG").is_some()) || f.len() < 54 || f[12..14] != [8, 0] || f[23] != 6 || f[14] != 0x45 {
+        return;
+    }
+    let t = T0.get_or_init(std::time::Instant::now).elapsed().as_micros();
+    let tcp = &f[34..];
+    let seq = u32::from_be_bytes([tcp[4], tcp[5], tcp[6], tcp[7]]);
+    let ack = u32::from_be_bytes([tcp[8], tcp[9], tcp[10], tcp[11]]);
+    let win = u16::from_be_bytes([tcp[14], tcp[15]]);
+    let iplen = usize::from(u16::from_be_bytes([f[16], f[17]]));
+    let payload = iplen.saturating_sub(20 + usize::from(tcp[12] >> 4) * 4);
+    eprintln!("{t:>9} {dir} seq={seq} ack={ack} win={win} len={payload}");
 }

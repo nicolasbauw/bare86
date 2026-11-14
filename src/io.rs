@@ -16,11 +16,26 @@ pub struct IoBus {
     /// Ports sans périphérique déjà signalés.
     unmapped: BTreeSet<u16>,
     pub trace: bool,
+    /// Ports servis par l'interpréteur pendant une rafale (sans effet sur
+    /// la boucle de la machine) ; vrai : une sortie sur ce port en lance une.
+    burst: Vec<(RangeInclusive<u16>, bool)>,
 }
 
 impl IoBus {
     pub fn map(&mut self, ports: RangeInclusive<u16>, dev: Box<dyn IoDevice>) {
         self.devices.push((ports, dev));
+    }
+
+    pub fn burst_on(&mut self, ports: RangeInclusive<u16>, starts: bool) {
+        self.burst.push((ports, starts));
+    }
+
+    pub fn serves_in_burst(&self, port: u16) -> bool {
+        self.burst.iter().any(|(r, _)| r.contains(&port))
+    }
+
+    pub fn starts_burst(&self, port: u16) -> bool {
+        self.burst.iter().any(|(r, s)| *s && r.contains(&port))
     }
 
     fn find(&mut self, port: u16) -> Option<&mut Box<dyn IoDevice>> {

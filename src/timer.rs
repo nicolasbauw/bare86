@@ -10,6 +10,26 @@ use std::time::Duration;
 
 extern "C" fn on_signal(_: libc::c_int) {}
 
+/// Signal du battement ; envoyé aussi par d'autres threads (réseau) pour
+/// faire sortir le vCPU de `KVM_RUN` sans attendre la période.
+pub fn signal() -> libc::c_int {
+    libc::SIGRTMIN() + 1
+}
+
+/// Gestionnaire vide, sans SA_RESTART pour que KVM_RUN rende EINTR.
+pub fn install_handler() -> io::Result<()> {
+    // SAFETY: sigaction entièrement initialisée, gestionnaire sans effet.
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = on_signal as *const () as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        if libc::sigaction(signal(), &sa, std::ptr::null_mut()) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 pub struct Heartbeat {
     id: libc::timer_t,
     period: Duration,
@@ -18,16 +38,10 @@ pub struct Heartbeat {
 impl Heartbeat {
     /// À créer dans le thread qui exécute la VM (le signal lui est destiné).
     pub fn new(period: Duration) -> io::Result<Self> {
-        let sig = libc::SIGRTMIN() + 1;
-        // SAFETY: gestionnaire vide, sans SA_RESTART pour que KVM_RUN rende
-        // EINTR ; sigevent entièrement initialisé.
+        let sig = signal();
+        install_handler()?;
+        // SAFETY: sigevent entièrement initialisé.
         unsafe {
-            let mut sa: libc::sigaction = std::mem::zeroed();
-            sa.sa_sigaction = on_signal as *const () as usize;
-            libc::sigemptyset(&mut sa.sa_mask);
-            if libc::sigaction(sig, &sa, std::ptr::null_mut()) != 0 {
-                return Err(io::Error::last_os_error());
-            }
             let mut ev: libc::sigevent = std::mem::zeroed();
             ev.sigev_notify = libc::SIGEV_THREAD_ID;
             ev.sigev_signo = sig;

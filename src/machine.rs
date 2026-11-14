@@ -126,6 +126,9 @@ struct MmioBus<'a> {
     vga: &'a mut Vga,
     accesses: u64,
     reads: u64,
+    /// Ports servis pendant une rafale (`IoBus::serves_in_burst`).
+    io: Option<&'a mut IoBus>,
+    port_accesses: u64,
 }
 
 impl Mmio for MmioBus<'_> {
@@ -142,6 +145,24 @@ impl Mmio for MmioBus<'_> {
         if VGA_WINDOW.contains(&(addr as usize)) {
             self.accesses += 1;
             self.vga.write(addr as usize - VGA_WINDOW.start, v);
+        }
+    }
+    fn port_claims(&self, port: u16) -> bool {
+        self.io.as_ref().is_some_and(|io| io.serves_in_burst(port))
+    }
+    fn port_in(&mut self, port: u16, size: u8) -> u32 {
+        self.port_accesses += 1;
+        let mut data = [0u8; 4];
+        let n = usize::from(size);
+        if let Some(io) = &mut self.io {
+            io.read(port, size, &mut data[..n]);
+        }
+        u32::from_le_bytes(data)
+    }
+    fn port_out(&mut self, port: u16, size: u8, v: u32) {
+        self.port_accesses += 1;
+        if let Some(io) = &mut self.io {
+            io.write(port, size, &v.to_le_bytes()[..usize::from(size)]);
         }
     }
 }
@@ -180,6 +201,8 @@ pub struct Stats {
     pub vram_unmaps: u64,
     /// Changements de page de l'affichage (écritures du registre 0Ch du CRTC).
     pub page_flips: u64,
+    /// Accès aux ports servis en rafale par l'interpréteur (sans sortie).
+    pub burst_ports: u64,
     /// Sorties d'E/S par port (lectures et écritures).
     pub io_ports: std::collections::HashMap<u16, u64>,
 }
@@ -197,6 +220,7 @@ impl std::fmt::Debug for Stats {
             .field("vram_maps", &self.vram_maps)
             .field("vram_unmaps", &self.vram_unmaps)
             .field("page_flips", &self.page_flips)
+            .field("burst_ports", &self.burst_ports)
             .field("io_ports", &ports)
             .finish()
     }
@@ -355,6 +379,13 @@ impl<B: Backend> Pc<B> {
                 let nic = crate::ne2000::Ne2000::new().shared();
                 let base = crate::ne2000::BASE;
                 io.map(base..=base + 0x1F, Box::new(crate::ne2000::Ne2000Ports(nic.clone())));
+                // Le pilote enchaîne les accès aux registres, entrecoupés de
+                // lectures de 61h (temporisation du bus ISA).
+                io.burst_on(base..=base + 0x1F, true);
+                io.burst_on(0x61..=0x61, false);
+                // Masque et fin d'interruption de son gestionnaire d'IRQ.
+                io.burst_on(0x20..=0x21, false);
+                io.burst_on(0xA0..=0xA1, false);
                 Some((nic, crate::net::NetLink::start(forwards).map_err(|e| format!("réseau : {e}"))?))
             }
             None => None,
@@ -618,9 +649,7 @@ impl<B: Backend> Pc<B> {
         for frame in nic.outbox.drain(..) {
             link.send(frame);
         }
-        while let Some(frame) = link.try_recv() {
-            nic.deliver(frame);
-        }
+        link.receive(|frame| nic.deliver(frame));
         if nic.take_irq() {
             self.pic.borrow_mut().raise(crate::ne2000::IRQ);
         }
@@ -760,7 +789,19 @@ impl<B: Backend> Pc<B> {
         let now = Instant::now();
         let until = self.pit.borrow().next_irq0().unwrap_or(now + HALT_MAX).min(now + HALT_MAX);
         if until > now {
-            std::thread::sleep(until - now);
+            match &self.nic {
+                // Attente écourtée par l'arrivée d'une trame.
+                Some((_, link)) => {
+                    let mut pfd = libc::pollfd { fd: link.event_fd(), events: libc::POLLIN, revents: 0 };
+                    let d = until - now;
+                    let ts = libc::timespec { tv_sec: d.as_secs() as _, tv_nsec: d.subsec_nanos() as _ };
+                    // SAFETY: un pollfd et un délai locaux ; EINTR (battement)
+                    // écourte l'attente, comme un réveil.
+                    unsafe { libc::ppoll(&mut pfd, 1, &ts, std::ptr::null()) };
+                    link.clear_event();
+                }
+                None => std::thread::sleep(until - now),
+            }
         }
         Ok(())
     }
@@ -800,6 +841,9 @@ impl<B: Backend> Pc<B> {
             self.stats.exits += 1;
             let mut host_call = false;
             let mut mmio = false;
+            // Sortie sur un port de périphérique très sollicité (carte réseau) :
+            // les accès suivants sont servis en rafale par l'interpréteur.
+            let mut port_burst = false;
             match self.vm.run()? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
                 Exit::IoOut { port: HOST_KBD_PORT, data, .. } => {
@@ -809,6 +853,7 @@ impl<B: Backend> Pc<B> {
                 Exit::IoOut { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
                     self.io.write(port, size, data);
+                    port_burst = data.len() == usize::from(size) && self.io.starts_burst(port);
                     if matches!(port, 0x60 | 0x64 | 0x92) {
                         self.sync_a20()?;
                         if self.kbc.borrow().reset
@@ -823,11 +868,12 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::IoIn { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
-                    self.io.read(port, size, data)
+                    self.io.read(port, size, data);
+                    port_burst = data.len() == usize::from(size) && self.io.starts_burst(port);
                 }
                 Exit::MmioRead { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
-                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0 };
                     for (i, b) in data.iter_mut().enumerate() {
                         let a = addr as u32 + i as u32;
                         *b = if bus.claims(a, false) { bus.read8(a) } else { 0xFF };
@@ -839,7 +885,7 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::MmioWrite { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
-                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0 };
                     for (i, &b) in data.iter().enumerate() {
                         bus.write8(addr as u32 + i as u32, b);
                     }
@@ -873,13 +919,14 @@ impl<B: Backend> Pc<B> {
                 Exit::Shutdown => return Err("arrêt du processeur (triple faute ?)".into()),
                 Exit::Other(e) => return Err(format!("sortie de VM inattendue : {e}").into()),
             }
-            if mmio && !self.interp {
+            if mmio {
                 self.stats.mmio_exits += 1;
-            } else if mmio {
-                self.stats.mmio_exits += 1;
+            }
+            if (mmio || port_burst) && self.interp {
                 let mut vga = self.vga.borrow_mut();
-                let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0 };
+                let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0 };
                 let burst = interp::continue_in_host(&mut self.vm, &mut bus, IDLE_LIMIT, BURST_BUDGET)?;
+                self.stats.burst_ports += bus.port_accesses;
                 self.window.emulated_in_epoch += bus.accesses;
                 self.window.reads_in_epoch += bus.reads;
                 self.stats.vram_emulated += bus.accesses;

@@ -27,6 +27,15 @@ pub trait Mmio {
     fn claims(&self, addr: u32, write: bool) -> bool;
     fn read8(&mut self, addr: u32) -> u8;
     fn write8(&mut self, addr: u32, v: u8);
+    /// Vrai si les IN/OUT sur ce port sont servis pendant la rafale (sinon
+    /// la rafale s'arrête et le processeur exécute l'instruction).
+    fn port_claims(&self, _port: u16) -> bool {
+        false
+    }
+    fn port_in(&mut self, _port: u16, _size: u8) -> u32 {
+        u32::MAX
+    }
+    fn port_out(&mut self, _port: u16, _size: u8, _v: u32) {}
 }
 
 /// Registre de segment avec son descripteur en cache (comme le processeur).
@@ -83,12 +92,16 @@ pub struct Cpu {
     /// Répertoire de pages (CR3) et CR4 (PSE : pages de 4 Mo).
     pub cr3: u32,
     pub cr4: u32,
+    /// TSS (base linéaire, limite) : bitmap des ports en mode protégé et V86.
+    pub tr_base: u32,
+    pub tr_limit: u32,
     pub(crate) seg_dirty: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum StopReason {
-    /// Trop d'instructions de suite sans accès VRAM : la VM reprend la main.
+    /// Trop d'instructions de suite sans accès VRAM ni port servi : la VM
+    /// reprend la main.
     Idle,
     /// Plafond d'instructions par rafale atteint (interruptions, bridage).
     Budget,
@@ -128,6 +141,8 @@ impl Cpu {
             cr0: s.cr0 as u32,
             cr3: s.cr3 as u32,
             cr4: s.cr4 as u32,
+            tr_base: s.tr.base as u32,
+            tr_limit: s.tr.limit,
             seg_dirty: false,
         }
     }
@@ -137,7 +152,7 @@ impl Cpu {
         let mut gpr = [0; 8];
         gpr[4] = sp.into();
         let s = Seg::real(seg);
-        Self { gpr, ip: ip.into(), flags: 0x202, seg: [s; 6], stack32: false, idt_base: 0, cr0: 0, cr3: 0, cr4: 0, seg_dirty: true }
+        Self { gpr, ip: ip.into(), flags: 0x202, seg: [s; 6], stack32: false, idt_base: 0, cr0: 0, cr3: 0, cr4: 0, tr_base: 0, tr_limit: 0, seg_dirty: true }
     }
 
     /// Mode protégé (CR0.PE).

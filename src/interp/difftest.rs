@@ -13,7 +13,7 @@ use kvm_bindings::{KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_guest_debug
 use kvm_ioctls::VcpuExit;
 
 use super::alu::*;
-use super::{Cpu, Mmio, Seg, step_once};
+use super::{Cpu, Mmio, Seg, StopReason, run_burst, step_once};
 use crate::kvm::KvmVm;
 use crate::bios::ROM_SEG;
 use crate::machine::HOST_CALL_PORT;
@@ -292,6 +292,8 @@ fn random_real_cpu(rng: &mut Rng) -> Cpu {
         cr0: 0,
         cr3: 0,
         cr4: 0,
+        tr_base: 0,
+        tr_limit: 0,
         seg_dirty: false,
     }
 }
@@ -343,6 +345,8 @@ fn random_protected_cpu(rng: &mut Rng) -> Cpu {
         cr0: 0x11,
         cr3: 0,
         cr4: 0,
+        tr_base: 0,
+        tr_limit: 0,
         seg_dirty: false,
     }
 }
@@ -502,6 +506,8 @@ fn int_pushes_and_vectors() {
         cr0: 0,
         cr3: 0,
         cr4: 0,
+        tr_base: 0,
+        tr_limit: 0,
         seg_dirty: false,
     };
     mem.write(0x10010, &[0xCD, 0x21]);
@@ -512,4 +518,90 @@ fn int_pushes_and_vectors() {
     let mut st = [0u8; 6];
     mem.read(0x100FA, &mut st);
     assert_eq!(st, [0x12, 0x00, 0x00, 0x10, 0x03, 0x02]); // IP, CS, FLAGS
+}
+
+/// Ports servis en rafale : 300h–301h et 61h ; lectures numérotées.
+#[derive(Default)]
+struct FakePorts {
+    reads: u32,
+    outs: Vec<(u16, u8, u32)>,
+}
+
+impl Mmio for FakePorts {
+    fn claims(&self, _: u32, _: bool) -> bool {
+        false
+    }
+    fn read8(&mut self, _: u32) -> u8 {
+        unreachable!()
+    }
+    fn write8(&mut self, _: u32, _: u8) {
+        unreachable!()
+    }
+    fn port_claims(&self, port: u16) -> bool {
+        matches!(port, 0x300 | 0x301 | 0x61)
+    }
+    fn port_in(&mut self, _: u16, _: u8) -> u32 {
+        self.reads += 1;
+        0x1100 + self.reads
+    }
+    fn port_out(&mut self, port: u16, size: u8, v: u32) {
+        self.outs.push((port, size, v));
+    }
+}
+
+fn port_cpu(flags: u32, cr0: u32) -> Cpu {
+    Cpu {
+        gpr: [0, 3, 0, 0, 0x100, 0, 0x200, 0x200],
+        ip: 0x10,
+        flags,
+        seg: [Seg::real(0x1000); 6],
+        stack32: false,
+        idt_base: 0,
+        cr0,
+        cr3: 0,
+        cr4: 0,
+        tr_base: 0,
+        tr_limit: 0,
+        seg_dirty: false,
+    }
+}
+
+#[test]
+fn port_io_in_bursts() {
+    let mem = GuestMem::new(MEM_SIZE).unwrap();
+    // mov dx,300h ; in al,dx ; in al,61h ; out dx,ax ; rep insw ; mov cl,3 ;
+    // rep outsw ; out 70h,al (port non servi : fin de rafale)
+    let code = [0xBA, 0x00, 0x03, 0xEC, 0xE4, 0x61, 0xEF, 0xF3, 0x6D, 0xB1, 0x03, 0xF3, 0x6F, 0xE6, 0x70];
+    mem.write(0x10010, &code);
+    let mut cpu = port_cpu(0x0202, 0);
+    let mut ports = FakePorts::default();
+    let burst = run_burst(&mut cpu, &mem, &mut ports, 256, 1000);
+    assert_eq!(burst.reason, StopReason::Unsupported);
+    assert_eq!(cpu.ip, 0x1D);
+    assert_eq!(cpu.gpr[0] & 0xFF, 0x02); // 2e lecture (61h)
+    let mut words = [0u8; 6];
+    mem.read(0x10200, &mut words);
+    assert_eq!(words, [0x03, 0x11, 0x04, 0x11, 0x05, 0x11]);
+    assert_eq!(cpu.gpr[1], 0);
+    assert_eq!((cpu.gpr[6], cpu.gpr[7]), (0x206, 0x206));
+    let v: Vec<u32> = ports.outs.iter().map(|o| o.2).collect();
+    assert_eq!(v, [0x0002, 0x1103, 0x1104, 0x1105]); // AX : AL lu, AH à 0
+    assert!(ports.outs.iter().all(|o| o.0 == 0x300 && o.1 == 2));
+
+    // V86, IOPL 0 : bitmap du TSS en 5000h (base 68h) ; 300h permis, 61h interdit.
+    let mem = GuestMem::new(MEM_SIZE).unwrap();
+    mem.write(0x10010, &[0xBA, 0x00, 0x03, 0xEC, 0xE4, 0x61]);
+    mem.write(0x5066, &[0x68, 0x00]);
+    mem.write(0x5068 + 0x61 / 8, &[1 << (0x61 % 8)]);
+    let mut cpu = port_cpu(0x2_0202, 1);
+    (cpu.tr_base, cpu.tr_limit) = (0x5000, 0x68 + 0x2000);
+    let mut ports = FakePorts::default();
+    run_burst(&mut cpu, &mem, &mut ports, 256, 1000);
+    assert_eq!((cpu.ip, ports.reads), (0x14, 1));
+    // Bitmap hors de la limite du TSS : refusé aussi.
+    let mut cpu = port_cpu(0x2_0202, 1);
+    (cpu.tr_base, cpu.tr_limit) = (0x5000, 0x68 + 0x50);
+    let mut ports = FakePorts::default();
+    run_burst(&mut cpu, &mem, &mut ports, 256, 1000);
+    assert_eq!((cpu.ip, ports.reads), (0x13, 0));
 }
