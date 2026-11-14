@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! FM : OPL3 (YMF262, Nuked-OPL3, third_party/nuked-opl3), OPL2 (YM3812,
 //! Nuked OPL2 Lite de third_party/libadlmidi), double OPL2 (SB Pro 1 :
-//! une puce par voie) ou CQM de Creative (Nuked CQM) ; LGPL-2.1+. Registres d'adresse, minuteries et
+//! une puce par voie), CQM de Creative (Nuked CQM) ou ESFM d'ESS (ESFMu) ;
+//! LGPL-2.1+. Registres d'adresse, minuteries et
 //! registre d'état (détection AdLib ; une OPL2 y rend 06h dans les bits
 //! bas). Ports 388h–38Bh, et 220h–223h, 228h–229h de la Sound Blaster. Côté vCPU (`Opl`) : adresse, minuteries, état, et
 //! écritures horodatées ; côté thread audio (`FmSynth`) : la puce, qui
@@ -28,7 +29,16 @@ struct ChipCqm {
     _opaque: [u8; 0],
 }
 
+#[repr(C)]
+struct ChipEsfm {
+    _opaque: [u8; 0],
+}
+
 unsafe extern "C" {
+    fn bare86_esfm_new() -> *mut ChipEsfm;
+    fn bare86_esfm_free(chip: *mut ChipEsfm);
+    fn ESFM_write_reg_buffered_fast(chip: *mut ChipEsfm, reg: u16, v: u8);
+    fn ESFM_generate(chip: *mut ChipEsfm, buf: *mut i16);
     fn bare86_cqm_new(samplerate: u32) -> *mut ChipCqm;
     fn bare86_cqm_free(chip: *mut ChipCqm);
     fn CQM_WriteRegBuffered(chip: *mut ChipCqm, reg: u16, v: u8);
@@ -82,6 +92,8 @@ pub enum OplModel {
     /// Synthèse « CQM » de Creative, compatible OPL3 (SB16 Vibra, AWE64) :
     /// le son métallique de nombreuses cartes Creative tardives.
     Cqm,
+    /// ESFM d'ESS (cartes AudioDrive) en mode compatible OPL3.
+    Esfm,
 }
 
 impl std::str::FromStr for OplModel {
@@ -92,7 +104,8 @@ impl std::str::FromStr for OplModel {
             "opl2" => OplModel::Opl2,
             "dualopl2" => OplModel::DualOpl2,
             "cqm" => OplModel::Cqm,
-            _ => return Err(format!("« {s} » : opl2, dualopl2, opl3 ou cqm attendu")),
+            "esfm" => OplModel::Esfm,
+            _ => return Err(format!("« {s} » : opl2, dualopl2, opl3, cqm ou esfm attendu")),
         })
     }
 }
@@ -141,14 +154,14 @@ impl Opl {
         }
         let (t1, t2) = (self.timers[0].expired, self.timers[1].expired);
         // Bits 2 et 1 : 0 sur une OPL3, 1 et 1 sur une OPL2 (détection).
-        let opl2 = if matches!(self.model, OplModel::Opl3 | OplModel::Cqm) { 0 } else { 0x06 };
+        let opl2 = if matches!(self.model, OplModel::Opl3 | OplModel::Cqm | OplModel::Esfm) { 0 } else { 0x06 };
         (u8::from(t1 || t2) << 7) | (u8::from(t1) << 6) | (u8::from(t2) << 5) | opl2
     }
 
     fn write_data(&mut self, v: u8, now: Instant, real: Instant) {
         // Minuteries : registres 02h–04h du premier banc (OPL3), de toute
         // puce visée (OPL2 : bits 8–9 = puces).
-        let timer_reg = if matches!(self.model, OplModel::Opl3 | OplModel::Cqm) { self.address } else { self.address & 0xFF };
+        let timer_reg = if matches!(self.model, OplModel::Opl3 | OplModel::Cqm | OplModel::Esfm) { self.address } else { self.address & 0xFF };
         match timer_reg {
             0x02 => self.timers[0].value = v,
             0x03 => self.timers[1].value = v,
@@ -175,10 +188,16 @@ impl Opl {
     }
 }
 
+/// Fréquence native des puces FM (horloge de 14,318 MHz / 288).
+const OPL_NATIVE_RATE: u32 = 49_716;
+
 /// Puces de la carte, sur le thread audio.
 enum Chips {
     Opl3(*mut Chip),
     Cqm(*mut ChipCqm),
+    /// ESFM, à sa fréquence native : rééchantillonnage linéaire ici
+    /// (trames précédente et suivante, phase).
+    Esfm { chip: *mut ChipEsfm, prev: [i16; 2], next: [i16; 2], phase: f64 },
     /// Une OPL2 (mono) ou deux (gauche, droite).
     Opl2(Vec<*mut Chip2>),
 }
@@ -205,6 +224,11 @@ impl FmSynth {
                     let c = bare86_opl3_new(rate);
                     assert!(!c.is_null(), "OPL3 : allocation impossible");
                     Chips::Opl3(c)
+                }
+                OplModel::Esfm => {
+                    let c = bare86_esfm_new();
+                    assert!(!c.is_null(), "ESFM : allocation impossible");
+                    Chips::Esfm { chip: c, prev: [0; 2], next: [0; 2], phase: 1.0 }
                 }
                 OplModel::Cqm => {
                     let c = bare86_cqm_new(rate);
@@ -233,6 +257,7 @@ impl FmSynth {
             match &self.chips {
                 Chips::Opl3(c) => OPL3_WriteRegBuffered(*c, reg, v),
                 Chips::Cqm(c) => CQM_WriteRegBuffered(*c, reg, v),
+                Chips::Esfm { chip, .. } => ESFM_write_reg_buffered_fast(*chip, reg, v),
                 Chips::Opl2(v2) => {
                     for (i, c) in v2.iter().enumerate() {
                         // Une seule puce : elle reçoit tout ce qui lui est destiné.
@@ -262,9 +287,20 @@ impl FmSynth {
                 self.apply(reg, v);
                 self.pending.pop_front();
             }
+            let step = f64::from(OPL_NATIVE_RATE) / f64::from(self.rate);
             // SAFETY: puces valides, tampon de 2 échantillons.
             unsafe {
-                match &self.chips {
+                match &mut self.chips {
+                    Chips::Esfm { chip, prev, next, phase } => {
+                        while *phase >= 1.0 {
+                            *prev = *next;
+                            ESFM_generate(*chip, next.as_mut_ptr());
+                            *phase -= 1.0;
+                        }
+                        let t = *phase;
+                        buf = [0, 1].map(|c| (f64::from(prev[c]) + (f64::from(next[c]) - f64::from(prev[c])) * t) as i16);
+                        *phase += step;
+                    }
                     Chips::Opl3(c) => OPL3_GenerateResampled(*c, buf.as_mut_ptr()),
                     // Niveau tel quel : proche de l'OPL3 dans notre mélange
                     // (Doom : efficace ≈ 640 contre 540 ; libADLMIDI le divise
@@ -293,6 +329,7 @@ impl Drop for FmSynth {
             match &self.chips {
                 Chips::Opl3(c) => bare86_opl3_free(*c),
                 Chips::Cqm(c) => bare86_cqm_free(*c),
+                Chips::Esfm { chip, .. } => bare86_esfm_free(*chip),
                 Chips::Opl2(v) => v.iter().for_each(|c| bare86_opl2_free(*c)),
             }
         }
@@ -317,7 +354,7 @@ impl IoDevice for OplPorts {
         if port & 1 == 0 {
             o.address = u16::from(v)
                 | match o.model {
-                    OplModel::Opl3 | OplModel::Cqm => u16::from(bank1) << 8,
+                    OplModel::Opl3 | OplModel::Cqm | OplModel::Esfm => u16::from(bank1) << 8,
                     // Une seule puce : le second banc n'existe pas (écritures
                     // perdues, faute de puce visée).
                     OplModel::Opl2 => if bank1 { 0 } else { 0x100 },
@@ -433,6 +470,9 @@ mod tests {
         assert_eq!(o.status(Instant::now()) & 0x06, 0);
         let (f, right) = opl2_note(OplModel::Cqm, 0x388);
         assert!((f - 309.5).abs() < 3.0 && right > 0.01, "CQM : {f} Hz, droite {right}");
+        // ESFM d'ESS, rééchantillonnée ici : même note.
+        let (f, right) = opl2_note(OplModel::Esfm, 0x388);
+        assert!((f - 309.5).abs() < 3.0 && right > 0.01, "ESFM : {f} Hz, droite {right}");
     }
 
     /// Détection AdLib servie en rafale (lectures de l'état enchaînées en

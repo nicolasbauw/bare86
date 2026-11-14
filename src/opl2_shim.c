@@ -30,3 +30,18 @@ cqm_t *bare86_cqm_new(uint32_t samplerate) {
 void bare86_cqm_free(cqm_t *chip) {
     free(chip);
 }
+
+// FM « ESFM » d'ESS (cartes AudioDrive) en mode compatible OPL3, ESFMu.
+#include "chips/esfmu/esfm.h"
+
+esfm_chip *bare86_esfm_new(void) {
+    esfm_chip *chip = calloc(1, sizeof(esfm_chip));
+    if (chip) {
+        ESFM_init(chip);
+    }
+    return chip;
+}
+
+void bare86_esfm_free(esfm_chip *chip) {
+    free(chip);
+}

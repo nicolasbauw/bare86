@@ -47,9 +47,10 @@ difference is under the hood, and shows with demanding late-90s games.
   IRQ 5, DMA 1 and 5, with the `BLASTER` variable set, or a Sound Blaster Pro
   1 or 2 with its output filters (`--sb pro1`, `--sb pro2`); FM synthesis on
   an OPL3, an OPL2 (the sound of the AdLib and early Sound Blasters), two
-  OPL2 (Sound Blaster Pro 1) or Creative's CQM (late Sound Blaster 16 Vibra and
-  AWE64), by [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3), Nuked OPL2
-  and Nuked CQM; PC speaker; MPU-401
+  OPL2 (Sound Blaster Pro 1), or the FM clones of cheap cards: Creative's CQM
+  (Sound Blaster 16 Vibra, AWE64) and ESS's ESFM (AudioDrive), by
+  [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3), Nuked OPL2, Nuked CQM
+  and [ESFMu](https://github.com/Kagamiin/ESFMu); PC speaker; MPU-401
   MIDI interface at 330h (UART mode), whose General MIDI music is played on
   OPL3 FM chips by [libADLMIDI](https://github.com/Wohlstand/libADLMIDI), with
   79 instrument banks (default: the Windows 9x FM synthesizer), and can be
@@ -140,7 +141,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--mips N` | Throttle to N million instructions per second (default: full speed) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
 | `--sb 16\|pro2\|pro1` | Sound card: Sound Blaster 16 (default), Sound Blaster Pro 2 (`pro` too: DSP 3.02, OPL3) or Pro 1 (two OPL2 chips); the Pro models filter their output like the real cards |
-| `--opl opl2\|dualopl2\|opl3\|cqm` | FM chip, instead of the card's own: OPL2 (YM3812, AdLib and Sound Blaster 1.x/2.0), two OPL2, OPL3 (YMF262), or Creative's CQM (the OPL3-compatible FM of the Sound Blaster 16 Vibra and AWE64, with its metallic sound) |
+| `--opl opl2\|dualopl2\|opl3\|cqm\|esfm` | FM chip, instead of the card's own: OPL2 (YM3812, AdLib and Sound Blaster 1.x/2.0), two OPL2, OPL3 (YMF262), Creative's CQM (Sound Blaster 16 Vibra and AWE64, with its metallic sound) or ESS's ESFM (AudioDrive cards); the last two are OPL3-compatible clones found on many cheap cards |
 | `--midi opl3\|off` | General MIDI music played on OPL3 FM chips (default), or not played |
 | `--midi-bank N` | FM instrument bank (default 58, the Windows 9x FM synthesizer; 14 is the bank of Doom); `--midi-bank list` prints them |
 | `--midi-out F.mid` | Record the MIDI music sent to the MPU-401 to a standard MIDI file (valid at any time, even if the session stops abruptly) |

@@ -59,7 +59,7 @@ fn main() {
     // Puce OPL2 de la carte son (--opl opl2|dualopl2) : notre shim d'allocation.
     c.file("src/opl2_shim.c");
     println!("cargo:rerun-if-changed=src/opl2_shim.c");
-    for f in ["chips/nuked/nukedopl3.c", "chips/nuked/nukedopl2.c", "chips/nuked_fast/nukedopl3_fast.c", "chips/nuked_cqm/cqm.c", "wopl/wopl_file.c"] {
+    for f in ["chips/nuked/nukedopl3.c", "chips/nuked/nukedopl2.c", "chips/nuked_fast/nukedopl3_fast.c", "chips/nuked_cqm/cqm.c", "chips/esfmu/esfm.c", "chips/esfmu/esfm_registers.c", "wopl/wopl_file.c"] {
         c.file(adl.join(f));
     }
     for entry in std::fs::read_dir(adl.join("models")).unwrap() {
