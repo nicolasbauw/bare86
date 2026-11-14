@@ -611,11 +611,15 @@ Avancement :
        - *se procurer Windows légalement* : voir si l'installation officielle (95/98) peut encore s'obtenir par une voie légale (licence et support d'origine d'occasion, abonnement MSDN/Visual Studio donnant accès aux anciennes versions, etc.), plutôt qu'une image de provenance douteuse ;
        - *Windows « intégré » à la rust-dos ou Windows historique ?* rust-dos fournit son propre Windows : KERNEL32, USER32, GDI32, DirectX et les autres DLL système réécrits dans l'émulateur, comme son DOS (aucune installation, aucune image, aucun fichier Windows : on tape le nom du jeu à l'invite DOS). Comparer les deux voies (couverture des jeux, effort, fidélité, légalité, cohérence avec la virtualisation KVM de Bare86) avant de choisir.
 
-### Point de reprise (fin de session du 2026-11-13)
+### Point de reprise (mis à jour le 2026-11-14, 13 h 40)
 
-État : dernier commit « Interpréteur en mode V86 », 68 tests. Étape 9, volet « vrai DOS » terminé : FreeDOS 1.3 installé par son installateur officiel (20 s), démarré depuis C:, Doom sous FreeDOS + JEMMEX ≈ 115 i/s, Wolf3D et Keen 4 accélérés en V86. Images : `~/Dev/dos-progs/freedos/fd13-hd.img` (FreeDOS seul), `fd13-hd-doom.img` (+ `C:\DOOMS`) ; toujours travailler sur une copie (Bare86 écrit dans l'image). Copie de fichiers : `mcopy -s -i IMAGE@@32256 SOURCE ::/` (mtools installé).
+État : dernier commit « Add English README; move design journal to docs/JOURNAL.md », 89 tests (`cargo test --release`, stables en parallèle). Faits le 2026-11-14 : réseau (NE2000 + libslirp, 9,5 Mo/s), CD-ROM (ATAPI, MSCDEX en HLE, ISO, CUE/BIN, pistes audio), menu en jeu (Ctrl+Alt+M, changement de disquette et de CD à chaud), raccourcis Ctrl+Alt+lettre, README anglais. Commits en anglais désormais ; ce journal et les commentaires du code restent en français.
 
-Essais commodes (clavier scripté) : `bare86 --hda COPIE.img --boot --keys "{until:C:\>}cd \DOOMS{enter}doom -timedemo demo1{enter}{until:timed}" --wav /dev/null` ; `--limit S` affiche registres, compteurs et écran ; `--shot F.png` capture à la fin. En zsh, passer les listes d'options par un tableau (`F=(…)` puis `"${F[@]}"`).
+Essais commodes (clavier scripté) : `bare86 --hda COPIE.img --boot --keys "{until:C:\>}cd \DOOMS{enter}doom -timedemo demo1{enter}{until:timed}" --wav /dev/null` ; `--limit S` affiche registres, compteurs et écran ; `--shot F.png` capture à la fin ; `{cd:IMAGE}` / `{fda:IMAGE}` changent de disque en cours de script. Mesures : `taskset -c 0-3` (cœurs rapides de l'hôte). Réseau : `tools/netbench.sh ~/Dev/dos-progs/net/fd13-net.img 4 N`. Rendu de la fenêtre sans l'afficher : `SDL_VIDEO_DRIVER=offscreen` (la crate sdl3 refuse d'injecter des frappes : tester la logique à part, comme `sdl::host_shortcut`).
+
+Images (hors dépôt, toujours travailler sur une copie) : `~/Dev/dos-progs/freedos/fd13-hd.img`, `fd13-hd-doom.img`, `~/Dev/dos-progs/net/fd13-net.img` (+ `C:\NET` : NE2000.COM, mTCP, NETUP.BAT, GET.BAT).
+
+**Prochaine tâche : le lanceur** (point 4 ci-dessous, décidé avant Windows), puis Windows 95/98 (point 3).
 
 À faire, dans l'ordre convenu :
 1. ~~Réseau~~ : FAIT le 2026-11-14 (`--net`, NE2000 + libslirp ; DHCP, ping, HTGET sous FreeDOS + mTCP ; 9,5 Mo/s après réveil du vCPU et rafales de ports). Reste IPX pour les jeux, plus tard. Mesures : épingler sur les cœurs Zen 5 (`taskset -c 0-3`).
