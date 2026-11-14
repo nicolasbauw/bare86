@@ -185,7 +185,11 @@ where
     let menu_hotkey = Scancode::from_name(&menu_letter.to_string()).ok_or(format!("touche du menu invalide : {menu_letter}"))?;
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
-    let window = video.window(title, 960, 720).position_centered().resizable().build().map_err(|e| e.to_string())?;
+    // Haute densité : sur un écran mis à l'échelle (4K à 135 %, par
+    // exemple), la fenêtre est dessinée à la résolution réelle et notre mise
+    // à l'échelle nette s'applique ; sinon le compositeur agrandissait
+    // l'image en la lissant (petits textes du HUD de Doom abîmés).
+    let window = video.window(title, 960, 720).position_centered().resizable().high_pixel_density().build().map_err(|e| e.to_string())?;
     let mut canvas = window.into_canvas();
     let creator = canvas.texture_creator();
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
@@ -515,7 +519,7 @@ where
 pub fn launcher(ui: &mut crate::launcher::Ui) -> Result<Option<std::path::PathBuf>, String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
-    let window = video.window("Bare86", 960, 720).position_centered().resizable().build().map_err(|e| e.to_string())?;
+    let window = video.window("Bare86", 960, 720).position_centered().resizable().high_pixel_density().build().map_err(|e| e.to_string())?;
     let mut canvas = window.into_canvas();
     let creator = canvas.texture_creator();
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
