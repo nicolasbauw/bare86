@@ -61,10 +61,10 @@ fn heartbeat_period(irq0: Duration) -> Duration {
     irq0.clamp(Duration::from_micros(50), Duration::from_millis(10))
 }
 
-/// Pas à pas entre la commande d'un transfert Sound Blaster court et son
-/// IRQ : assez pour que le pilote ait remis à zéro le drapeau qu'il attend,
-/// assez peu pour rester dans sa boucle d'attente (≈ 10 µs à la vitesse
-/// native, calibrée pour un 386).
+/// Instructions exécutées (par l'interpréteur) entre la commande d'un
+/// transfert Sound Blaster court et son IRQ : assez pour que le pilote ait
+/// remis à zéro le drapeau qu'il attend, assez peu pour rester dans sa
+/// boucle d'attente (≈ 10 µs à la vitesse native, calibrée pour un 386).
 const SHORT_TRANSFER_STEPS: u32 = 64;
 
 /// Port d'appel hôte utilisé par les stubs.
@@ -116,6 +116,8 @@ pub struct Config {
     pub cdrom: Option<std::path::PathBuf>,
     /// Sound Blaster Pro au lieu de la SB16 (`--sb pro`).
     pub sb_pro: bool,
+    /// ESS AudioDrive ES1688 (`--sb ess`) : compatible SB Pro, FM ESFM.
+    pub sb_ess: bool,
     /// Puce FM : OPL3 (SB Pro 2, SB16), OPL2, double OPL2 (SB Pro 1).
     pub opl: crate::opl::OplModel,
     /// Enregistrement de la musique MIDI (MPU-401) en fichier MIDI standard.
@@ -126,7 +128,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -298,9 +300,6 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
     interp: bool,
-    /// Instructions à exécuter en pas à pas avant d'achever un transfert
-    /// Sound Blaster court (détection d'IRQ).
-    irq_steps: Option<u32>,
     trace_int: bool,
     /// Services non gérés déjà signalés (vecteur, AH).
     unhandled: BTreeSet<(u8, u8)>,
@@ -353,7 +352,7 @@ impl<B: Backend> Pc<B> {
         bios.disks = crate::disk::Disks::open(&cfg.disks)?;
         bios.install(vm.mem());
         let mut dos = dos::Dos::new();
-        dos.sb_pro = cfg.sb_pro;
+        dos.sb_pro = cfg.sb_pro || cfg.sb_ess;
         dos.boot(vm.mem());
         let throttle = cfg.mips.map(Throttle::new).transpose()?;
         let mut io = IoBus::default();
@@ -403,7 +402,8 @@ impl<B: Backend> Pc<B> {
         io.map(0x81..=0x8F, Box::new(crate::dma::DmaPorts(dma.clone())));
         io.map(0xC0..=0xDF, Box::new(crate::dma::DmaPorts(dma.clone())));
         let sb = Rc::new(RefCell::new(crate::sb16::Sb16::new()));
-        sb.borrow_mut().pro = cfg.sb_pro;
+        sb.borrow_mut().pro = cfg.sb_pro || cfg.sb_ess;
+        sb.borrow_mut().ess = cfg.sb_ess;
         // Interface MIDI MPU-401 (UART), comme sur la SB16.
         // Sorties : synthétiseur General MIDI sur OPL3, enregistrement.
         let mut sinks: Vec<Box<dyn crate::mpu401::MidiSink>> = Vec::new();
@@ -423,6 +423,10 @@ impl<B: Backend> Pc<B> {
         // DSP et mixeur ; 228h–229h reviennent à la FM.
         io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, Box::new(crate::sb16::Sb16Ports(sb.clone())));
         io.map(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));
+        // Servis pendant une rafale (sans en déclencher) : les boucles de
+        // détection qui scrutent le DSP restent dans l'interpréteur.
+        io.burst_on(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, false);
+        io.burst_on(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, false);
         let opl = Rc::new(RefCell::new(crate::opl::Opl::new()));
         opl.borrow_mut().model = cfg.opl;
         for ports in [0x388..=0x38B, crate::sb16::BASE..=crate::sb16::BASE + 3, crate::sb16::BASE + 8..=crate::sb16::BASE + 9] {
@@ -489,7 +493,6 @@ impl<B: Backend> Pc<B> {
             input_paused_until: None,
             until_text: None,
             stepping: false,
-            irq_steps: None,
             trace_int: cfg.trace_int,
             interp: cfg.interp,
             unhandled: BTreeSet::new(),
@@ -742,13 +745,16 @@ impl<B: Backend> Pc<B> {
         self.heartbeat.set_period(heartbeat_period(pit.irq0_period()))?;
         let speaker = pit.speaker();
         drop(pit);
-        let mut sb = self.sb.borrow_mut();
         // Transfert court (détection d'IRQ) : achevé après quelques
-        // instructions en pas à pas (voir `Sb16::short_transfer_end`).
-        if sb.short_transfer_end().is_some() && self.irq_steps.is_none() && !self.stepping {
-            self.irq_steps = Some(SHORT_TRANSFER_STEPS);
-            self.vm.set_single_step(true)?;
+        // instructions de l'invité (voir `Sb16::short_transfer_end`),
+        // exécutées par l'interpréteur. Le pas à pas du processeur (TF) s'y
+        // prêtait mal : un `pushf` de l'invité empilait TF, rétabli plus tard
+        // par un `popf` → exception de débogage (DOS/4GW : « exception 01h »,
+        // Doom sur SB Pro, 4 à 6 démarrages sur 8).
+        if self.sb.borrow().short_transfer_end().is_some() && !self.stepping {
+            self.short_transfer_burst()?;
         }
+        let mut sb = self.sb.borrow_mut();
         let mut cd = self.cd.as_ref().map(|(_, p)| p.borrow_mut());
         let mut midi = self.midi.as_ref().map(|m| m.borrow_mut());
         let mut sources: Vec<&mut dyn crate::audio::AudioSource> = Vec::new();
@@ -785,6 +791,21 @@ impl<B: Backend> Pc<B> {
         if nic.take_irq() {
             self.pic.borrow_mut().raise(crate::ne2000::IRQ);
         }
+    }
+
+    /// Fin d'un transfert Sound Blaster court : `SHORT_TRANSFER_STEPS`
+    /// instructions de l'invité dans l'interpréteur (sans TF), puis le
+    /// transfert est lu et son IRQ levée. Une instruction que l'interpréteur
+    /// ne sert pas arrête la rafale plus tôt.
+    fn short_transfer_burst(&mut self) -> Result<()> {
+        if self.interp {
+            let mut vga = self.vga.borrow_mut();
+            let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0 };
+            let burst = interp::continue_in_host(&mut self.vm, &mut bus, u64::MAX, u64::from(SHORT_TRANSFER_STEPS))?;
+            self.stats.interpreted += burst.instructions;
+        }
+        self.sb.borrow_mut().complete_short(&mut self.dma.borrow_mut(), self.vm.mem());
+        Ok(())
     }
 
     /// Entrées de l'hôte → scancodes → 8042 → IRQ 1. Une frappe à la fois :
@@ -1032,17 +1053,6 @@ impl<B: Backend> Pc<B> {
                 // est servi en tête de boucle.
                 Exit::Interrupted => {}
                 Exit::IrqWindow => {}
-                Exit::Step if self.irq_steps.is_some() => {
-                    let left = self.irq_steps.unwrap_or(0).saturating_sub(1);
-                    let pending = self.sb.borrow().short_transfer_end().is_some();
-                    if left == 0 || !pending {
-                        self.irq_steps = None;
-                        self.vm.set_single_step(self.stepping)?;
-                        self.sb.borrow_mut().complete_short(&mut self.dma.borrow_mut(), self.vm.mem());
-                    } else {
-                        self.irq_steps = Some(left);
-                    }
-                }
                 Exit::Step => return Ok(Event::Step),
                 Exit::Hlt => self.halt()?,
                 Exit::Shutdown if !self.dos_hle => {

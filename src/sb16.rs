@@ -44,6 +44,14 @@ struct Transfer {
 pub struct Sb16 {
     /// Sound Blaster Pro (DSP 3.02) : commandes de la SB16 ignorées.
     pub pro: bool,
+    /// ESS AudioDrive ES1688 (avec `pro`) : DSP 3.01, identification ESS
+    /// (E7h), commandes étendues A0h–CFh, mixeur ESS. D'après l'émulation
+    /// de DOSBox Staging 0.82.2 (src/hardware/sblaster.cpp).
+    pub ess: bool,
+    /// Volumes du mixeur ESS tels qu'écrits (quartets gauche/droite), et
+    /// position dans la chaîne d'identification (registre 40h).
+    ess_vol: [u8; 256],
+    ess_id_pos: usize,
     out: VecDeque<u8>,
     /// Commande en cours et ses arguments reçus.
     cmd: Option<u8>,
@@ -79,6 +87,9 @@ impl Sb16 {
     pub fn new() -> Self {
         let mut sb = Self {
             pro: false,
+            ess: false,
+            ess_vol: [0; 256],
+            ess_id_pos: 0,
             out: VecDeque::new(),
             cmd: None,
             args: Vec::new(),
@@ -113,12 +124,21 @@ impl Sb16 {
         self.mixer[0x26] = 0xFF;
         self.mixer[0x80] = 0x02; // IRQ 5
         self.mixer[0x81] = 0x22; // DMA 1 et 5
+        for r in [0x14, 0x32, 0x36, 0x38, 0x3E] {
+            self.ess_vol[r] = 0xFF;
+        }
     }
 
     /// Filtre de sortie de la SB Pro : passe-bas sur le DSP, que le bit 5 du
     /// registre 0Eh du mixeur coupe (SB Pro 2). Sans objet sur une SB16.
     pub fn pro_dsp_filter(&self) -> bool {
-        self.pro && self.mixer[0x0E] & 0x20 == 0
+        self.pro && !self.ess && self.mixer[0x0E] & 0x20 == 0
+    }
+
+    /// Filtre de la sortie FM : celui des SB Pro de Creative ; pas sur une
+    /// ESS (sortie analogique différente ; son jugé fidèle sans filtre).
+    pub fn pro_fm_filter(&self) -> bool {
+        self.pro && !self.ess
     }
 
     /// Gain de la FM : volumes maître et FM du mixeur (gauche, droite).
@@ -147,8 +167,12 @@ impl Sb16 {
         self.direct = 0.0;
     }
 
-    fn arg_count(cmd: u8) -> usize {
+    fn arg_count(&self, cmd: u8) -> usize {
         match cmd {
+            // ESS : écriture (A0h–BFh) ou lecture (C0h) d'un registre étendu,
+            // un octet ; C6h/C7h (mode étendu) et le reste, aucun.
+            0xA0..=0xC0 if self.ess => 1,
+            0xC1..=0xCF if self.ess => 0,
             0x10 | 0x40 | 0xE0 | 0xE4 => 1,
             0x14 | 0x16 | 0x17 | 0x24 | 0x41 | 0x42 | 0x48 | 0x80 => 2,
             0xB0..=0xCF => 3,
@@ -198,6 +222,18 @@ impl Sb16 {
         let pro_stereo = self.mixer[0x0E] & 2 != 0;
         let pro_mode = if pro_stereo { 0x20 } else { 0 };
         match cmd {
+            // ESS : commandes étendues acceptées sans effet sur le son
+            // (comme DOSBox Staging) ; lecture d'un registre : 0.
+            0xC0 if self.ess => self.out.push_back(0),
+            0xA0..=0xCF if self.ess => {}
+            0xE7 if self.ess => {
+                self.out.clear();
+                self.out.extend([0x68, 0x89]);
+            }
+            0xE3 if self.ess => {
+                self.out.clear();
+                self.out.push_back(0);
+            }
             0x10 => self.direct = (f32::from(a[0]) - 128.0) / 128.0,
             0x14 | 0x91 => {
                 let n = if cmd == 0x14 { word(a[0], a[1]) } else { self.block_size };
@@ -236,6 +272,7 @@ impl Sb16 {
             }
             0xD8 => self.out.push_back(0xFF),
             0xE0 => self.out.push_back(!a[0]),
+            0xE1 if self.ess => self.out.extend([3, 1]),
             0xE1 if self.pro => self.out.extend([3, 2]),
             0xE1 => self.out.extend([4, 5]),
             0xE3 => self.out.extend(b"COPYRIGHT (C) CREATIVE TECHNOLOGY LTD, 1992.\0"),
@@ -259,7 +296,7 @@ impl Sb16 {
                 v
             }
         };
-        if self.args.len() >= Self::arg_count(cmd) {
+        if self.args.len() >= self.arg_count(cmd) {
             self.cmd = None;
             let args = std::mem::take(&mut self.args);
             self.command(cmd, &args);
@@ -361,6 +398,14 @@ impl Sb16 {
         match port - BASE {
             0x05 => match self.mixer_index {
                 0x82 => self.irq_status | 0x40,
+                // ESS : identification (16h, 88h, adresse de base), en boucle.
+                0x40 if self.ess => {
+                    let id = [0x16, 0x88, (BASE >> 8) as u8, BASE as u8];
+                    let v = id[self.ess_id_pos];
+                    self.ess_id_pos = (self.ess_id_pos + 1) % id.len();
+                    v
+                }
+                i @ (0x14 | 0x32 | 0x36 | 0x38 | 0x3E) if self.ess => self.ess_vol[usize::from(i)],
                 i => self.mixer[usize::from(i)],
             },
             0x0A => self.out.pop_front().unwrap_or(0xAA),
@@ -386,6 +431,23 @@ impl Sb16 {
                 0x00 => self.reset_mixer(),
                 // Sélections d'IRQ et de DMA : figées sur IRQ 5, DMA 1 et 5.
                 0x80 | 0x81 | 0x82 => {}
+                // Volumes ESS (quartets gauche/droite) : audio 14h, maître
+                // 32h, FM 36h, reportés sur les gains internes (n → 2n + n/8
+                // sur 5 bits) ; CD 38h et ligne 3Eh gardés seulement.
+                i @ (0x14 | 0x32 | 0x36 | 0x38 | 0x3E) if self.ess => {
+                    self.ess_vol[usize::from(i)] = v;
+                    let five = |n: u8| ((n << 1) | (n >> 3)) << 3;
+                    let base = match i {
+                        0x32 => Some(0x30),
+                        0x14 => Some(0x32),
+                        0x36 => Some(0x34),
+                        _ => None,
+                    };
+                    if let Some(b) = base {
+                        self.mixer[b] = five(v >> 4);
+                        self.mixer[b + 1] = five(v & 0x0F);
+                    }
+                }
                 // Volumes SB Pro (gauche, droite sur 4 bits) : reportés sur
                 // les registres SB16 de 5 bits, comme le fait la carte
                 // (n → 2n + 1). Maître 22h, voix 04h, FM 26h.
@@ -485,5 +547,29 @@ mod tests {
         dsp(&mut sb, &[0x41, 0x5D, 0xC0, 0xE1]);
         assert_eq!(sb.rate, Sb16::new().rate);
         assert_eq!(sb.read_port(BASE + 0x0A), 3);
+    }
+
+    #[test]
+    fn ess_identity_and_mixer() {
+        let mut sb = Sb16::new();
+        (sb.pro, sb.ess) = (true, true);
+        dsp(&mut sb, &[0xE1]);
+        assert_eq!((sb.read_port(BASE + 0x0A), sb.read_port(BASE + 0x0A)), (3, 1));
+        dsp(&mut sb, &[0xE7]);
+        assert_eq!((sb.read_port(BASE + 0x0A), sb.read_port(BASE + 0x0A)), (0x68, 0x89));
+        // Mode étendu (C6h), écriture d'un registre (A1h + 1 octet), lecture
+        // (C0h + 1 octet) : le flux de commandes reste aligné.
+        dsp(&mut sb, &[0xC6, 0xA1, 0x55, 0xC0, 0xA1, 0xE1]);
+        assert_eq!((sb.read_port(BASE + 0x0A), sb.read_port(BASE + 0x0A)), (0, 3));
+        // Identification par le mixeur.
+        sb.write_port(BASE + 4, 0x40);
+        let id: Vec<u8> = (0..5).map(|_| sb.read_port(BASE + 5)).collect();
+        assert_eq!(id, [0x16, 0x88, 0x02, 0x20, 0x16]);
+        // Volume FM ESS (36h) : relu tel quel, reporté sur le gain FM.
+        sb.write_port(BASE + 4, 0x36);
+        sb.write_port(BASE + 5, 0x80);
+        assert_eq!(sb.read_port(BASE + 5), 0x80);
+        assert!(sb.fm_gain()[0] > 0.0 && sb.fm_gain()[1] == 0.0);
+        assert!(!sb.pro_fm_filter() && !sb.pro_dsp_filter());
     }
 }

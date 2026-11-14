@@ -75,8 +75,9 @@ usage: bare86 [options] [program [arguments…]]
                  guest 10.0.2.15 by DHCP, gateway 10.0.2.2, DNS 10.0.2.3
   --net-fwd tcp:HOST:GUEST   forward a host port (127.0.0.1) to the
                  guest (also udp:…; implies --net; repeatable)
-  --sb 16|pro2|pro1   sound card: Sound Blaster 16 (default), Pro 2 (also
-                 pro: DSP 3.02, OPL3) or Pro 1 (DSP 3.02, two OPL2 chips)
+  --sb 16|pro2|pro1|ess   sound card: Sound Blaster 16 (default), Pro 2
+                 (also pro: DSP 3.02, OPL3), Pro 1 (two OPL2 chips), or ESS
+                 AudioDrive ES1688 (Sound Blaster Pro compatible, ESFM FM)
   --opl opl2|dualopl2|opl3|cqm|esfm   FM chip, instead of the card's own:
                  OPL2 (YM3812, AdLib and early Sound Blasters), two OPL2, OPL3,
                  Creative's CQM (Sound Blaster 16 Vibra, AWE64) or ESS's ESFM
@@ -226,11 +227,12 @@ fn main() -> ExitCode {
             "--boot" => boot = true,
             "--sb" => match args.next().as_deref() {
                 // SB Pro 2 (OPL3), SB Pro 1 (deux OPL2), SB16 (OPL3).
-                Some("pro" | "pro2") => (cfg.sb_pro, card_opl) = (true, opl::OplModel::Opl3),
-                Some("pro1") => (cfg.sb_pro, card_opl) = (true, opl::OplModel::DualOpl2),
-                Some("16") => (cfg.sb_pro, card_opl) = (false, opl::OplModel::Opl3),
+                Some("pro" | "pro2") => (cfg.sb_pro, cfg.sb_ess, card_opl) = (true, false, opl::OplModel::Opl3),
+                Some("pro1") => (cfg.sb_pro, cfg.sb_ess, card_opl) = (true, false, opl::OplModel::DualOpl2),
+                Some("16") => (cfg.sb_pro, cfg.sb_ess, card_opl) = (false, false, opl::OplModel::Opl3),
+                Some("ess") => (cfg.sb_pro, cfg.sb_ess, card_opl) = (false, true, opl::OplModel::Esfm),
                 _ => {
-                    eprintln!("--sb : pro1, pro2 (ou pro) ou 16 attendu");
+                    eprintln!("--sb : 16, pro2 (ou pro), pro1 ou ess attendu");
                     return ExitCode::from(2);
                 }
             },

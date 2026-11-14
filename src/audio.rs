@@ -234,7 +234,7 @@ impl Mixer {
             frames: std::mem::take(&mut self.buf),
             writes: opl.take_writes(),
             fm_gain: sb.fm_gain().map(|g| g * FM_LEVEL),
-            fm_filter: sb.pro,
+            fm_filter: sb.pro_fm_filter(),
         };
         if let Some(tx) = &self.tx {
             let _ = tx.send(block);
