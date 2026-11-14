@@ -55,7 +55,7 @@ impl InputSource for ChannelInput {
     }
 }
 
-/// Vitesses de Ctrl+F11 / Ctrl+F12 (MIPS) ; au-delà, sans bridage.
+/// Vitesses de Ctrl+Alt+− / Ctrl+Alt++ (MIPS) ; au-delà, sans bridage.
 const SPEEDS: [f64; 8] = [3.0, 6.0, 12.0, 25.0, 50.0, 100.0, 200.0, 400.0];
 
 /// Cran suivant (`faster`) ou précédent de l'échelle des vitesses.
@@ -181,6 +181,8 @@ pub fn run<F>(title: &str, mut menu_state: crate::menu::State, machine: F) -> Re
 where
     F: FnOnce(Host) -> Result<u8, String> + Send + 'static,
 {
+    let menu_letter = menu_state.menu_letter;
+    let menu_hotkey = Scancode::from_name(&menu_letter.to_string()).ok_or(format!("touche du menu invalide : {menu_letter}"))?;
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     let window = video.window(title, 960, 720).position_centered().resizable().build().map_err(|e| e.to_string())?;
@@ -245,17 +247,17 @@ where
     let mut shown = 0u64;
     let mut buttons = 0u8;
     // Souris capturée (mode relatif, curseur masqué) : un clic dans la
-    // fenêtre la capture, le bouton central, Ctrl+F10 ou la perte du focus
+    // fenêtre la capture, le bouton central, Ctrl+Alt+G ou la perte du focus
     // la libèrent.
     let mouse = sdl.mouse();
     let mut captured = false;
     let mut swallow_middle = false;
-    // Raccourcis (Ctrl+F5, F10, F11, F12, Alt+Entrée) : leur relâchement
-    // n'est pas transmis à l'invité.
+    // Raccourcis (Ctrl+Alt+lettre, Alt+Entrée) : leur relâchement n'est pas
+    // transmis à l'invité.
     let mut swallowed: Vec<Scancode> = Vec::new();
     let mut speed = menu_state.speed;
     let mut fullscreen = menu_state.fullscreen;
-    // Menu (Ctrl+F1) : ouvert ou non, et touches enfoncées côté invité (leur
+    // Menu (Ctrl+Alt+M) : ouvert ou non, et touches enfoncées côté invité (leur
     // relâchement lui est transmis même menu ouvert).
     let mut menu: Option<crate::menu::Menu> = None;
     let menu_font = crate::font::Font::builtin();
@@ -265,9 +267,9 @@ where
         let _ = canvas.window_mut().set_fullscreen(true);
     }
     let set_title = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, captured: bool, speed: Option<f64>| {
-        let hint = if captured { "bouton central ou Ctrl+F10 libère la souris" } else { "cliquer pour capturer la souris" };
+        let hint = if captured { "bouton central ou Ctrl+Alt+G libère la souris" } else { "cliquer pour capturer la souris" };
         let mips = speed.map_or("vitesse max".to_string(), |m| format!("{m} MIPS"));
-        let _ = canvas.window_mut().set_title(&format!("{title} — {mips} — {hint}"));
+        let _ = canvas.window_mut().set_title(&format!("{title} — {mips} — {hint} — Ctrl+Alt+{menu_letter} menu"));
     };
     let set_capture = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, on: bool, captured: &mut bool, speed: Option<f64>| {
         *captured = on;
@@ -282,21 +284,47 @@ where
                 Event::Window { win_event: sdl3::event::WindowEvent::FocusLost, .. } if captured => {
                     set_capture(&mut canvas, false, &mut captured, speed);
                 }
-                Event::KeyDown { scancode: Some(Scancode::F1), keymod, repeat: false, .. }
-                    if keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD) =>
-                {
-                    swallowed.push(Scancode::F1);
-                    menu = match menu {
-                        Some(_) => None,
-                        None => {
-                            if captured {
-                                set_capture(&mut canvas, false, &mut captured, speed);
-                            }
-                            menu_state.message = None;
-                            Some(crate::menu::Menu::new())
+                // Raccourcis de Bare86 : Ctrl+Alt+lettre (comme QEMU ; les
+                // Ctrl+Fn sont pris par les bureaux, KDE notamment).
+                Event::KeyDown { scancode: Some(sc), keymod, repeat, .. } if host_shortcut(sc, keymod, menu_hotkey).is_some() => {
+                    swallowed.push(sc);
+                    match host_shortcut(sc, keymod, menu_hotkey) {
+                        Some(Shortcut::Menu) if !repeat => {
+                            menu = match menu {
+                                Some(_) => None,
+                                None => {
+                                    if captured {
+                                        set_capture(&mut canvas, false, &mut captured, speed);
+                                    }
+                                    menu_state.message = None;
+                                    Some(crate::menu::Menu::new())
+                                }
+                            };
+                            redraw = true;
                         }
-                    };
-                    redraw = true;
+                        Some(Shortcut::ReleaseMouse) => set_capture(&mut canvas, false, &mut captured, speed),
+                        Some(Shortcut::Screenshot) if !repeat => screenshot(&frame),
+                        Some(Shortcut::Fullscreen) if !repeat => {
+                            fullscreen = !fullscreen;
+                            let _ = canvas.window_mut().set_fullscreen(fullscreen);
+                            redraw = true;
+                        }
+                        Some(Shortcut::NextDisk) if !repeat => {
+                            let _ = tx.send(InputEvent::NextDisk);
+                            // Même rotation que la machine (Disks::next_floppy).
+                            let list = &menu_state.floppies;
+                            if list.len() >= 2 {
+                                let i = menu_state.floppy.as_ref().and_then(|f| list.iter().position(|p| p == f)).unwrap_or(0);
+                                menu_state.floppy = Some(list[(i + 1) % list.len()].clone());
+                            }
+                        }
+                        Some(s @ (Shortcut::Slower | Shortcut::Faster)) => {
+                            speed = step_speed(speed, s == Shortcut::Faster);
+                            let _ = tx.send(InputEvent::Speed(speed));
+                            set_title(&mut canvas, captured, speed);
+                        }
+                        _ => {}
+                    }
                 }
                 Event::KeyDown { scancode: Some(sc), .. } if menu.is_some() => {
                     let Some(key) = menu_key(sc) else { continue };
@@ -348,34 +376,6 @@ where
                         send_key(&tx, Some(sc), true);
                     }
                     swallowed.retain(|&s| s != sc);
-                }
-                Event::KeyDown { scancode: Some(sc @ (Scancode::F4 | Scancode::F5 | Scancode::F10 | Scancode::F11 | Scancode::F12)), keymod, repeat, .. }
-                    if keymod.intersects(sdl3::keyboard::Mod::LCTRLMOD | sdl3::keyboard::Mod::RCTRLMOD)
-                        && (sc != Scancode::F10 || captured) =>
-                {
-                    swallowed.push(sc);
-                    match sc {
-                        Scancode::F10 => set_capture(&mut canvas, false, &mut captured, speed),
-                        Scancode::F5 if !repeat => screenshot(&frame),
-                        Scancode::F4 if !repeat => {
-                            let _ = tx.send(InputEvent::NextDisk);
-                            // Même rotation que la machine (Disks::next_floppy).
-                            let list = &menu_state.floppies;
-                            if list.len() >= 2 {
-                                let i = menu_state.floppy.as_ref().and_then(|f| list.iter().position(|p| p == f)).unwrap_or(0);
-                                menu_state.floppy = Some(list[(i + 1) % list.len()].clone());
-                            }
-                        }
-                        // Ctrl+F11 : plus lent ; Ctrl+Maj+F11 (ou Ctrl+F12, souvent pris
-                        // par le bureau, KDE par exemple) : plus vite.
-                        Scancode::F11 | Scancode::F12 => {
-                            let shift = keymod.intersects(sdl3::keyboard::Mod::LSHIFTMOD | sdl3::keyboard::Mod::RSHIFTMOD);
-                            speed = step_speed(speed, sc == Scancode::F12 || shift);
-                            let _ = tx.send(InputEvent::Speed(speed));
-                            set_title(&mut canvas, captured, speed);
-                        }
-                        _ => {}
-                    }
                 }
                 Event::KeyDown { scancode: Some(Scancode::Return), keymod, repeat: false, .. }
                     if keymod.intersects(sdl3::keyboard::Mod::LALTMOD | sdl3::keyboard::Mod::RALTMOD) =>
@@ -510,6 +510,39 @@ where
     }
 }
 
+/// Raccourcis de Bare86.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shortcut {
+    Menu,
+    Fullscreen,
+    ReleaseMouse,
+    Screenshot,
+    NextDisk,
+    Slower,
+    Faster,
+}
+
+/// Raccourci désigné par une touche : Ctrl+Alt (Alt Gr compris) + la
+/// lettre du menu, F, G, S, D, − ou + (rangée du haut ou pavé numérique).
+fn host_shortcut(sc: Scancode, m: sdl3::keyboard::Mod, menu: Scancode) -> Option<Shortcut> {
+    use sdl3::keyboard::Mod;
+    if !(m.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) && m.intersects(Mod::LALTMOD | Mod::RALTMOD)) {
+        return None;
+    }
+    if sc == menu {
+        return Some(Shortcut::Menu);
+    }
+    Some(match sc {
+        Scancode::F => Shortcut::Fullscreen,
+        Scancode::G => Shortcut::ReleaseMouse,
+        Scancode::S => Shortcut::Screenshot,
+        Scancode::D => Shortcut::NextDisk,
+        Scancode::Minus | Scancode::KpMinus => Shortcut::Slower,
+        Scancode::Equals | Scancode::KpPlus => Shortcut::Faster,
+        _ => return None,
+    })
+}
+
 /// Touche SDL → touche du menu.
 fn menu_key(sc: Scancode) -> Option<crate::menu::Key> {
     use crate::menu::Key;
@@ -554,7 +587,26 @@ fn draw_menu(
 
 #[cfg(test)]
 mod tests {
-    use super::step_speed;
+    use super::{Shortcut, host_shortcut, step_speed};
+    use sdl3::keyboard::{Mod, Scancode};
+
+    #[test]
+    fn shortcuts() {
+        let ca = Mod::LCTRLMOD | Mod::LALTMOD;
+        assert_eq!(host_shortcut(Scancode::M, ca, Scancode::M), Some(Shortcut::Menu));
+        // Lettre du menu réglée sur K : M redevient une touche ordinaire.
+        assert_eq!(host_shortcut(Scancode::K, ca, Scancode::K), Some(Shortcut::Menu));
+        assert_eq!(host_shortcut(Scancode::M, ca, Scancode::K), None);
+        // Alt Gr (Alt droit) avec Ctrl droit ; pavé numérique.
+        assert_eq!(host_shortcut(Scancode::KpPlus, Mod::RCTRLMOD | Mod::RALTMOD, Scancode::M), Some(Shortcut::Faster));
+        assert_eq!(host_shortcut(Scancode::Minus, ca, Scancode::M), Some(Shortcut::Slower));
+        assert_eq!(host_shortcut(Scancode::G, ca | Mod::LSHIFTMOD, Scancode::M), Some(Shortcut::ReleaseMouse));
+        // Ctrl seul, Alt seul, ou autre touche : pour l'invité.
+        assert_eq!(host_shortcut(Scancode::M, Mod::LCTRLMOD, Scancode::M), None);
+        assert_eq!(host_shortcut(Scancode::F, Mod::LALTMOD, Scancode::M), None);
+        assert_eq!(host_shortcut(Scancode::X, ca, Scancode::M), None);
+        assert_eq!(host_shortcut(Scancode::F1, Mod::LCTRLMOD, Scancode::M), None);
+    }
 
     #[test]
     fn speed_ladder() {

@@ -60,7 +60,7 @@ usage: bare86 [options] [program [arguments…]]
   --mount DIR    host directory mounted as C: (default: the program's
                  directory, or the current directory for the shell)
   --fda IMG      floppy image for drive A: (also --fdb for B:); repeat
-                 --fda for a set of floppies, swapped with Ctrl+F4
+                 --fda for a set of floppies, swapped with Ctrl+Alt+D
   --hda IMG      hard disk image for drive C:
   --cdrom IMG    CD-ROM image (.iso, or .cue with BIN files and audio
                  tracks, mixed with the sound card): drive D: with MSCDEX under the
@@ -89,11 +89,12 @@ usage: bare86 [options] [program [arguments…]]
   --no-interp    no interpreter bursts: one VM exit per emulated VRAM
                  access (to measure what the interpreter brings)
   --limit S      stop after S seconds, with registers and code at CS:IP
-  window keys:   Alt+Enter full screen, Ctrl+F5 screenshot,
-                 Ctrl+F11 slower, Ctrl+Shift+F11 (or Ctrl+F12) faster,
-                 Ctrl+F10 or middle button releases the mouse,
-                 Ctrl+F4 next floppy in A:, Ctrl+F1 menu (floppy and CD
-                 change, speed, full screen, screenshot, shortcuts)
+  window keys:   Ctrl+Alt+M menu (floppy and CD change, speed, full
+                 screen, screenshot, shortcuts), Alt+Enter or Ctrl+Alt+F
+                 full screen, Ctrl+Alt+S screenshot, Ctrl+Alt+G (or middle
+                 button) releases the mouse, Ctrl+Alt+D next floppy in A:,
+                 Ctrl+Alt+- slower, Ctrl+Alt++ faster
+  --menu-key L   letter of the menu shortcut (Ctrl+Alt+L, default M)
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
@@ -119,6 +120,7 @@ fn main() -> ExitCode {
     let mut tail = Vec::new();
     let mut fullscreen = false;
     let mut boot = false;
+    let mut menu_letter = 'M';
     let cli: Vec<String> = std::env::args().skip(1).collect();
     let conf = match config::load(&cli) {
         Ok(c) => c,
@@ -188,6 +190,13 @@ fn main() -> ExitCode {
                 }
             },
             "--boot" => boot = true,
+            "--menu-key" => match args.next().and_then(|k| k.chars().next()).filter(char::is_ascii_alphabetic) {
+                Some(c) => menu_letter = c.to_ascii_uppercase(),
+                None => {
+                    eprintln!("--menu-key : lettre attendue");
+                    return ExitCode::from(2);
+                }
+            },
             "--cdrom" => match args.next() {
                 Some(p) => cfg.cdrom = Some(p.into()),
                 None => {
@@ -278,6 +287,7 @@ fn main() -> ExitCode {
             cd: opts.cfg.cdrom.clone(),
             speed: opts.cfg.mips,
             fullscreen,
+            menu_letter,
             message: None,
         };
         sdl::run("Bare86", menu, move |mut host| {

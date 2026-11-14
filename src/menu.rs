@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Menu de Bare86 (Ctrl+F1 dans la fenêtre) : changement de disquette et
+//! Menu de Bare86 (Ctrl+Alt+M dans la fenêtre, lettre réglable) : changement de disquette et
 //! de CD, vitesse, plein écran, capture, rappel des raccourcis. Jamais
 //! affiché sans être demandé ; l'invité continue de tourner dessous (il ne
 //! reçoit plus le clavier tant que le menu est ouvert).
@@ -50,8 +50,10 @@ pub struct State {
     pub cd: Option<PathBuf>,
     pub speed: Option<f64>,
     pub fullscreen: bool,
-    /// Images de A: données au lancement (`--fda` répété, Ctrl+F4).
+    /// Images de A: données au lancement (`--fda` répété, Ctrl+Alt+D).
     pub floppies: Vec<PathBuf>,
+    /// Lettre du raccourci du menu (Ctrl+Alt+lettre).
+    pub menu_letter: char,
     /// Message affiché en bas du menu (erreur d'ouverture d'une image…).
     pub message: Option<String>,
 }
@@ -324,14 +326,15 @@ impl Menu {
             }
             Page::Keys => {
                 s.frame("Raccourcis clavier");
+                let menu = format!("Ctrl+Alt+{}        ce menu", st.menu_letter);
                 let lines = [
-                    "Ctrl+F1           ce menu",
-                    "Alt+Entrée        plein écran",
-                    "Ctrl+F4           disquette suivante (--fda répété)",
-                    "Ctrl+F5           capture d'écran (bare86_NNN.png)",
-                    "Ctrl+F10          libérer la souris (ou bouton central)",
-                    "Ctrl+F11          plus lent",
-                    "Ctrl+Maj+F11      plus vite (aussi Ctrl+F12)",
+                    menu.as_str(),
+                    "Alt+Entrée        plein écran (aussi Ctrl+Alt+F)",
+                    "Ctrl+Alt+D        disquette suivante (--fda répété)",
+                    "Ctrl+Alt+S        capture d'écran (bare86_NNN.png)",
+                    "Ctrl+Alt+G        libérer la souris (ou bouton central)",
+                    "Ctrl+Alt+−        plus lent",
+                    "Ctrl+Alt++        plus vite",
                     "",
                     "Un clic dans la fenêtre capture la souris.",
                 ];
