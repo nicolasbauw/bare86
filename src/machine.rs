@@ -151,6 +151,20 @@ fn vga_plane_port(port: u16) -> bool {
     matches!(port, 0x3C4 | 0x3C5 | 0x3CE | 0x3CF)
 }
 
+/// Ports de la palette (DAC) : index d'écriture, de lecture, données.
+fn vga_dac_port(port: u16) -> bool {
+    matches!(port, 0x3C7..=0x3C9)
+}
+
+impl MmioBus<'_> {
+    /// Port VGA servi directement pendant une rafale (la carte est déjà
+    /// empruntée par le bus) : la palette en rafale ordinaire, les plans
+    /// pendant la traversée d'un choix de plan de lecture.
+    fn serves_vga(&self, port: u16) -> bool {
+        (self.io.is_some() && vga_dac_port(port)) || (self.plane_read && vga_plane_port(port))
+    }
+}
+
 impl Mmio for MmioBus<'_> {
     fn claims(&self, addr: u32, write: bool) -> bool {
         let a = addr as usize;
@@ -168,13 +182,11 @@ impl Mmio for MmioBus<'_> {
         }
     }
     fn port_claims(&self, port: u16) -> bool {
-        (self.plane_read && vga_plane_port(port))
-            || self.io.as_ref().is_some_and(|io| io.serves_in_burst(port))
+        self.serves_vga(port) || self.io.as_ref().is_some_and(|io| io.serves_in_burst(port))
     }
     fn port_in(&mut self, port: u16, size: u8) -> u32 {
         self.port_accesses += 1;
-        // La carte est déjà empruntée par le bus : servie directement.
-        if self.plane_read && vga_plane_port(port) {
+        if self.serves_vga(port) {
             let lo = u32::from(self.vga.port_read(port));
             return if size == 2 { lo | u32::from(self.vga.port_read(port + 1)) << 8 } else { lo };
         }
@@ -187,7 +199,7 @@ impl Mmio for MmioBus<'_> {
     }
     fn port_out(&mut self, port: u16, size: u8, v: u32) {
         self.port_accesses += 1;
-        if self.plane_read && vga_plane_port(port) {
+        if self.serves_vga(port) {
             self.vga.port_write(port, v as u8);
             if size == 2 {
                 self.vga.port_write(port + 1, (v >> 8) as u8);
@@ -1061,7 +1073,9 @@ impl<B: Backend> Pc<B> {
                 Exit::IoOut { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
                     self.io.write(port, size, data);
-                    port_burst = data.len() == usize::from(size) && self.io.starts_burst(port);
+                    // Palette : 768 écritures de suite (Quake en charge une à
+                    // presque chaque image), servies en rafale.
+                    port_burst = data.len() == usize::from(size) && (self.io.starts_burst(port) || vga_dac_port(port));
                     if matches!(port, 0x60 | 0x64 | 0x92) {
                         self.sync_a20()?;
                         if self.kbc.borrow().reset

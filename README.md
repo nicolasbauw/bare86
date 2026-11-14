@@ -29,7 +29,8 @@ difference is under the hood, and shows with demanding late-90s games.
 
 - **Native speed.** No instruction is emulated in the normal course of things.
   Doom's `timedemo demo1` runs at about 116 frames per second, and Quake 1.06
-  at 627 frames per second in 640×480 VESA, on a Ryzen AI 9 HX 370. A small x86
+  at about 970 frames per second in 320×200 VGA and 627 in 640×480 VESA, on a
+  Ryzen AI 9 HX 370. A small x86
   interpreter only takes over for bursts of accesses that no hardware mapping
   can serve: planar VGA writes (latches, bit mask, several planes at once) and
   dense port I/O.
