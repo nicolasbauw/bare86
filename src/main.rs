@@ -24,6 +24,7 @@ mod io;
 mod kbc;
 mod keyboard;
 mod kvm;
+mod launcher;
 mod machine;
 mod mem;
 mod menu;
@@ -95,6 +96,8 @@ usage: bare86 [options] [program [arguments…]]
                  button) releases the mouse, Ctrl+Alt+D next floppy in A:,
                  Ctrl+Alt+- slower, Ctrl+Alt++ faster
   --menu-key L   letter of the menu shortcut (Ctrl+Alt+L, default M)
+  --launcher [DIR]  list the games of DIR (default: current directory),
+                 each a subdirectory with a bare86.conf, and run the chosen one
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
@@ -121,7 +124,22 @@ fn main() -> ExitCode {
     let mut fullscreen = false;
     let mut boot = false;
     let mut menu_letter = 'M';
-    let cli: Vec<String> = std::env::args().skip(1).collect();
+    let mut cli: Vec<String> = std::env::args().skip(1).collect();
+    // Lanceur, seulement sur demande : le profil choisi devient
+    // `--config PROFIL --window`, le reste de la ligne de commande est gardé.
+    if let Some(root) = launcher::root_of(&cli) {
+        let profiles = launcher::scan(&root);
+        let lines: Vec<String> = profiles.iter().map(launcher::line).collect();
+        let empty = format!("Aucun jeu : pas de sous-répertoire avec un {} dans {}", launcher::PROFILE, root.display());
+        match sdl::launcher("Bare86", &lines, &empty) {
+            Ok(Some(i)) => cli = launcher::command_line(&cli, &profiles[i].conf),
+            Ok(None) => return ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("lanceur : {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let conf = match config::load(&cli) {
         Ok(c) => c,
         Err(e) => {

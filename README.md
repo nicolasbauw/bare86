@@ -16,6 +16,7 @@ difference is under the hood, and shows with demanding late-90s games.
 - [Command-line options](#command-line-options)
 - [Configuration file](#configuration-file)
 - [Window, keys and menu](#window-keys-and-menu)
+- [Launcher](#launcher)
 - [The built-in DOS](#the-built-in-dos)
 - [Booting a real DOS](#booting-a-real-dos)
 - [CD-ROM](#cd-rom)
@@ -138,6 +139,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--window` | SDL3 window, with sound |
 | `--fullscreen` | Window, full screen from the start |
 | `--menu-key L` | Letter of the menu shortcut, Ctrl+Alt+L (default M) |
+| `--launcher [DIR]` | List the games of DIR (default: the current directory) and run the chosen one, see [Launcher](#launcher) |
 | `--font F.psf` | PSF font for text mode (default: the built-in Terminus 8×16) |
 | `--term` | Show the text screen live in the terminal |
 | `--screen` | Print the text screen when the program ends |
@@ -200,6 +202,14 @@ receives the keyboard. It changes the floppy in A: and the CD (a small file
 browser lists the images of the right type), ejects the CD, sets the speed and
 full screen, takes a screenshot and recalls the shortcuts. Arrows choose,
 Enter confirms, left and right change the speed, Escape closes.
+
+## Launcher
+
+`bare86 --launcher ~/games` opens a window listing the games of `~/games`: each
+subdirectory that holds a `bare86.conf` is a game, shown with its program or
+its CD. Enter runs the chosen game with its configuration file, in a window;
+other options given on the command line still apply. The launcher only opens
+when asked: `bare86` alone starts the built-in DOS directly.
 
 ## The built-in DOS
 

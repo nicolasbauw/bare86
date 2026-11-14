@@ -510,6 +510,64 @@ where
     }
 }
 
+/// Lanceur : liste des profils dans une fenêtre ; rend le n° choisi, ou
+/// `None` (Échap, fenêtre fermée).
+pub fn launcher(title: &str, lines: &[String], empty: &str) -> Result<Option<usize>, String> {
+    let sdl = sdl3::init().map_err(|e| e.to_string())?;
+    let video = sdl.video().map_err(|e| e.to_string())?;
+    let window = video.window(title, 960, 720).position_centered().resizable().build().map_err(|e| e.to_string())?;
+    let mut canvas = window.into_canvas();
+    let creator = canvas.texture_creator();
+    let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
+    let font = crate::font::Font::builtin();
+    let mut sel = 0usize;
+    let mut redraw = true;
+    loop {
+        while let Some(ev) = events.poll_event() {
+            use crate::menu::Key;
+            match ev {
+                Event::Quit { .. } => return Ok(None),
+                Event::KeyDown { scancode: Some(sc), .. } => {
+                    let last = lines.len().saturating_sub(1);
+                    match menu_key(sc) {
+                        Some(Key::Esc) => return Ok(None),
+                        Some(Key::Enter) if !lines.is_empty() => return Ok(Some(sel)),
+                        Some(Key::Up) => sel = sel.saturating_sub(1),
+                        Some(Key::Down) => sel = (sel + 1).min(last),
+                        Some(Key::PageUp) => sel = sel.saturating_sub(10),
+                        Some(Key::PageDown) => sel = (sel + 10).min(last),
+                        Some(Key::Home) => sel = 0,
+                        Some(Key::End) => sel = last,
+                        _ => {}
+                    }
+                    redraw = true;
+                }
+                Event::Window { .. } => redraw = true,
+                _ => {}
+            }
+        }
+        if !redraw {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        redraw = false;
+        let cells = crate::menu::list_page(title, lines, sel, empty, "↑↓ choisir   Entrée lancer   Échap quitter");
+        let (w, h, px) = crate::menu::rasterize(&cells, &font);
+        let mut t = creator.create_texture_streaming(PixelFormat::XRGB8888, w as u32, h as u32).map_err(|e| e.to_string())?;
+        t.set_scale_mode(sdl3::render::ScaleMode::Nearest);
+        let bytes: Vec<u8> = px.iter().flat_map(|p| p.to_le_bytes()).collect();
+        t.update(None, &bytes, w * 4).map_err(|e| e.to_string())?;
+        let (ww, wh) = canvas.output_size().map_err(|e| e.to_string())?;
+        let (ww, wh) = (ww as f32, wh as f32);
+        let k = ((ww / w as f32).min(wh / h as f32)).floor().max(1.0);
+        let (mw, mh) = (w as f32 * k, h as f32 * k);
+        canvas.set_draw_color(sdl3::pixels::Color::RGB(0, 0, 0));
+        canvas.clear();
+        canvas.copy(&t, None, FRect::new(((ww - mw) / 2.0).floor(), ((wh - mh) / 2.0).floor(), mw, mh)).map_err(|e| e.to_string())?;
+        canvas.present();
+    }
+}
+
 /// Raccourcis de Bare86.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shortcut {

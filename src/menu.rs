@@ -373,6 +373,23 @@ impl Menu {
     }
 }
 
+/// Liste plein cadre (lanceur) : titre, lignes, ligne choisie, pied ;
+/// défile pour garder la ligne choisie visible.
+pub fn list_page(title: &str, lines: &[String], sel: usize, empty: &str, footer: &str) -> Vec<(u8, u8)> {
+    let mut s = Screen::new();
+    s.frame(title);
+    let rows = ROWS - 5;
+    let top = sel.saturating_sub(rows - 1);
+    if lines.is_empty() {
+        s.text(2, 3, empty, ATTR_TEXT);
+    }
+    for (row, (i, l)) in lines.iter().enumerate().skip(top).take(rows).enumerate() {
+        s.item(2 + row, l, i == sel);
+    }
+    s.footer(footer);
+    s.cells
+}
+
 const ATTR_BOX: u8 = 0x1F;
 const ATTR_TEXT: u8 = 0x17;
 const ATTR_TITLE: u8 = 0x1E;
