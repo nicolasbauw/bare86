@@ -619,7 +619,7 @@ Essais commodes (clavier scripté) : `bare86 --hda COPIE.img --boot --keys "{unt
 
 Images (hors dépôt, toujours travailler sur une copie) : `~/Dev/dos-progs/freedos/fd13-hd.img`, `fd13-hd-doom.img`, `~/Dev/dos-progs/net/fd13-net.img` (+ `C:\NET` : NE2000.COM, mTCP, NETUP.BAT, GET.BAT).
 
-SB Pro et MPU-401 faits en fin de session (le MIDI est enregistré par `--midi-out`, pas encore joué). **Prochaine tâche : suite du lanceur** (point 4 ci-dessous : premier palier fait, création et modification de profils à faire ; faire essayer `--launcher` en vraie fenêtre par le propriétaire du projet), puis Windows 95/98 (point 3).
+SB Pro et MPU-401 faits en fin de session (le MIDI est enregistré par `--midi-out`, pas encore joué). **Prochaine tâche (priorité décidée par le propriétaire du projet, 2026-11-14) : MIDI joué sur l'OPL3** (point 4 bis : synthèse General MIDI → OPL3 branchée sur `mpu401::MidiSink`, banques au choix, référence libADLMIDI) ; **ensuite : suite du lanceur** (point 4 ci-dessous : premier palier fait, création et modification de profils à faire ; faire essayer `--launcher` en vraie fenêtre par le propriétaire du projet), puis Windows 95/98 (point 3).
 
 À faire, dans l'ordre convenu :
 1. ~~Réseau~~ : FAIT le 2026-11-14 (`--net`, NE2000 + libslirp ; DHCP, ping, HTGET sous FreeDOS + mTCP ; 9,5 Mo/s après réveil du vCPU et rafales de ports). Reste IPX pour les jeux, plus tard. Mesures : épingler sur les cœurs Zen 5 (`taskset -c 0-3`).
