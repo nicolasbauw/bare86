@@ -141,6 +141,14 @@ struct MmioBus<'a> {
     /// Ports servis pendant une rafale (`IoBus::serves_in_burst`).
     io: Option<&'a mut IoBus>,
     port_accesses: u64,
+    /// Traversée d'un choix de plan de lecture (`Access::PlaneRead`) :
+    /// registres VGA servis ici, arrêt dès que la configuration en sort.
+    plane_read: bool,
+}
+
+/// Ports d'index et de données du séquenceur et du contrôleur graphique.
+fn vga_plane_port(port: u16) -> bool {
+    matches!(port, 0x3C4 | 0x3C5 | 0x3CE | 0x3CF)
 }
 
 impl Mmio for MmioBus<'_> {
@@ -160,10 +168,16 @@ impl Mmio for MmioBus<'_> {
         }
     }
     fn port_claims(&self, port: u16) -> bool {
-        self.io.as_ref().is_some_and(|io| io.serves_in_burst(port))
+        (self.plane_read && vga_plane_port(port))
+            || self.io.as_ref().is_some_and(|io| io.serves_in_burst(port))
     }
     fn port_in(&mut self, port: u16, size: u8) -> u32 {
         self.port_accesses += 1;
+        // La carte est déjà empruntée par le bus : servie directement.
+        if self.plane_read && vga_plane_port(port) {
+            let lo = u32::from(self.vga.port_read(port));
+            return if size == 2 { lo | u32::from(self.vga.port_read(port + 1)) << 8 } else { lo };
+        }
         let mut data = [0u8; 4];
         let n = usize::from(size);
         if let Some(io) = &mut self.io {
@@ -173,9 +187,19 @@ impl Mmio for MmioBus<'_> {
     }
     fn port_out(&mut self, port: u16, size: u8, v: u32) {
         self.port_accesses += 1;
+        if self.plane_read && vga_plane_port(port) {
+            self.vga.port_write(port, v as u8);
+            if size == 2 {
+                self.vga.port_write(port + 1, (v >> 8) as u8);
+            }
+            return;
+        }
         if let Some(io) = &mut self.io {
             io.write(port, size, &v.to_le_bytes()[..usize::from(size)]);
         }
+    }
+    fn stop(&self) -> bool {
+        self.plane_read && !matches!(self.vga.access(), Access::PlaneRead(_))
     }
 }
 
@@ -188,6 +212,11 @@ impl Mmio for MmioBus<'_> {
 #[derive(Default)]
 struct WindowState {
     mapped: bool,
+    /// Mappée en lecture seule (`Access::PlaneRead`).
+    readonly: bool,
+    /// Écritures émulées depuis le dernier choix d'un plan de lecture : la
+    /// lecture seule est gardée en deçà de `RO_WRITE_LIMIT`.
+    writes_since_read: u64,
     epoch: u64,
     emulated_in_epoch: u64,
     /// Lectures émulées dans cette configuration (plan de lecture ≠ plan écrit).
@@ -198,6 +227,12 @@ struct WindowState {
 }
 
 const MAP_THRESHOLD: u64 = 600;
+
+/// Écritures tolérées en lecture seule après un choix de plan de lecture,
+/// quand la traversée par l'interpréteur n'a pas suffi : un motif « plan lu
+/// = p » puis « plan écrit = p » avec quelques copies reste en lecture
+/// seule (pas deux remappages par plan) ; le rendu repasse en écriture.
+const RO_WRITE_LIMIT: u64 = 1024;
 
 #[derive(Default)]
 pub struct Stats {
@@ -701,32 +736,48 @@ impl<B: Backend> Pc<B> {
             w.epoch = vga.epoch;
             // D'un plan à l'autre, les accès s'additionnent : un flux de
             // colonnes (un plan chacune) finit par être mappé.
-            let plane = matches!(access, Access::Plane(_));
+            let plane = matches!(access, Access::Plane(_) | Access::PlaneRead(_));
             if !(plane && w.plane_streak) {
                 w.emulated_in_epoch = 0;
             }
             w.plane_streak = plane;
             w.reads_in_epoch = 0;
         }
+        if matches!(access, Access::PlaneRead(_)) {
+            w.writes_since_read = 0;
+        }
         let want = match access {
             Access::Emulated => None,
             Access::Linear | Access::Bank(_) => Some(access),
             // Lectures vues alors qu'elles viseraient un autre plan que celui mappé.
             Access::Plane(p) if p != vga.read_plane() && w.reads_in_epoch > 0 => None,
-            Access::Plane(_) if w.mapped || w.emulated_in_epoch >= MAP_THRESHOLD => Some(access),
-            Access::Plane(_) => None,
+            Access::Plane(_) | Access::PlaneRead(_) if w.mapped || w.emulated_in_epoch >= MAP_THRESHOLD => Some(access),
+            Access::Plane(_) | Access::PlaneRead(_) => None,
         };
         match want {
             Some(a) => {
                 vga.point_window(a)?;
+                // Lecture seule pour un plan de lecture, gardée tant que peu
+                // d'écritures suivent (elles sortent et sont émulées). Une
+                // bascule recrée le slot : KVM ne change pas ce drapeau en place.
+                let readonly = match a {
+                    Access::PlaneRead(_) => true,
+                    Access::Plane(_) => w.mapped && w.readonly && w.writes_since_read < RO_WRITE_LIMIT,
+                    _ => false,
+                };
+                if w.mapped && w.readonly != readonly {
+                    self.vm.map_vga(None, false)?;
+                    w.mapped = false;
+                }
                 if !w.mapped {
-                    self.vm.map_vga(Some(vga.window_host_addr()))?;
+                    self.vm.map_vga(Some(vga.window_host_addr()), readonly)?;
                     w.mapped = true;
+                    w.readonly = readonly;
                     self.stats.vram_maps += 1;
                 }
             }
             None if w.mapped => {
-                self.vm.map_vga(None)?;
+                self.vm.map_vga(None, false)?;
                 w.mapped = false;
                 self.stats.vram_unmaps += 1;
             }
@@ -800,7 +851,7 @@ impl<B: Backend> Pc<B> {
     fn short_transfer_burst(&mut self) -> Result<()> {
         if self.interp {
             let mut vga = self.vga.borrow_mut();
-            let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0 };
+            let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read: false };
             let burst = interp::continue_in_host(&mut self.vm, &mut bus, u64::MAX, u64::from(SHORT_TRANSFER_STEPS))?;
             self.stats.interpreted += burst.instructions;
         }
@@ -998,6 +1049,9 @@ impl<B: Backend> Pc<B> {
             // Sortie sur un port de périphérique très sollicité (carte réseau) :
             // les accès suivants sont servis en rafale par l'interpréteur.
             let mut port_burst = false;
+            // Choix d'un plan de lecture, fenêtre mappée en écriture : la
+            // suite passe par l'interpréteur jusqu'à la sortie de cet état.
+            let mut plane_read = false;
             match self.vm.run()? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
                 Exit::IoOut { port: HOST_KBD_PORT, data, .. } => {
@@ -1019,6 +1073,18 @@ impl<B: Backend> Pc<B> {
                     if matches!(port, 0x3D4 | 0x3D5) {
                         self.stats.page_flips = self.vga.borrow().start_writes;
                     }
+                    // Doom copie sa barre d'état plan par plan : « plan lu =
+                    // p » puis aussitôt « plan écrit = p », sans accès entre
+                    // les deux. Traversé ici, l'état intermédiaire n'impose
+                    // ni lecture seule ni remappage (deux changements de slot).
+                    if vga_plane_port(port)
+                        && self.window.mapped
+                        && !self.window.readonly
+                        && matches!(self.vga.borrow().access(), Access::PlaneRead(_))
+                    {
+                        plane_read = true;
+                        port_burst = true;
+                    }
                 }
                 Exit::IoIn { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
@@ -1027,24 +1093,26 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::MmioRead { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
-                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0 };
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0, plane_read: false };
                     for (i, b) in data.iter_mut().enumerate() {
                         let a = addr as u32 + i as u32;
                         *b = if bus.claims(a, false) { bus.read8(a) } else { 0xFF };
                     }
                     self.window.emulated_in_epoch += bus.accesses;
                     self.window.reads_in_epoch += bus.reads;
+                    self.window.writes_since_read += bus.accesses - bus.reads;
                     self.stats.vram_emulated += bus.accesses;
                     mmio = true;
                 }
                 Exit::MmioWrite { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
-                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0 };
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0, plane_read: false };
                     for (i, &b) in data.iter().enumerate() {
                         bus.write8(addr as u32 + i as u32, b);
                     }
                     self.window.emulated_in_epoch += bus.accesses;
                     self.window.reads_in_epoch += bus.reads;
+                    self.window.writes_since_read += bus.accesses - bus.reads;
                     self.stats.vram_emulated += bus.accesses;
                     // Écriture en ROM : ignorée, pas de rafale.
                     mmio = VGA_WINDOW.contains(&(addr as usize));
@@ -1067,11 +1135,12 @@ impl<B: Backend> Pc<B> {
             }
             if (mmio || port_burst) && self.interp {
                 let mut vga = self.vga.borrow_mut();
-                let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0 };
+                let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read };
                 let burst = interp::continue_in_host(&mut self.vm, &mut bus, IDLE_LIMIT, BURST_BUDGET)?;
                 self.stats.burst_ports += bus.port_accesses;
                 self.window.emulated_in_epoch += bus.accesses;
                 self.window.reads_in_epoch += bus.reads;
+                self.window.writes_since_read += bus.accesses - bus.reads;
                 self.stats.vram_emulated += bus.accesses;
                 self.stats.interpreted += burst.instructions;
                 if let Some(t) = &mut self.throttle {

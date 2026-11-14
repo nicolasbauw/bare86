@@ -326,7 +326,7 @@ fn remap_case(op: &[u8], remap: Remap) -> Result<f64, Box<dyn std::error::Error>
     let planes: Vec<GuestMem> = (0..4).map(|_| GuestMem::new(VGA_WINDOW.len())).collect::<Result<_, _>>()?;
     let file = PlaneFile::new()?;
     if remap == Remap::HostView {
-        m.map_vga_window_raw(file.view as u64)?;
+        m.map_vga_window_raw(file.view as u64, false)?;
     } else {
         m.map_vga_window(Some(&planes[0]))?;
     }

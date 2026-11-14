@@ -36,6 +36,10 @@ pub trait Mmio {
         u32::MAX
     }
     fn port_out(&mut self, _port: u16, _size: u8, _v: u32) {}
+    /// Vrai si la rafale doit s'arrêter après l'instruction courante.
+    fn stop(&self) -> bool {
+        false
+    }
 }
 
 /// Registre de segment avec son descripteur en cache (comme le processeur).
@@ -107,6 +111,8 @@ pub enum StopReason {
     Budget,
     /// Instruction non gérée ou fautive : la VM l'exécutera nativement.
     Unsupported,
+    /// Arrêt demandé par le bus (`Mmio::stop`).
+    Stopped,
 }
 
 #[derive(Debug)]
@@ -290,6 +296,9 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         idle = if hits == 0 { idle + 1 } else { 0 };
         if let Err(Bail) = result {
             break StopReason::Unsupported;
+        }
+        if mmio.stop() {
+            break StopReason::Stopped;
         }
     };
     Burst { instructions, mmio_accesses, reason }

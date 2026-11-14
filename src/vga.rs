@@ -170,6 +170,10 @@ pub enum Access {
     /// rendrait ce plan même si le plan de lecture diffère : la machine ne
     /// mappe alors que si aucune lecture n'a été vue dans cette configuration.
     Plane(usize),
+    /// Non chaîné, lecture simple de ce plan, différent du plan écrit, que
+    /// le programme vient de choisir (il va lire) : mappé en lecture seule,
+    /// les écritures sortent et sont émulées.
+    PlaneRead(usize),
     /// Logique des plans nécessaire : MMIO et interpréteur.
     Emulated,
 }
@@ -206,6 +210,9 @@ pub struct Vga {
     pub epoch: u64,
     /// Chain4 au dernier changement de configuration (bascule du contenu).
     chain4_was: bool,
+    /// Dernier registre de plan choisi : celui de lecture (Read Map) plutôt
+    /// que le masque d'écriture (Map Mask). Voir `Access::PlaneRead`.
+    read_intent: bool,
 }
 
 impl Vga {
@@ -235,6 +242,7 @@ impl Vga {
             start: Instant::now(),
             epoch: 0,
             chain4_was: false,
+            read_intent: false,
         };
         for i in 0..16 {
             v.attr[i] = i as u8;
@@ -303,8 +311,20 @@ impl Vga {
             && self.gc[8] == 0xFF           // tous les bits
             && self.gc[5] & 0x10 == 0       // pas de pair/impair
             && self.seq[4] & 0x04 != 0;
-        if simple && mask.count_ones() == 1 {
-            Access::Plane(mask.trailing_zeros() as usize)
+        let read = usize::from(self.gc[4] & 3);
+        let single = mask.count_ones() == 1;
+        let written = mask.trailing_zeros() as usize;
+        if !simple {
+            Access::Emulated
+        } else if single && written == read {
+            Access::Plane(written)
+        } else if self.read_intent {
+            // Le dernier registre choisi est le plan de lecture : le
+            // programme va lire (Doom relit l'écran plan par plan, le masque
+            // d'écriture resté sur le dernier plan écrit).
+            Access::PlaneRead(read)
+        } else if single {
+            Access::Plane(written)
         } else {
             Access::Emulated
         }
@@ -314,7 +334,7 @@ impl Vga {
     pub fn point_window(&mut self, access: Access) -> std::io::Result<()> {
         match access {
             Access::Linear => self.vram.point_window(LINEAR),
-            Access::Plane(p) => self.vram.point_window(p),
+            Access::Plane(p) | Access::PlaneRead(p) => self.vram.point_window(p),
             Access::Bank(b) => self.vram.point_window(FB_REGION + b),
             Access::Emulated => Ok(()),
         }
@@ -482,6 +502,9 @@ impl Vga {
             0x3C4 => self.seq_index = v,
             0x3C5 => {
                 self.seq[usize::from(self.seq_index & 7)] = v;
+                if self.seq_index & 7 == 2 {
+                    self.read_intent = false;
+                }
                 self.config_changed();
             }
             0x3C6 => self.dac_mask = v,
@@ -501,6 +524,9 @@ impl Vga {
             0x3CE => self.gc_index = v,
             0x3CF => {
                 self.gc[usize::from(self.gc_index & 15)] = v;
+                if self.gc_index & 15 == 4 {
+                    self.read_intent = true;
+                }
                 self.config_changed();
             }
             0x3B4 | 0x3D4 => self.crtc_index = v,

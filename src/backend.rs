@@ -91,7 +91,9 @@ pub trait Backend {
     /// Mappe la fenêtre VGA A0000–AFFFF sur 64 Ko de mémoire hôte (accès
     /// natifs), ou la démappe (`None` : accès MMIO). L'adresse est toujours
     /// la même : la vue hôte est remappée par la carte VGA elle-même.
-    fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()>;
+    /// Fenêtre VGA mappée sur `host_addr` (en lecture seule : les écritures
+    /// sortent en MMIO), ou démappée.
+    fn map_vga(&mut self, host_addr: Option<u64>, readonly: bool) -> Result<()>;
     /// Porte A20 : fermée, la HMA (100000h–10FFEFh) se replie sur 0.
     fn set_a20(&mut self, open: bool) -> Result<()>;
     /// Framebuffer linéaire SVGA : `size` octets de mémoire hôte à

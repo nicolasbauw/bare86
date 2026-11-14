@@ -117,11 +117,12 @@ impl KvmVm {
         Ok(())
     }
 
-    /// Mappe 64 Ko de mémoire hôte à `host_addr` sur la fenêtre VGA.
-    pub fn map_vga_window_raw(&self, host_addr: u64) -> Result<()> {
+    /// Mappe 64 Ko de mémoire hôte à `host_addr` sur la fenêtre VGA (en
+    /// lecture seule si demandé).
+    pub fn map_vga_window_raw(&self, host_addr: u64, readonly: bool) -> Result<()> {
         let region = kvm_userspace_memory_region {
             slot: VGA_SLOT,
-            flags: 0,
+            flags: if readonly { KVM_MEM_READONLY } else { 0 },
             guest_phys_addr: VGA_WINDOW.start as u64,
             memory_size: VGA_WINDOW.len() as u64,
             userspace_addr: host_addr,
@@ -278,9 +279,9 @@ impl Backend for KvmVm {
         Ok(())
     }
 
-    fn map_vga(&mut self, host_addr: Option<u64>) -> Result<()> {
+    fn map_vga(&mut self, host_addr: Option<u64>, readonly: bool) -> Result<()> {
         match host_addr {
-            Some(a) => self.map_vga_window_raw(a),
+            Some(a) => self.map_vga_window_raw(a, readonly),
             None => self.map_vga_window(None),
         }
     }
