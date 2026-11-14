@@ -423,7 +423,13 @@ impl<B: Backend> Pc<B> {
         io.map(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));
         let opl = Rc::new(RefCell::new(crate::opl::Opl::new()));
         for ports in [0x388..=0x38B, crate::sb16::BASE..=crate::sb16::BASE + 3, crate::sb16::BASE + 8..=crate::sb16::BASE + 9] {
-            io.map(ports, Box::new(crate::opl::OplPorts(opl.clone())));
+            io.map(ports.clone(), Box::new(crate::opl::OplPorts(opl.clone())));
+            // Les pilotes FM attendent après chaque écriture en relisant
+            // l'état (≈ 35 lectures, temporisation AdLib) : une sortie de VM
+            // chacune allongeait le gestionnaire de la musique au-delà de la
+            // période de l'IRQ 0 (Doom : musique 1,3 % trop lente). Servis
+            // en rafale par l'interpréteur.
+            io.burst_on(ports, true);
         }
         let nic = match &cfg.net {
             Some(forwards) => {

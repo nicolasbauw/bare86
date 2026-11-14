@@ -115,6 +115,12 @@ impl Sb16 {
         self.mixer[0x81] = 0x22; // DMA 1 et 5
     }
 
+    /// Filtre de sortie de la SB Pro : passe-bas sur le DSP, que le bit 5 du
+    /// registre 0Eh du mixeur coupe (SB Pro 2). Sans objet sur une SB16.
+    pub fn pro_dsp_filter(&self) -> bool {
+        self.pro && self.mixer[0x0E] & 0x20 == 0
+    }
+
     /// Gain de la FM : volumes maître et FM du mixeur (gauche, droite).
     pub fn fm_gain(&self) -> [f32; 2] {
         [volume(self.mixer[0x30]) * volume(self.mixer[0x34]), volume(self.mixer[0x31]) * volume(self.mixer[0x35])]
