@@ -19,7 +19,7 @@ pub struct Config {
     pub args: Option<String>,
 }
 
-const PATH_KEYS: &[&str] = &["mount", "program", "font", "shot", "wav", "fda", "fdb", "hda"];
+const PATH_KEYS: &[&str] = &["mount", "program", "font", "shot", "wav", "fda", "fdb", "hda", "cdrom"];
 
 /// Fichier désigné ou trouvé, lu et analysé (vide s'il n'y en a pas).
 pub fn load(cli: &[String]) -> Result<Config, String> {

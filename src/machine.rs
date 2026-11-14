@@ -112,11 +112,13 @@ pub struct Config {
     /// Carte NE2000 et NAT en espace utilisateur (`--net`), avec les ports
     /// de l'hôte redirigés vers l'invité.
     pub net: Option<Vec<crate::net::Forward>>,
+    /// Image du CD (lecteur ATAPI en maître du canal IDE secondaire).
+    pub cdrom: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None }
     }
 }
 
@@ -308,6 +310,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Tailles de la mémoire (octets) et de l'EMS (Ko), pour un redémarrage.
     mem_size: usize,
     ems_kb: usize,
+    /// Canal IDE secondaire et son lecteur de CD.
+    ide: Option<Rc<RefCell<crate::ide::Ide>>>,
     /// Carte réseau et lien avec le thread réseau.
     nic: Option<(Rc<RefCell<crate::ne2000::Ne2000>>, crate::net::NetLink)>,
 }
@@ -343,8 +347,20 @@ impl<B: Backend> Pc<B> {
         io.trace = cfg.trace_io;
         // Port de diagnostic POST, utilisé aussi comme temporisation.
         io.map(0x80..=0x80, Box::new(crate::io::Sink));
+        let ide = match &cfg.cdrom {
+            Some(path) => {
+                let disc = crate::cdrom::Disc::open(path)?;
+                let ide = crate::ide::Ide::new(crate::cdrom::Drive::new(Some(disc))).shared();
+                io.map(crate::ide::BASE..=crate::ide::BASE + 7, Box::new(crate::ide::IdePorts(ide.clone())));
+                io.map(crate::ide::CONTROL..=crate::ide::CONTROL, Box::new(crate::ide::IdePorts(ide.clone())));
+                Some(ide)
+            }
+            None => None,
+        };
         for base in [0x1F0u16, 0x170, 0x1E8, 0x168] {
-            io.map(base..=base + 7, Box::new(crate::io::NoIde));
+            if !(ide.is_some() && base == crate::ide::BASE) {
+                io.map(base..=base + 7, Box::new(crate::io::NoIde));
+            }
         }
         let pic = Pic::new().shared();
         io.map(0x20..=0x21, Box::new(PicPorts(pic.clone())));
@@ -391,6 +407,7 @@ impl<B: Backend> Pc<B> {
             None => None,
         };
         let mut pc = Self {
+            ide,
             nic,
             vm,
             io,
@@ -639,6 +656,11 @@ impl<B: Backend> Pc<B> {
         }
         drop(sb);
         self.service_net();
+        if let Some(ide) = &self.ide
+            && ide.borrow_mut().take_irq()
+        {
+            self.pic.borrow_mut().raise(crate::ide::IRQ);
+        }
         Ok(())
     }
 

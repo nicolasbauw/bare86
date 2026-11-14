@@ -6,6 +6,7 @@ mod audio;
 mod backend;
 mod bench;
 mod bios;
+mod cdrom;
 mod config;
 mod debug;
 mod disk;
@@ -16,6 +17,7 @@ mod font;
 mod gameport;
 mod hle;
 mod host;
+mod ide;
 mod interp;
 mod io;
 mod kbc;
@@ -58,6 +60,8 @@ usage: bare86 [options] [program [arguments…]]
   --fda IMG      floppy image for drive A: (also --fdb for B:); repeat
                  --fda for a set of floppies, swapped with Ctrl+F4
   --hda IMG      hard disk image for drive C:
+  --cdrom IMG    CD-ROM image (ISO 9660) in an ATAPI drive, secondary IDE
+                 master (170h, IRQ 15), for the DOS's own CD drivers
   --boot         boot from the disk images (A: if present, else C:)
                  instead of the built-in DOS
   --net          NE2000 network card (port 300h, IRQ 3) with user-mode NAT:
@@ -178,6 +182,13 @@ fn main() -> ExitCode {
                 }
             },
             "--boot" => boot = true,
+            "--cdrom" => match args.next() {
+                Some(p) => cfg.cdrom = Some(p.into()),
+                None => {
+                    eprintln!("--cdrom : image attendue");
+                    return ExitCode::from(2);
+                }
+            },
             "--net" => {
                 cfg.net.get_or_insert_with(Vec::new);
             }
