@@ -87,6 +87,18 @@ const TERM_FRAME: Duration = Duration::from_millis(33);
 const PIT_POLL_GAP: Duration = Duration::from_micros(100);
 const PIT_POLL_AFTER: Duration = Duration::from_millis(2);
 const PIT_POLL_SLEEP: Duration = Duration::from_micros(100);
+/// Sonde d'attente active (`Pc::spin_check`) : instructions exécutées à
+/// blanc au plus ; sommeil maximal (borne aussi le retard des IRQ sans
+/// échéance connue, comme la fin d'un bloc DMA de la Sound Blaster :
+/// dormir jusqu'à l'IRQ 0 coûtait plus à Doom, 77 % d'un cœur contre 69 %) ;
+/// délai de la sonde qui suit le réveil ; nouvelles tentatives après un
+/// échec quand la boucle a été vue.
+const SPIN_PROBE_MAX: u64 = 256;
+const SPIN_SLEEP_MAX: Duration = Duration::from_millis(1);
+const SPIN_REPROBE: Duration = Duration::from_micros(100);
+const SPIN_RETRIES: u32 = 6;
+
+
 /// Réveil avant le blanc vertical (`Pc::vga_poll`) : une dizaine de lignes.
 const VBLANK_MARGIN: Duration = Duration::from_micros(300);
 
@@ -152,6 +164,22 @@ struct MmioBus<'a> {
     /// Traversée d'un choix de plan de lecture (`Access::PlaneRead`) :
     /// registres VGA servis ici, arrêt dès que la configuration en sort.
     plane_read: bool,
+}
+
+/// Bus de la sonde d'attente active (`interp::probe_spin`) : la VRAM et la
+/// ROM sont signalées (la sonde échoue) sans être lues, pour ne pas toucher
+/// aux verrous de la carte.
+struct SpinBus;
+
+impl Mmio for SpinBus {
+    fn claims(&self, addr: u32, _write: bool) -> bool {
+        let a = addr as usize;
+        VGA_WINDOW.contains(&a) || ROM.contains(&a)
+    }
+    fn read8(&mut self, _addr: u32) -> u8 {
+        0xFF
+    }
+    fn write8(&mut self, _addr: u32, _v: u8) {}
 }
 
 /// Ports d'index et de données du séquenceur et du contrôleur graphique.
@@ -274,6 +302,8 @@ pub struct Stats {
     pub pit_yields: u64,
     /// Sommeils jusqu'au blanc vertical pendant une attente sur 3DAh.
     pub vga_yields: u64,
+    /// Sommeils pendant une attente active sans sortie (`Pc::spin_check`).
+    pub spin_sleeps: u64,
     /// Sorties d'E/S par port (lectures et écritures).
     pub io_ports: std::collections::HashMap<u16, u64>,
 }
@@ -294,6 +324,7 @@ impl std::fmt::Debug for Stats {
             .field("burst_ports", &self.burst_ports)
             .field("pit_yields", &self.pit_yields)
             .field("vga_yields", &self.vga_yields)
+            .field("spin_sleeps", &self.spin_sleeps)
             .field("io_ports", &ports)
             .finish()
     }
@@ -374,6 +405,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Scrutation du registre d'état VGA sans autre écriture sur un port :
     /// début de la série et dernière lecture.
     vga_polls: Option<(Instant, Instant)>,
+    /// Sondes d'attente active encore permises après un échec (`spin_check`).
+    spin_retries: u32,
     /// Souris PS/2 de l'interface du BIOS (vrai DOS).
     ps2: crate::mouse::Ps2,
     /// DOS fourni par l'hôte ; faux après un démarrage sur image disque.
@@ -566,6 +599,7 @@ impl<B: Backend> Pc<B> {
             idle_polls: None,
             pit_polls: None,
             vga_polls: None,
+            spin_retries: 0,
             ps2: Default::default(),
             dos_hle: true,
             boot_drive: 0,
@@ -1026,6 +1060,47 @@ impl<B: Backend> Pc<B> {
         }
         let now = Instant::now();
         let until = self.pit.borrow().next_irq0().unwrap_or(now + HALT_MAX).min(now + HALT_MAX);
+        self.wait_until(until);
+        Ok(())
+    }
+
+    /// Attente active sans sortie de VM (Keen relit son compteur de tics
+    /// jusqu'à l'image suivante : un cœur entier). Au battement, une sonde à
+    /// blanc dans l'interpréteur vérifie que l'invité tourne dans une boucle
+    /// qui se répète à l'identique (`interp::probe_spin`) : seule une
+    /// interruption peut l'en sortir, et le vCPU dort jusqu'à la prochaine
+    /// IRQ 0, au plus `SPIN_SLEEP_MAX`. Dormir revient à exécuter l'invité
+    /// plus lentement : la sonde évite seulement de ralentir un calcul. Une sonde ponctuelle suit le réveil de
+    /// `SPIN_REPROBE`, pour rattraper la boucle au retour du gestionnaire
+    /// d'interruption sans attendre le battement suivant.
+    fn spin_check(&mut self) -> Result<()> {
+        if !self.interp || self.stepping || self.pic.borrow().pending().is_some() {
+            return Ok(());
+        }
+        let cpu = self.vm.state()?;
+        if cpu.flags & (1 << 9) == 0 || !interp::probe_spin(&cpu, self.vm.mem(), &mut SpinBus, SPIN_PROBE_MAX) {
+            // Juste après le réveil, l'invité peut être encore dans le
+            // gestionnaire d'interruption (Doom y mixe le son, DOS/4GW y
+            // passe par le mode réel) : nouvelles tentatives, de plus en plus
+            // espacées (≈ 6 ms en tout), tant que la boucle a été vue.
+            if self.spin_retries > 0 {
+                self.spin_retries -= 1;
+                self.heartbeat.probe_in(SPIN_REPROBE * (1 << (SPIN_RETRIES - self.spin_retries)))?;
+            }
+            return Ok(());
+        }
+        self.spin_retries = SPIN_RETRIES;
+        self.stats.spin_sleeps += 1;
+        let now = Instant::now();
+        let until = self.pit.borrow().next_irq0().unwrap_or(now + SPIN_SLEEP_MAX).min(now + SPIN_SLEEP_MAX);
+        self.wait_until(until);
+        self.heartbeat.probe_in(SPIN_REPROBE)?;
+        Ok(())
+    }
+
+    /// Sommeil du vCPU jusqu'à `until`, écourté par l'arrivée d'une trame.
+    fn wait_until(&mut self, until: Instant) {
+        let now = Instant::now();
         if until > now {
             match &self.nic {
                 // Attente écourtée par l'arrivée d'une trame.
@@ -1041,7 +1116,6 @@ impl<B: Backend> Pc<B> {
                 None => std::thread::sleep(until - now),
             }
         }
-        Ok(())
     }
 
     /// Exécute jusqu'au prochain événement (fin du programme ou fin de pas).
@@ -1166,7 +1240,7 @@ impl<B: Backend> Pc<B> {
                 }
                 // Signal (battement, débordement du compteur) : le bridage
                 // est servi en tête de boucle.
-                Exit::Interrupted => {}
+                Exit::Interrupted => self.spin_check()?,
                 Exit::IrqWindow => {}
                 Exit::Step => return Ok(Event::Step),
                 Exit::Hlt => self.halt()?,

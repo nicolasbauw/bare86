@@ -33,6 +33,8 @@ pub fn install_handler() -> io::Result<()> {
 pub struct Heartbeat {
     id: libc::timer_t,
     period: Duration,
+    /// Minuterie ponctuelle, même signal (`probe_in`).
+    probe: libc::timer_t,
 }
 
 impl Heartbeat {
@@ -50,7 +52,11 @@ impl Heartbeat {
             if libc::timer_create(libc::CLOCK_MONOTONIC, &mut ev, &mut id) != 0 {
                 return Err(io::Error::last_os_error());
             }
-            let mut hb = Self { id, period: Duration::ZERO };
+            let mut probe: libc::timer_t = std::mem::zeroed();
+            if libc::timer_create(libc::CLOCK_MONOTONIC, &mut ev, &mut probe) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut hb = Self { id, period: Duration::ZERO, probe };
             hb.set_period(period)?;
             Ok(hb)
         }
@@ -71,9 +77,27 @@ impl Heartbeat {
     }
 }
 
+impl Heartbeat {
+    /// Un signal supplémentaire dans `d`, hors de la cadence périodique
+    /// (remplace le précédent s'il n'est pas encore parti).
+    pub fn probe_in(&self, d: Duration) -> io::Result<()> {
+        let zero = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        let ts = libc::timespec { tv_sec: d.as_secs() as _, tv_nsec: d.subsec_nanos().max(1) as _ };
+        let spec = libc::itimerspec { it_interval: zero, it_value: ts };
+        // SAFETY: minuterie créée par timer_create.
+        if unsafe { libc::timer_settime(self.probe, 0, &spec, std::ptr::null_mut()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
 impl Drop for Heartbeat {
     fn drop(&mut self) {
-        // SAFETY: minuterie possédée.
-        unsafe { libc::timer_delete(self.id) };
+        // SAFETY: minuteries possédées.
+        unsafe {
+            libc::timer_delete(self.id);
+            libc::timer_delete(self.probe);
+        }
     }
 }

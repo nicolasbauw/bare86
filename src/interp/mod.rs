@@ -263,7 +263,7 @@ pub(crate) fn step_once<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M) ->
         return None;
     }
     let (ins, addr32) = fetch(cpu, mem)?;
-    let mut ex = Exec { cpu, mem, mmio, mmio_hits: 0, rep_budget: 1, flags_push: None, addr32 };
+    let mut ex = Exec { cpu, mem, mmio, mmio_hits: 0, rep_budget: 1, flags_push: None, addr32, dry: None };
     ex.step(&ins).ok()?;
     Some(Stepped { ins, flags_push: ex.flags_push })
 }
@@ -288,7 +288,7 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         }
         let Some((ins, addr32)) = fetch(cpu, mem) else { break StopReason::Unsupported };
         let rep_budget = budget - instructions;
-        let mut ex = Exec { cpu: &mut *cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget, flags_push: None, addr32 };
+        let mut ex = Exec { cpu: &mut *cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget, flags_push: None, addr32, dry: None };
         let result = ex.step(&ins);
         let (hits, used) = (ex.mmio_hits, rep_budget - ex.rep_budget);
         mmio_accesses += hits;
@@ -302,6 +302,48 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         }
     };
     Burst { instructions, mmio_accesses, reason }
+}
+
+/// Attente active pure à partir de `start` ? L'interpréteur exécute à blanc
+/// (écritures dans une mémoire superposée, état de l'invité intact) au plus
+/// `max` instructions. Vrai si, après un premier tour qui peut écrire
+/// (pile, variables recopiées), un tour complet ramène exactement au même
+/// état : mêmes registres au point de départ, même mémoire superposée (un
+/// emplacement de pile peut changer au cours du tour, deux appels y laissant
+/// des adresses de retour différentes), ni port ni accès claimé par `mmio`.
+/// La boucle est alors un point fixe : sans interruption, l'invité ne
+/// progresse plus.
+pub fn probe_spin<M: Mmio>(start: &Cpu, mem: &GuestMem, mmio: &mut M, max: u64) -> bool {
+    if unsupported_mode(start) {
+        return false;
+    }
+    let same = |a: &Cpu, b: &Cpu| a.gpr == b.gpr && a.flags == b.flags && a.seg == b.seg;
+    let mut cpu = start.clone();
+    let mut overlay = exec::Overlay::default();
+    // État au début du tour en cours (après le premier passage au départ).
+    let mut lap: Option<(Cpu, std::collections::HashMap<u32, u8>)> = None;
+    let mut laps = 0;
+    for _ in 0..max {
+        let Some((ins, addr32)) = fetch(&cpu, mem) else { return false };
+        let mut ex = Exec { cpu: &mut cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget: 1, flags_push: None, addr32, dry: Some(&mut overlay) };
+        if ex.step(&ins).is_err() || ex.mmio_hits > 0 {
+            return false;
+        }
+        if cpu.ip == start.ip && cpu.seg[1] == start.seg[1] {
+            if let Some((c, bytes)) = &lap
+                && same(&cpu, c)
+                && overlay.bytes == *bytes
+            {
+                return true;
+            }
+            laps += 1;
+            if laps > 2 {
+                return false;
+            }
+            lap = Some((cpu.clone(), overlay.bytes.clone()));
+        }
+    }
+    false
 }
 
 /// Après une sortie MMIO déjà servie : termine l'instruction en cours sans
@@ -326,4 +368,75 @@ pub fn continue_in_host<B: Backend, M: Mmio>(
     let burst = run_burst(&mut cpu, vm.mem(), mmio, idle_limit, budget);
     vm.set_state(&cpu)?;
     Ok(burst)
+}
+
+#[cfg(test)]
+mod spin_tests {
+    use super::*;
+
+    struct NoMmio;
+    impl Mmio for NoMmio {
+        fn claims(&self, _: u32, _: bool) -> bool {
+            false
+        }
+        fn read8(&mut self, _: u32) -> u8 {
+            0xFF
+        }
+        fn write8(&mut self, _: u32, _: u8) {}
+    }
+
+    /// Code en 1000:0000, pile en 2000:0100, IF levé.
+    fn probe(code: &[u8], cx: u32) -> bool {
+        let mem = GuestMem::new(0x40000).unwrap();
+        mem.write(0x10000, code);
+        let mut seg = [Seg::real(0); 6];
+        seg[1] = Seg::real(0x1000);
+        seg[1].typ = 0xB;
+        seg[2] = Seg::real(0x2000);
+        let mut gpr = [0u32; 8];
+        gpr[1] = cx;
+        gpr[4] = 0x100;
+        let cpu = Cpu {
+            gpr,
+            ip: 0,
+            flags: 0x202,
+            seg,
+            stack32: false,
+            idt_base: 0,
+            cr0: 0,
+            cr3: 0,
+            cr4: 0,
+            tr_base: 0,
+            tr_limit: 0,
+            seg_dirty: false,
+        };
+        let before = mem.read_u32(0x20000 + 0xFC);
+        let spin = probe_spin(&cpu, &mem, &mut NoMmio, 1024);
+        // À blanc : la pile de l'invité n'a pas été écrite.
+        assert_eq!(mem.read_u32(0x20000 + 0xFC), before);
+        spin
+    }
+
+    #[test]
+    fn memory_wait_is_a_spin() {
+        // l: mov ax,[0500h] ; cmp ax,1 ; jne l
+        assert!(probe(&[0xA1, 0x00, 0x05, 0x3D, 0x01, 0x00, 0x75, 0xF8], 0));
+    }
+
+    #[test]
+    fn calls_from_two_sites_reach_a_fixed_point() {
+        // 0: call 9 ; 3: call 9 ; 6: jmp 0 ; 8: nop ; 9: ret
+        // (le même mot de pile reçoit 0003h puis 0006h à chaque tour)
+        assert!(probe(&[0xE8, 0x06, 0x00, 0xE8, 0x03, 0x00, 0xEB, 0xF8, 0x90, 0xC3], 0));
+    }
+
+    #[test]
+    fn progress_is_not_a_spin() {
+        // l: inc word [0500h] ; jmp l
+        assert!(!probe(&[0xFF, 0x06, 0x00, 0x05, 0xEB, 0xFA], 0));
+        // l: dec cx ; jnz l (boucle de temporisation)
+        assert!(!probe(&[0x49, 0x75, 0xFD], 0x100));
+        // l: in al,dx ; test al,8 ; jz l (scrutation d'un port)
+        assert!(!probe(&[0xEC, 0xA8, 0x08, 0x74, 0xFB], 0));
+    }
 }

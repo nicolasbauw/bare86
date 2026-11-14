@@ -167,6 +167,16 @@ pub(super) struct Exec<'a, B: Mmio> {
     pub flags_push: Option<u32>,
     /// Préfixe 67h : adressage 32 bits.
     pub addr32: bool,
+    /// Exécution à blanc (`probe_spin`) : les écritures vont dans cette
+    /// mémoire superposée, pas dans celle de l'invité.
+    pub dry: Option<&'a mut Overlay>,
+}
+
+/// Mémoire superposée d'une exécution à blanc : octets dont la valeur
+/// écrite diffère de la mémoire de l'invité.
+#[derive(Default)]
+pub struct Overlay {
+    pub bytes: std::collections::HashMap<u32, u8>,
 }
 
 /// Traduction linéaire → physique par la table de pages de l'invité (pages
@@ -219,6 +229,8 @@ impl<B: Mmio> Exec<'_, B> {
         if self.mmio.claims(addr, false) {
             self.mmio_hits += 1;
             self.mmio.read8(addr)
+        } else if let Some(&v) = self.dry.as_ref().and_then(|o| o.bytes.get(&addr)) {
+            v
         } else if (addr as usize) < self.mem.size() {
             self.mem.read_u8(addr as usize)
         } else {
@@ -232,7 +244,14 @@ impl<B: Mmio> Exec<'_, B> {
             self.mmio_hits += 1;
             self.mmio.write8(addr, v);
         } else if (addr as usize) < self.mem.size() {
-            self.mem.write(addr as usize, &[v]);
+            if let Some(o) = self.dry.as_deref_mut() {
+                let cur = o.bytes.get(&addr).copied().unwrap_or_else(|| self.mem.read_u8(addr as usize));
+                if cur != v {
+                    o.bytes.insert(addr, v);
+                }
+            } else {
+                self.mem.write(addr as usize, &[v]);
+            }
         }
     }
 
