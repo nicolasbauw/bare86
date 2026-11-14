@@ -61,7 +61,8 @@ usage: bare86 [options] [program [arguments…]]
   --fda IMG      floppy image for drive A: (also --fdb for B:); repeat
                  --fda for a set of floppies, swapped with Ctrl+F4
   --hda IMG      hard disk image for drive C:
-  --cdrom IMG    CD-ROM image (ISO 9660): drive D: with MSCDEX under the
+  --cdrom IMG    CD-ROM image (.iso, or .cue with BIN files and audio
+                 tracks, mixed with the sound card): drive D: with MSCDEX under the
                  built-in DOS; with --boot, an ATAPI drive (secondary IDE
                  master, 170h, IRQ 15) for the DOS's own CD drivers
   --boot         boot from the disk images (A: if present, else C:)
@@ -323,8 +324,8 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
             pc.boot_disk(drive)?;
         }
         // DOS intégré : l'image du CD est aussi montée en D: (MSCDEX).
-        _ if let Some(cd) = &o.cfg.cdrom
-            && let Err(e) = pc.mount_cd(3, cd) =>
+        _ if o.cfg.cdrom.is_some()
+            && let Err(e) = pc.mount_cd(3) =>
         {
             return Err(e.to_string());
         }

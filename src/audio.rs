@@ -84,7 +84,8 @@ impl Mixer {
 
     /// Produit les trames dues à `now`.
     #[allow(clippy::too_many_arguments)]
-    pub fn advance(&mut self, now: Instant, sb: &mut Sb16, opl: &mut Opl, dma: &mut Dma, mem: &GuestMem, speaker: Option<f64>) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance(&mut self, now: Instant, sb: &mut Sb16, opl: &mut Opl, dma: &mut Dma, mem: &GuestMem, speaker: Option<f64>, cd: Option<&mut crate::cdrom::Player>) {
         if now < self.next_due {
             return;
         }
@@ -96,8 +97,13 @@ impl Mixer {
             return;
         }
         let max = MAX_LAG.as_millis() as u64 * u64::from(RATE) / 1000;
+        let mut cd = cd;
         if lag > max {
             self.flush(sb, opl);
+            // Le disque, lui, continue de tourner pendant le temps sauté.
+            if let Some(cd) = cd.as_deref_mut() {
+                cd.skip(lag - max / 4, RATE);
+            }
             self.produced = target - max / 4;
         }
         if self.buf.is_empty() {
@@ -110,6 +116,9 @@ impl Mixer {
         self.buf.resize(at + n * 2, 0.0);
         let out = &mut self.buf[at..];
         sb.render(dma, mem, RATE, out);
+        if let Some(cd) = cd {
+            cd.render(RATE, out);
+        }
         // Haut-parleur : onde carrée ; au-delà de 20 kHz (modulation de
         // largeur d'impulsion), silence.
         if let Some(f) = speaker.filter(|f| *f < 20_000.0) {

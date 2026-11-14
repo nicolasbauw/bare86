@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Extensions CD-ROM de Microsoft (MSCDEX 2.23) en HLE, pour le DOS
 //! intégré : INT 2Fh AH=15h, et requêtes au pilote de périphérique
-//! (AX=1510h). Le disque est l'image ISO montée par `vfs` ; les fichiers
-//! passent par les fonctions ordinaires du DOS.
+//! (AX=1510h), dont la lecture des pistes audio (partagée avec le lecteur
+//! ATAPI). Le disque est l'image montée par `vfs` ; les fichiers passent
+//! par les fonctions ordinaires du DOS.
 //!
 //! L'en-tête de pilote (« MSCD001 ») rendu par 1501h n'a pas de code
 //! derrière ses points d'entrée (RETF) : les programmes qui appellent le
 //! pilote directement au lieu de passer par 1510h ne sont pas servis.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::cdrom::SECTOR;
+use crate::cdrom::{AudioState, SECTOR};
 use crate::hle::{AX, BX, CF, CX, DI, DX, ES, Flow, Regs, SI, lin, set_ret_flag};
 use crate::interp::Cpu;
 use crate::iso9660::IsoFs;
@@ -26,6 +26,7 @@ const ERR_INVALID_DRIVE: u16 = 0x0F;
 
 /// État des requêtes au pilote : fait, erreur (+ code), occupé.
 const DONE: u16 = 0x0100;
+const BUSY: u16 = 0x0200;
 const ERROR: u16 = 0x8000;
 const ERR_UNKNOWN_UNIT: u16 = 0x01;
 const ERR_UNKNOWN_COMMAND: u16 = 0x03;
@@ -35,9 +36,10 @@ const ERR_GENERAL: u16 = 0x0C;
 pub struct Mscdex {
     /// Lettre du lecteur (0 = A:).
     pub drive: u8,
-    pub root: PathBuf,
     /// Le disque a changé depuis la dernière question (IOCTL 9).
     changed: bool,
+    player: crate::cdrom::SharedPlayer,
+    iso: Arc<IsoFs>,
 }
 
 /// Adresse « Red Book » (trame, seconde, minute, 0) d'un secteur.
@@ -57,12 +59,16 @@ fn to_lba(mode: u8, addr: u32) -> u32 {
 }
 
 impl Mscdex {
-    pub fn new(drive: u8, root: PathBuf) -> Self {
-        Self { drive, root, changed: false }
+    pub fn new(drive: u8, iso: Arc<IsoFs>, player: crate::cdrom::SharedPlayer) -> Self {
+        Self { drive, changed: false, player, iso }
+    }
+
+    pub fn volume_label(&self) -> String {
+        self.iso.volume_label()
     }
 
     fn iso(&self) -> Option<Arc<IsoFs>> {
-        super::vfs::iso_at(&self.root)
+        Some(self.iso.clone())
     }
 
     /// En-tête du pilote : caractère, IOCTL ; nom « MSCD001 », une unité.
@@ -198,12 +204,26 @@ impl Mscdex {
                     self.read_sectors(mem, lba, count, far(req + 14))
                 }
             }
-            // Lecture audio : pas de piste audio (palier suivant).
-            132 => Err(ERR_GENERAL),
-            133 | 136 => Ok(()),
+            // PLAY AUDIO : mode d'adressage, début, nombre de secteurs.
+            132 => {
+                let start = to_lba(mem.read_u8(req + 13), mem.read_u32(req + 14));
+                let count = mem.read_u32(req + 18);
+                self.player.borrow_mut().play(start, start.saturating_add(count)).map_err(|_| ERR_GENERAL)
+            }
+            // STOP AUDIO : pause d'une lecture en cours, sinon arrêt.
+            133 => {
+                let mut p = self.player.borrow_mut();
+                if p.state == AudioState::Playing { p.pause() } else { p.stop() }
+                Ok(())
+            }
+            136 => {
+                self.player.borrow_mut().resume();
+                Ok(())
+            }
             _ => Err(ERR_UNKNOWN_COMMAND),
         };
-        mem.write_u16(req + 3, match status {
+        let busy = if self.player.borrow().state == AudioState::Playing { BUSY } else { 0 };
+        mem.write_u16(req + 3, busy | match status {
             Ok(()) => DONE,
             Err(code) => DONE | ERROR | code,
         });
@@ -243,13 +263,25 @@ impl Mscdex {
                 mem.write_u32(cb + 2, red_book(t.start));
                 mem.write_u8(cb + 6, if t.audio { 0x00 } else { 0x40 });
             }
-            // Sous-canal Q : position courante (aucune lecture audio).
-            12 => mem.write(cb + 1, &[0x41, 1, 1, 0, 0, 0, 0, 0, 2, 0]),
-            // État audio : ni pause, ni lecture.
+            // Sous-canal Q : contrôle et ADR, piste (BCD), index, temps dans
+            // la piste (min, s, trame), 0, temps sur le disque.
+            12 => {
+                let iso = iso.ok_or(ERR_GENERAL)?;
+                let pos = self.player.borrow().position();
+                let t = iso.disc.track_of(pos).ok_or(ERR_GENERAL)?;
+                let rel = pos.saturating_sub(t.start);
+                let (rm, rs, rf) = ((rel / 75 / 60) as u8, (rel / 75 % 60) as u8, (rel % 75) as u8);
+                let [af, asec, am, _] = red_book(pos).to_le_bytes();
+                let control = if t.audio { 0x01 } else { 0x41 };
+                let bcd = |v: u8| (v / 10) << 4 | (v % 10);
+                mem.write(cb + 1, &[control, bcd(t.number), 1, rm, rs, rf, 0, am, asec, af]);
+            }
+            // État audio : bit 0 = en pause ; début et fin de la dernière lecture.
             15 => {
-                mem.write_u16(cb + 1, 0);
-                mem.write_u32(cb + 3, 0);
-                mem.write_u32(cb + 7, 0);
+                let p = self.player.borrow();
+                mem.write_u16(cb + 1, u16::from(p.state == AudioState::Paused));
+                mem.write_u32(cb + 3, red_book(p.start));
+                mem.write_u32(cb + 7, red_book(p.end));
             }
             _ => return Err(ERR_UNKNOWN_COMMAND),
         }

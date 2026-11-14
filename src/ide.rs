@@ -403,7 +403,7 @@ mod tests {
         let path = crate::cdrom::tests::iso(40);
         let disc = Disc::open(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        Ide::new(Drive::new(Some(disc)))
+        Ide::new(crate::cdrom::tests::drive(Some(disc)))
     }
 
     fn send_packet(ide: &mut Ide, limit: u16, pkt: &[u8]) {

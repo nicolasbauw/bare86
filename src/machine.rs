@@ -310,6 +310,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Tailles de la mémoire (octets) et de l'EMS (Ko), pour un redémarrage.
     mem_size: usize,
     ems_kb: usize,
+    /// Disque compact et lecture de ses pistes audio.
+    cd: Option<(crate::cdrom::SharedDisc, crate::cdrom::SharedPlayer)>,
     /// Canal IDE secondaire et son lecteur de CD.
     ide: Option<Rc<RefCell<crate::ide::Ide>>>,
     /// Carte réseau et lien avec le thread réseau.
@@ -347,10 +349,17 @@ impl<B: Backend> Pc<B> {
         io.trace = cfg.trace_io;
         // Port de diagnostic POST, utilisé aussi comme temporisation.
         io.map(0x80..=0x80, Box::new(crate::io::Sink));
-        let ide = match &cfg.cdrom {
+        let cd = match &cfg.cdrom {
             Some(path) => {
-                let disc = crate::cdrom::Disc::open(path)?;
-                let ide = crate::ide::Ide::new(crate::cdrom::Drive::new(Some(disc))).shared();
+                let disc = std::sync::Arc::new(crate::cdrom::Disc::open(path)?);
+                let player = crate::cdrom::Player::new(Some(disc.clone())).shared();
+                Some((disc, player))
+            }
+            None => None,
+        };
+        let ide = match &cd {
+            Some((disc, player)) => {
+                let ide = crate::ide::Ide::new(crate::cdrom::Drive::new(Some(disc.clone()), player.clone())).shared();
                 io.map(crate::ide::BASE..=crate::ide::BASE + 7, Box::new(crate::ide::IdePorts(ide.clone())));
                 io.map(crate::ide::CONTROL..=crate::ide::CONTROL, Box::new(crate::ide::IdePorts(ide.clone())));
                 Some(ide)
@@ -407,6 +416,7 @@ impl<B: Backend> Pc<B> {
             None => None,
         };
         let mut pc = Self {
+            cd,
             ide,
             nic,
             vm,
@@ -467,8 +477,9 @@ impl<B: Backend> Pc<B> {
     }
 
     /// Monte une image ISO comme lecteur de CD du DOS intégré (MSCDEX).
-    pub fn mount_cd(&mut self, drive: u8, image: &std::path::Path) -> Result<()> {
-        self.dos.mount_cd(self.vm.mem(), drive, image).map_err(Into::into)
+    pub fn mount_cd(&mut self, drive: u8) -> Result<()> {
+        let (disc, player) = self.cd.clone().ok_or("pas d'image de CD (--cdrom)")?;
+        self.dos.mount_cd(self.vm.mem(), drive, disc, player).map_err(Into::into)
     }
 
     /// Charge un programme en mémoire sous le nom DOS `path` (sans disque).
@@ -655,7 +666,9 @@ impl<B: Backend> Pc<B> {
             self.irq_steps = Some(SHORT_TRANSFER_STEPS);
             self.vm.set_single_step(true)?;
         }
-        self.mixer.advance(now, &mut sb, &mut self.opl.borrow_mut(), &mut self.dma.borrow_mut(), self.vm.mem(), speaker);
+        let mut cd = self.cd.as_ref().map(|(_, p)| p.borrow_mut());
+        self.mixer.advance(now, &mut sb, &mut self.opl.borrow_mut(), &mut self.dma.borrow_mut(), self.vm.mem(), speaker, cd.as_deref_mut());
+        drop(cd);
         if sb.take_irq() {
             self.pic.borrow_mut().raise(crate::sb16::IRQ);
         }

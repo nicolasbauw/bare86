@@ -5,7 +5,9 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::cdrom::{Disc, SECTOR};
+use crate::cdrom::{SECTOR, SharedDisc};
+#[cfg(test)]
+use crate::cdrom::Disc;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -19,7 +21,7 @@ pub struct Entry {
 }
 
 pub struct IsoFs {
-    pub disc: Disc,
+    pub disc: SharedDisc,
     root: Entry,
     /// Descripteur de volume primaire (secteur 16).
     pvd: Vec<u8>,
@@ -70,7 +72,7 @@ fn parse_record(r: &[u8]) -> Option<Entry> {
 }
 
 impl IsoFs {
-    pub fn new(disc: Disc) -> Result<Self, String> {
+    pub fn new(disc: SharedDisc) -> Result<Self, String> {
         let mut pvd = vec![0u8; SECTOR];
         // Descripteurs à partir du secteur 16 : le primaire est de type 1.
         let mut found = false;
@@ -228,7 +230,7 @@ pub(crate) mod tests {
     fn xorriso_image() {
         let big: Vec<u8> = (0..5000u32).map(|i| (i * 7) as u8).collect();
         let Some((iso, dir)) = xorriso_iso("ESSAI", &[("gros.bin", &big), ("sous/lisez.txt", b"profond"), ("README", b"x")]) else { return };
-        let fs = IsoFs::new(Disc::open(&iso).unwrap()).unwrap();
+        let fs = IsoFs::new(std::sync::Arc::new(Disc::open(&iso).unwrap())).unwrap();
         assert_eq!(fs.volume_label(), "ESSAI");
         let mut names: Vec<String> = fs.read_dir(fs.root()).into_iter().map(|e| e.name).collect();
         names.sort();

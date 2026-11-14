@@ -155,11 +155,11 @@ impl Dos {
 
     /// Monte une image ISO comme lecteur de CD (lecture seule), servie par
     /// les extensions MSCDEX.
-    pub fn mount_cd(&mut self, mem: &GuestMem, drive: u8, image: &std::path::Path) -> std::result::Result<(), String> {
-        let iso = crate::iso9660::IsoFs::new(crate::cdrom::Disc::open(image)?)?;
-        let root = vfs::mount_iso(drive, iso);
-        self.drives.mount(drive, root.clone());
-        let cd = mscdex::Mscdex::new(drive, root);
+    pub fn mount_cd(&mut self, mem: &GuestMem, drive: u8, disc: crate::cdrom::SharedDisc, player: crate::cdrom::SharedPlayer) -> std::result::Result<(), String> {
+        let iso = std::sync::Arc::new(crate::iso9660::IsoFs::new(disc)?);
+        let root = vfs::mount_iso(drive, iso.clone());
+        self.drives.mount(drive, root);
+        let cd = mscdex::Mscdex::new(drive, iso, player);
         cd.install(mem);
         self.cd = Some(cd);
         Ok(())
@@ -168,7 +168,7 @@ impl Dos {
     /// Étiquette de volume d'un lecteur (celle du CD).
     fn volume_label(&self, drive: u8) -> Option<String> {
         let cd = self.cd.as_ref().filter(|cd| cd.drive == drive)?;
-        let label = vfs::iso_at(&cd.root)?.volume_label();
+        let label = cd.volume_label();
         (!label.is_empty()).then_some(label)
     }
 

@@ -168,12 +168,41 @@ fn bios_info() {
 fn mscdex_on_iso() {
     let Some((iso, dir)) = crate::iso9660::tests::xorriso_iso("ESSAI", &[("lisez.txt", b"Bonjour du CD")]) else { return };
     let out = Capture::default();
-    let mut pc = Pc::new(&Config::default(), Host::headless(Box::new(out.clone()))).expect("machine");
-    pc.mount_cd(3, &iso).expect("montage du CD");
+    let cfg = Config { cdrom: Some(iso.clone()), ..Config::default() };
+    let mut pc = Pc::new(&cfg, Host::headless(Box::new(out.clone()))).expect("machine");
+    pc.mount_cd(3).expect("montage du CD");
     pc.load_com(program!("mscdex")).expect("chargement");
     let code = pc.run().expect("exécution");
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/mscdex.S)");
+}
+
+/// Pistes audio par MSCDEX : l'ISO de xorriso en piste de données
+/// MODE1/2352, puis 400 secteurs audio.
+#[test]
+fn mscdex_audio_tracks() {
+    let Some((iso, dir)) = crate::iso9660::tests::xorriso_iso("AUDIO", &[("lisez.txt", b"x")]) else { return };
+    let data: Vec<u8> = std::fs::read(&iso)
+        .unwrap()
+        .chunks(2048)
+        .flat_map(|s| {
+            let mut raw = vec![0u8; 2352];
+            raw[16..16 + s.len()].copy_from_slice(s);
+            raw
+        })
+        .collect();
+    std::fs::write(dir.join("data.bin"), data).unwrap();
+    std::fs::write(dir.join("audio.bin"), vec![0x40u8; 400 * 2352]).unwrap();
+    let cue = "FILE \"data.bin\" BINARY\n TRACK 01 MODE1/2352\n  INDEX 01 00:00:00\nFILE \"audio.bin\" BINARY\n TRACK 02 AUDIO\n  INDEX 01 00:00:00\n";
+    std::fs::write(dir.join("disc.cue"), cue).unwrap();
+    let cfg = Config { cdrom: Some(dir.join("disc.cue")), ..Config::default() };
+    let out = Capture::default();
+    let mut pc = Pc::new(&cfg, Host::headless(Box::new(out.clone()))).expect("machine");
+    pc.mount_cd(3).expect("montage du CD");
+    pc.load_com(program!("cdaudio")).expect("chargement");
+    let code = pc.run().expect("exécution");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/cdaudio.S)");
 }
 
 #[test]

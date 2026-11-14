@@ -15,18 +15,14 @@ use crate::iso9660::{Entry, IsoFs};
 
 static ISOS: Mutex<Vec<(PathBuf, Arc<IsoFs>)>> = Mutex::new(Vec::new());
 
-/// Racine virtuelle de l'image montée sur `drive` (0 = A:).
-pub fn mount_iso(drive: u8, iso: IsoFs) -> PathBuf {
-    let root = PathBuf::from(format!("\0cd:{}", char::from(b'A' + drive)));
-    let mut isos = ISOS.lock().unwrap_or_else(|e| e.into_inner());
-    isos.retain(|(r, _)| *r != root);
-    isos.push((root.clone(), Arc::new(iso)));
+/// Racine virtuelle de l'image montée sur `drive` (0 = A:), unique : deux
+/// machines du même processus (tests) ne se partagent pas leurs images.
+pub fn mount_iso(drive: u8, iso: Arc<IsoFs>) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = PathBuf::from(format!("\0cd:{}:{n}", char::from(b'A' + drive)));
+    ISOS.lock().unwrap_or_else(|e| e.into_inner()).push((root.clone(), iso));
     root
-}
-
-/// Image d'une racine virtuelle.
-pub fn iso_at(root: &Path) -> Option<Arc<IsoFs>> {
-    ISOS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(r, _)| r == root).map(|(_, i)| i.clone())
 }
 
 /// Image et composants d'un chemin sous une racine virtuelle.
