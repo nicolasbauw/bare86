@@ -98,6 +98,10 @@ const SPIN_SLEEP_MAX: Duration = Duration::from_millis(1);
 const SPIN_REPROBE: Duration = Duration::from_micros(100);
 const SPIN_RETRIES: u32 = 6;
 
+/// Écart maximal entre deux tours complets du haut de la boucle quand les
+/// sorties passent par le chemin court (`Pc::resume`).
+const FAST_PATH_MAX: Duration = Duration::from_micros(500);
+
 
 /// Réveil avant le blanc vertical (`Pc::vga_poll`) : une dizaine de lignes.
 const VBLANK_MARGIN: Duration = Duration::from_micros(300);
@@ -304,8 +308,26 @@ pub struct Stats {
     pub vga_yields: u64,
     /// Sommeils pendant une attente active sans sortie (`Pc::spin_check`).
     pub spin_sleeps: u64,
+    /// Sorties servies par le chemin court (registres de plans).
+    pub fast_exits: u64,
     /// Sorties d'E/S par port (lectures et écritures).
-    pub io_ports: std::collections::HashMap<u16, u64>,
+    pub io_ports: PortCounts,
+}
+
+/// Compteur par port, indexé directement : incrémenté à chaque sortie d'E/S
+/// (une table de hachage y coûtait un SipHash, ≈ 0,6 % du temps de Doom).
+pub struct PortCounts(Box<[u64]>);
+
+impl Default for PortCounts {
+    fn default() -> Self {
+        Self(vec![0; 0x10000].into_boxed_slice())
+    }
+}
+
+impl PortCounts {
+    pub fn add(&mut self, port: u16) {
+        self.0[usize::from(port)] += 1;
+    }
 }
 
 impl std::fmt::Debug for Stats {
@@ -325,6 +347,7 @@ impl std::fmt::Debug for Stats {
             .field("pit_yields", &self.pit_yields)
             .field("vga_yields", &self.vga_yields)
             .field("spin_sleeps", &self.spin_sleeps)
+            .field("fast_exits", &self.fast_exits)
             .field("io_ports", &ports)
             .finish()
     }
@@ -333,7 +356,7 @@ impl std::fmt::Debug for Stats {
 impl Stats {
     /// Les `n` ports les plus sollicités, du plus au moins fréquent.
     pub fn top_ports(&self, n: usize) -> Vec<(u16, u64)> {
-        let mut v: Vec<_> = self.io_ports.iter().map(|(p, c)| (*p, *c)).collect();
+        let mut v: Vec<_> = (0..=u16::MAX).map(|p| (p, self.io_ports.0[usize::from(p)])).filter(|&(_, c)| c > 0).collect();
         v.sort_by(|a, b| b.1.cmp(&a.1));
         v.truncate(n);
         v
@@ -407,6 +430,10 @@ pub struct Pc<B: Backend = KvmVm> {
     vga_polls: Option<(Instant, Instant)>,
     /// Sondes d'attente active encore permises après un échec (`spin_check`).
     spin_retries: u32,
+    /// La sortie précédente permet le chemin court (`resume`), et dernier
+    /// tour complet du haut de la boucle.
+    fast_next: bool,
+    last_full: Instant,
     /// Souris PS/2 de l'interface du BIOS (vrai DOS).
     ps2: crate::mouse::Ps2,
     /// DOS fourni par l'hôte ; faux après un démarrage sur image disque.
@@ -600,6 +627,8 @@ impl<B: Backend> Pc<B> {
             pit_polls: None,
             vga_polls: None,
             spin_retries: 0,
+            fast_next: false,
+            last_full: Instant::now(),
             ps2: Default::default(),
             dos_hle: true,
             boot_drive: 0,
@@ -1121,35 +1150,21 @@ impl<B: Backend> Pc<B> {
     /// Exécute jusqu'au prochain événement (fin du programme ou fin de pas).
     pub fn resume(&mut self) -> Result<Event> {
         loop {
-            if self.limit.is_some_and(|l| self.started.elapsed() >= l) {
-                let cpu = self.vm.state()?;
-                let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);
-                let screen = bios::screen_text(self.vm.mem()).join("\n");
-                return Err(format!(
-                    "limite de temps atteinte\n{}\n{}\n{:?}\nécran :\n{}",
-                    crate::debug::format_regs(&cpu),
-                    code.join("\n"),
-                    self.stats,
-                    screen.trim_end()
-                )
-                .into());
+            // Chemin court après une écriture sur un registre de plans (Doom
+            // en fait une par colonne de mur, 8 millions par timedemo) : la
+            // fenêtre et les IRQ seulement. Le reste (minuteries, son,
+            // entrées, affichage) passe au plus tard `FAST_PATH_MAX` après le
+            // dernier tour complet ; le battement interrompt de toute façon
+            // l'invité à l'échéance de l'IRQ 0.
+            let now = Instant::now();
+            if std::mem::take(&mut self.fast_next) && now - self.last_full < FAST_PATH_MAX {
+                self.update_window()?;
+                self.deliver_irq()?;
+                self.stats.fast_exits += 1;
+            } else {
+                self.last_full = now;
+                self.loop_top()?;
             }
-            self.service_timers()?;
-            self.update_window()?;
-            self.service_input();
-            self.render_term(false);
-            if self.host.wants_frames {
-                self.present_frame();
-            }
-            if self.input_finished() {
-                return Err("fin de l'entrée : session arrêtée".into());
-            }
-            if let Some(t) = &mut self.throttle
-                && t.take_overflow()
-            {
-                t.pace()?;
-            }
-            self.deliver_irq()?;
             self.stats.exits += 1;
             let mut host_call = false;
             let mut mmio = false;
@@ -1166,7 +1181,7 @@ impl<B: Backend> Pc<B> {
                     self.bios.scancode(self.vm.mem(), code);
                 }
                 Exit::IoOut { port, size, data } => {
-                    *self.stats.io_ports.entry(port).or_default() += 1;
+                    self.stats.io_ports.add(port);
                     // Sauf l'acquittement des interruptions (PIC).
                     if !matches!(port, 0x20 | 0x21 | 0xA0 | 0xA1) {
                         self.vga_polls = None;
@@ -1186,6 +1201,9 @@ impl<B: Backend> Pc<B> {
                     if matches!(port, 0x3D4 | 0x3D5) {
                         self.stats.page_flips = self.vga.borrow().start_writes;
                     }
+                    // Registre de plans : la sortie suivante peut prendre le
+                    // chemin court (sauf rafale, lancée plus bas).
+                    self.fast_next = vga_plane_port(port);
                     // Doom copie sa barre d'état plan par plan : « plan lu =
                     // p » puis aussitôt « plan écrit = p », sans accès entre
                     // les deux. Traversé ici, l'état intermédiaire n'impose
@@ -1200,7 +1218,7 @@ impl<B: Backend> Pc<B> {
                     }
                 }
                 Exit::IoIn { port, size, data } => {
-                    *self.stats.io_ports.entry(port).or_default() += 1;
+                    self.stats.io_ports.add(port);
                     if matches!(port, 0x40..=0x42) && Self::pit_poll(&mut self.pit_polls) {
                         self.stats.pit_yields += 1;
                     }
@@ -1272,6 +1290,41 @@ impl<B: Backend> Pc<B> {
                 return Ok(Event::Exit(code));
             }
         }
+    }
+
+    /// Tour complet du haut de la boucle : limite de temps, minuteries,
+    /// fenêtre, entrées, affichage, bridage, IRQ.
+    fn loop_top(&mut self) -> Result<()> {
+        if self.limit.is_some_and(|l| self.started.elapsed() >= l) {
+            let cpu = self.vm.state()?;
+            let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);
+            let screen = bios::screen_text(self.vm.mem()).join("\n");
+            return Err(format!(
+                "limite de temps atteinte\n{}\n{}\n{:?}\nécran :\n{}",
+                crate::debug::format_regs(&cpu),
+                code.join("\n"),
+                self.stats,
+                screen.trim_end()
+            )
+            .into());
+        }
+        self.service_timers()?;
+        self.update_window()?;
+        self.service_input();
+        self.render_term(false);
+        if self.host.wants_frames {
+            self.present_frame();
+        }
+        if self.input_finished() {
+            return Err("fin de l'entrée : session arrêtée".into());
+        }
+        if let Some(t) = &mut self.throttle
+            && t.take_overflow()
+        {
+            t.pace()?;
+        }
+        self.deliver_irq()?;
+        Ok(())
     }
 
     /// Sortie sur le port d'appel hôte. Vrai appel seulement depuis un stub
