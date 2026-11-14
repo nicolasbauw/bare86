@@ -269,6 +269,162 @@ impl Drives {
         self.cwd[usize::from(drive)] = comps.join(&b'\\');
         Ok(())
     }
+
+    // ---- Noms longs (INT 21h AX=71xxh) ----
+
+    /// Lecteur et composants bruts d'un chemin à noms longs (répertoire
+    /// courant, « . » et « .. » appliqués) : noms courts ou longs, tels quels.
+    fn split_long(&self, path: &[u8]) -> Result<(u8, Vec<Vec<u8>>), u16> {
+        let (drive, rest) = if path.len() >= 2 && path[1] == b':' {
+            let d = path[0].to_ascii_uppercase();
+            if !d.is_ascii_uppercase() {
+                return Err(ERR_INVALID_DRIVE);
+            }
+            (d - b'A', &path[2..])
+        } else {
+            (self.current, path)
+        };
+        if !self.is_mounted(drive) {
+            return Err(ERR_INVALID_DRIVE);
+        }
+        let mut comps: Vec<Vec<u8>> = Vec::new();
+        if !matches!(rest.first(), Some(b'\\' | b'/')) {
+            comps.extend(self.cwd[usize::from(drive)].split(|&c| c == b'\\').filter(|c| !c.is_empty()).map(<[u8]>::to_vec));
+        }
+        for c in rest.split(|&c| c == b'\\' || c == b'/') {
+            // Comme Windows : points et blancs de fin ignorés.
+            let c = trim_long(c);
+            match c {
+                b"" | b"." => {}
+                b".." => {
+                    if comps.pop().is_none() {
+                        return Err(ERR_PATH_NOT_FOUND);
+                    }
+                }
+                _ if c.iter().any(|&b| b < b' ' || b"\"<>|:".contains(&b)) => return Err(ERR_PATH_NOT_FOUND),
+                _ => comps.push(c.to_vec()),
+            }
+        }
+        Ok((drive, comps))
+    }
+
+    /// Entrée de `dir` désignée par un composant court ou long.
+    fn find_long(dir: &Path, comp: &[u8]) -> Option<DirEntry> {
+        list(dir).into_iter().find(|e| e.short.eq_ignore_ascii_case(comp) || long_name(e).eq_ignore_ascii_case(comp))
+    }
+
+    /// Répertoire hôte et noms courts des composants (qui doivent exister).
+    fn walk_long(&self, drive: u8, comps: &[Vec<u8>]) -> Result<(PathBuf, Vec<Vec<u8>>), u16> {
+        let mut dir = self.roots[usize::from(drive)].clone().ok_or(ERR_INVALID_DRIVE)?;
+        let mut shorts = Vec::new();
+        for c in comps {
+            let e = Self::find_long(&dir, c).filter(|e| e.meta.is_dir()).ok_or(ERR_PATH_NOT_FOUND)?;
+            shorts.push(e.short);
+            dir = e.host;
+        }
+        Ok((dir, shorts))
+    }
+
+    /// Comme `resolve`, composants courts ou longs ; un fichier absent garde
+    /// son nom long sur l'hôte (création).
+    pub fn resolve_long(&self, path: &[u8]) -> Result<Target, u16> {
+        let (drive, comps) = self.split_long(path)?;
+        let Some((last, parents)) = comps.split_last() else {
+            let host = self.host_dir(drive, &[])?;
+            return Ok(Target::Path { host, exists: true, dos: canonical(drive, &[]) });
+        };
+        if let Some(d) = device(&last.to_ascii_uppercase()) {
+            return Ok(Target::Device(d));
+        }
+        if last.contains(&b'?') || last.contains(&b'*') {
+            return Err(ERR_PATH_NOT_FOUND);
+        }
+        let (dir, mut shorts) = self.walk_long(drive, parents)?;
+        Ok(match Self::find_long(&dir, last) {
+            Some(e) => {
+                shorts.push(e.short);
+                Target::Path { host: e.host, exists: true, dos: canonical(drive, &shorts) }
+            }
+            None => {
+                shorts.push(last.to_ascii_uppercase());
+                Target::Path { host: dir.join(String::from_utf8_lossy(last).as_ref()), exists: false, dos: canonical(drive, &shorts) }
+            }
+        })
+    }
+
+    /// Recherche à noms longs : répertoire et motif (dernier composant, `*`
+    /// s'il n'y en a pas).
+    pub fn search_long(&self, path: &[u8]) -> Result<LongSearch, u16> {
+        let (drive, comps) = self.split_long(path)?;
+        let (pattern, parents) = match comps.split_last() {
+            Some((last, parents)) => (last.clone(), parents),
+            None => (b"*".to_vec(), &comps[..]),
+        };
+        let (dir, parents) = self.walk_long(drive, parents)?;
+        Ok(LongSearch { dir, parents, pattern })
+    }
+
+    /// Chemin long (« C:\Program Files\Jeu ») d'un chemin DOS existant.
+    pub fn long_path(&self, path: &[u8]) -> Result<Vec<u8>, u16> {
+        let (drive, comps) = self.split_long(path)?;
+        let mut dir = self.roots[usize::from(drive)].clone().ok_or(ERR_INVALID_DRIVE)?;
+        let mut longs = Vec::new();
+        for c in &comps {
+            let e = Self::find_long(&dir, c).ok_or(ERR_PATH_NOT_FOUND)?;
+            longs.push(long_name(&e));
+            dir = e.host;
+        }
+        Ok(canonical(drive, &longs))
+    }
+}
+
+/// Répertoire d'une recherche à noms longs : chemin hôte, noms courts de ses
+/// composants (vide à la racine), motif.
+#[derive(Debug, PartialEq)]
+pub struct LongSearch {
+    pub dir: PathBuf,
+    pub parents: Vec<Vec<u8>>,
+    pub pattern: Vec<u8>,
+}
+
+/// Points et blancs de fin d'un composant long retirés (sauf « . », « .. »).
+fn trim_long(c: &[u8]) -> &[u8] {
+    if c == b"." || c == b".." {
+        return c;
+    }
+    let end = c.iter().rposition(|&b| b != b'.' && b != b' ').map_or(0, |i| i + 1);
+    &c[..end]
+}
+
+/// Nom long d'une entrée : son nom sur l'hôte.
+pub fn long_name(e: &DirEntry) -> Vec<u8> {
+    e.host.file_name().map(|n| n.to_string_lossy().as_bytes().to_vec()).unwrap_or_default()
+}
+
+/// Motif Win32 (`*`, `?`) sur un nom, sans tenir compte de la casse ;
+/// « *.* » désigne tout, y compris les noms sans point.
+pub fn long_matches(pattern: &[u8], name: &[u8]) -> bool {
+    let pattern = if pattern == b"*.*" { &b"*"[..] } else { pattern };
+    let (p, n) = (pattern.to_ascii_uppercase(), name.to_ascii_uppercase());
+    // Correspondance gloutonne avec retour sur la dernière étoile.
+    let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == b'*')
 }
 
 /// « C:\A\B » à partir des composants.
@@ -388,5 +544,42 @@ mod tests {
         assert_eq!(d.resolve(b"D:\\X").err(), Some(ERR_INVALID_DRIVE));
         assert_eq!(d.resolve(b"\\NOPE\\X").err(), Some(ERR_PATH_NOT_FOUND));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn long_names() {
+        let dir = std::env::temp_dir().join(format!("bare86-lfn-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Sub Dir")).unwrap();
+        fs::write(dir.join("Sub Dir").join("Long File Name.txt"), b"x").unwrap();
+        let mut d = Drives::new();
+        d.mount(2, dir.clone());
+        // Composants longs, courts, mélangés ; casse indifférente.
+        for p in [&b"C:\\sub dir\\long file name.TXT"[..], b"\\SUBDIR~1\\Long File Name.txt", b"sub dir\\LONGFI~1.TXT"] {
+            let Target::Path { host, exists, dos } = d.resolve_long(p).unwrap() else { panic!() };
+            assert!(exists);
+            assert_eq!(host, dir.join("Sub Dir").join("Long File Name.txt"));
+            assert_eq!(dos, b"C:\\SUBDIR~1\\LONGFI~1.TXT");
+        }
+        // Fichier à créer : nom long gardé sur l'hôte.
+        let Target::Path { host, exists, .. } = d.resolve_long(b"Sub Dir\\New File.dat").unwrap() else { panic!() };
+        assert!(!exists);
+        assert_eq!(host, dir.join("Sub Dir").join("New File.dat"));
+        assert_eq!(d.long_path(b"C:\\SUBDIR~1\\LONGFI~1.TXT").unwrap(), b"C:\\Sub Dir\\Long File Name.txt");
+        let want = LongSearch { dir: dir.join("Sub Dir"), parents: vec![b"SUBDIR~1".to_vec()], pattern: b"*.txt".to_vec() };
+        assert_eq!(d.search_long(b"Sub Dir\\*.txt").unwrap(), want);
+        assert_eq!(d.resolve_long(b"a|b").err(), Some(ERR_PATH_NOT_FOUND));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn win32_patterns() {
+        assert!(long_matches(b"*.*", b"README"));
+        assert!(long_matches(b"*", b"Long File Name.txt"));
+        assert!(long_matches(b"long*.TXT", b"Long File Name.txt"));
+        assert!(long_matches(b"*name*", b"Long File Name.txt"));
+        assert!(long_matches(b"?ong*", b"long"));
+        assert!(!long_matches(b"*.exe", b"Long File Name.txt"));
+        assert!(!long_matches(b"a?", b"a"));
     }
 }

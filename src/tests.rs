@@ -337,6 +337,22 @@ fn fcb_files() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Noms longs (INT 21h AX=71xxh) sur un répertoire hôte : tout est
+/// défait à la fin, les noms longs existent bien sur l'hôte entre-temps.
+#[test]
+fn long_file_names() {
+    let dir = std::env::temp_dir().join(format!("bare86-lfn-asm-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut pc = Pc::new(&Config::default(), Host::headless(Box::new(Capture::default()))).unwrap();
+    pc.mount(2, dir.clone());
+    pc.load_com(program!("lfn")).unwrap();
+    assert_eq!(pc.run().unwrap(), 0, "n° du contrôle en échec (voir asm/tests/lfn.S)");
+    assert!(pc.unhandled().is_empty(), "{:?}", pc.unhandled());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// IRQ 0 injectée : INT 08h du BIOS, INT 1Ch, HLT, PIT reprogrammé.
 #[test]
 fn timer_interrupts() {

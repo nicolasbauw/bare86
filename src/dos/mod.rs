@@ -13,6 +13,7 @@ mod handles;
 mod memory;
 mod mscdex;
 mod process;
+mod lfn;
 mod shell;
 mod win32;
 
@@ -124,6 +125,8 @@ pub struct Dos {
     verify: bool,
     searches: VecDeque<Search>,
     next_search: u16,
+    /// Recherches à noms longs (AX=714Eh), repérées par leur handle.
+    lfn_searches: VecDeque<(u16, VecDeque<lfn::Found>)>,
     /// Scancode d'une touche étendue, rendu au prochain appel de lecture.
     pending_scan: Option<u8>,
     /// Ligne saisie à la console pas encore lue par AH=3Fh.
@@ -155,6 +158,7 @@ impl Dos {
             verify: false,
             searches: VecDeque::new(),
             next_search: 1,
+            lfn_searches: VecDeque::new(),
             pending_scan: None,
             con_line: VecDeque::new(),
             line_edit: None,
@@ -533,7 +537,13 @@ impl Dos {
     /// Ouvre ou crée ; `create` : 0 ouvrir, 1 créer ou tronquer, 2 créer
     /// seulement s'il n'existe pas.
     fn open(&mut self, mem: &GuestMem, path: &[u8], mode: u8, create: u8) -> std::result::Result<u16, u16> {
-        match self.drives.resolve(path)? {
+        let target = self.drives.resolve(path)?;
+        self.open_target(mem, target, mode, create)
+    }
+
+    /// `open` sur un chemin déjà résolu (noms courts ou longs).
+    fn open_target(&mut self, mem: &GuestMem, target: Target, mode: u8, create: u8) -> std::result::Result<u16, u16> {
+        match target {
             Target::Device(d) => {
                 let kind = match d {
                     Device::Con => Kind::Con,
@@ -1272,12 +1282,8 @@ impl Dos {
             // Écriture sur disque d'un fichier : rien en attente côté hôte.
             0x68 | 0x6A => Out::from(self.psp_handle(mem, cpu.w(BX)).map(|_| ())),
             0x6C => self.ext_open(cpu, mem),
-            // Noms longs (LFN) : non pris en charge, comme MS-DOS 5.
-            0x71 => {
-                cpu.set_w(AX, 0x7100);
-                set_ret_flag(cpu, mem, CF, true);
-                Out::Keep
-            }
+            // Noms longs (API de Windows 95).
+            0x71 => self.lfn(cpu, mem),
             // Fonction inconnue : AL = 0, comme MS-DOS.
             _ => {
                 cpu.set_lo(AX, 0);

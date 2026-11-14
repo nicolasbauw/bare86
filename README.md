@@ -43,7 +43,9 @@ difference is under the hood, and shows with demanding late-90s games.
 - **A built-in DOS, nothing to install.** Bare86 provides its own DOS (it
   reports version 5.00): a host directory becomes drive C:, `.COM` and `.EXE`
   programs start at once. XMS 3.0, EMS 4.0 (LIM) and the DOS extenders used by
-  games work: DOS/4GW, DOS/32A, PMODE/W, CWSDPMI (DJGPP).
+  games work: DOS/4GW, DOS/32A, PMODE/W, CWSDPMI (DJGPP). Long file names are
+  supported (the Windows 95 API, INT 21h AX=71xxh): a host file keeps its name,
+  and DOS programs that only know 8.3 names see a short alias (`LONGFI~1.TXT`).
 - **Some Windows programs, through HX DOS Extender.** With Japheth's
   [HX DOS Extender](https://github.com/Baron-von-Riedesel/HX) (freeware; the
   HXRT and HXGUI packages unpacked in `C:\HX`, or in a directory of the
