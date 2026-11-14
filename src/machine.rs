@@ -116,6 +116,8 @@ pub struct Config {
     pub cdrom: Option<std::path::PathBuf>,
     /// Sound Blaster Pro au lieu de la SB16 (`--sb pro`).
     pub sb_pro: bool,
+    /// Puce FM : OPL3 (SB Pro 2, SB16), OPL2, double OPL2 (SB Pro 1).
+    pub opl: crate::opl::OplModel,
     /// Enregistrement de la musique MIDI (MPU-401) en fichier MIDI standard.
     pub midi_out: Option<std::path::PathBuf>,
     /// Banque du synthétiseur General MIDI sur OPL3 ; `None` : pas de synthèse.
@@ -124,7 +126,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -344,7 +346,7 @@ impl Pc<KvmVm> {
 
 impl<B: Backend> Pc<B> {
     pub fn with_backend(vm: B, cfg: &Config, mut host: Host) -> Result<Self> {
-        let mixer = crate::audio::Mixer::new(std::mem::replace(&mut host.audio, Box::new(crate::host::NullAudio::default())));
+        let mixer = crate::audio::Mixer::new(std::mem::replace(&mut host.audio, Box::new(crate::host::NullAudio::default())), cfg.opl);
         let vga = Rc::new(RefCell::new(Vga::new()?));
         let mut bios = Bios::new(cfg.extended_kb, vga.clone());
         bios.vbe2 = cfg.vbe2;
@@ -422,6 +424,7 @@ impl<B: Backend> Pc<B> {
         io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, Box::new(crate::sb16::Sb16Ports(sb.clone())));
         io.map(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));
         let opl = Rc::new(RefCell::new(crate::opl::Opl::new()));
+        opl.borrow_mut().model = cfg.opl;
         for ports in [0x388..=0x38B, crate::sb16::BASE..=crate::sb16::BASE + 3, crate::sb16::BASE + 8..=crate::sb16::BASE + 9] {
             io.map(ports.clone(), Box::new(crate::opl::OplPorts(opl.clone())));
             // Les pilotes FM attendent après chaque écriture en relisant

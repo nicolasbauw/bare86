@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::dma::Dma;
 use crate::host::AudioSink;
 use crate::mem::GuestMem;
-use crate::opl::{FmSynth, Opl, Write};
+use crate::opl::{FmSynth, Opl, OplModel, Write};
 use crate::sb16::Sb16;
 
 pub const RATE: u32 = 48_000;
@@ -143,9 +143,9 @@ pub struct Mixer {
 
 impl Mixer {
     /// Lance le thread audio, qui livre à `sink`.
-    pub fn new(sink: Box<dyn AudioSink + Send>) -> Self {
+    pub fn new(sink: Box<dyn AudioSink + Send>, fm_model: OplModel) -> Self {
         let (tx, rx) = channel();
-        let thread = std::thread::Builder::new().name("audio".into()).spawn(move || audio_thread(rx, sink)).ok();
+        let thread = std::thread::Builder::new().name("audio".into()).spawn(move || audio_thread(rx, sink, fm_model)).ok();
         let now = Instant::now();
         Self {
             start: now,
@@ -253,8 +253,8 @@ impl Drop for Mixer {
 }
 
 /// Thread audio : FM ajoutée à chaque bloc, conversion, livraison.
-fn audio_thread(rx: Receiver<Block>, mut sink: Box<dyn AudioSink + Send>) {
-    let mut fm = FmSynth::new(RATE);
+fn audio_thread(rx: Receiver<Block>, mut sink: Box<dyn AudioSink + Send>, fm_model: OplModel) {
+    let mut fm = FmSynth::new(RATE, fm_model);
     let mut fm_filter = OnePole::new(PRO_FM_CUTOFF, RATE);
     let mut fm_buf = Vec::new();
     let mut out = Vec::new();

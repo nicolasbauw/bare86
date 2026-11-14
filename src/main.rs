@@ -75,7 +75,10 @@ usage: bare86 [options] [program [arguments…]]
                  guest 10.0.2.15 by DHCP, gateway 10.0.2.2, DNS 10.0.2.3
   --net-fwd tcp:HOST:GUEST   forward a host port (127.0.0.1) to the
                  guest (also udp:…; implies --net; repeatable)
-  --sb pro|16    sound card: Sound Blaster 16 (default) or Pro (DSP 3.02)
+  --sb 16|pro2|pro1   sound card: Sound Blaster 16 (default), Pro 2 (also
+                 pro: DSP 3.02, OPL3) or Pro 1 (DSP 3.02, two OPL2 chips)
+  --opl opl2|dualopl2|opl3   FM chip, instead of the card's own: OPL2
+                 (YM3812, AdLib and early Sound Blasters), two OPL2, OPL3
   --midi opl3|off   General MIDI music (MPU-401, 330h) played on OPL3 FM
                  chips (default) or not played
   --midi-bank N  FM instrument bank (default 58: Windows 9x FM synth);
@@ -132,6 +135,9 @@ fn main() -> ExitCode {
     let mut fullscreen = false;
     let mut boot = false;
     let mut menu_letter = 'M';
+    // Puce FM : celle de la carte (`--sb`), sauf choix explicite (`--opl`).
+    let mut card_opl = opl::OplModel::Opl3;
+    let mut opl_choice: Option<opl::OplModel> = None;
     let mut cli: Vec<String> = std::env::args().skip(1).collect();
     // Lanceur, seulement sur demande : le profil choisi devient
     // `--config PROFIL --window`, le reste de la ligne de commande est gardé.
@@ -217,10 +223,23 @@ fn main() -> ExitCode {
             },
             "--boot" => boot = true,
             "--sb" => match args.next().as_deref() {
-                Some("pro") => cfg.sb_pro = true,
-                Some("16") => cfg.sb_pro = false,
+                // SB Pro 2 (OPL3), SB Pro 1 (deux OPL2), SB16 (OPL3).
+                Some("pro" | "pro2") => (cfg.sb_pro, card_opl) = (true, opl::OplModel::Opl3),
+                Some("pro1") => (cfg.sb_pro, card_opl) = (true, opl::OplModel::DualOpl2),
+                Some("16") => (cfg.sb_pro, card_opl) = (false, opl::OplModel::Opl3),
                 _ => {
-                    eprintln!("--sb : pro ou 16 attendu");
+                    eprintln!("--sb : pro1, pro2 (ou pro) ou 16 attendu");
+                    return ExitCode::from(2);
+                }
+            },
+            "--opl" => match args.next().map(|m| m.parse::<opl::OplModel>()) {
+                Some(Ok(m)) => opl_choice = Some(m),
+                Some(Err(e)) => {
+                    eprintln!("--opl : {e}");
+                    return ExitCode::from(2);
+                }
+                None => {
+                    eprintln!("--opl : opl2, dualopl2 ou opl3 attendu");
                     return ExitCode::from(2);
                 }
             },
@@ -345,6 +364,7 @@ fn main() -> ExitCode {
             tail.extend_from_slice(a.as_bytes());
         }
     }
+    cfg.opl = opl_choice.unwrap_or(card_opl);
     let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats, boot };
     let result = if window {
         let host_keys = keys;
