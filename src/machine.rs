@@ -87,6 +87,8 @@ const TERM_FRAME: Duration = Duration::from_millis(33);
 const PIT_POLL_GAP: Duration = Duration::from_micros(100);
 const PIT_POLL_AFTER: Duration = Duration::from_millis(2);
 const PIT_POLL_SLEEP: Duration = Duration::from_micros(100);
+/// Réveil avant le blanc vertical (`Pc::vga_poll`) : une dizaine de lignes.
+const VBLANK_MARGIN: Duration = Duration::from_micros(300);
 
 /// Instructions sans accès VRAM avant que l'interpréteur rende la main.
 const IDLE_LIMIT: u64 = 256;
@@ -270,6 +272,8 @@ pub struct Stats {
     pub burst_ports: u64,
     /// Temps cédés à l'hôte pendant une attente active sur le PIT.
     pub pit_yields: u64,
+    /// Sommeils jusqu'au blanc vertical pendant une attente sur 3DAh.
+    pub vga_yields: u64,
     /// Sorties d'E/S par port (lectures et écritures).
     pub io_ports: std::collections::HashMap<u16, u64>,
 }
@@ -289,6 +293,7 @@ impl std::fmt::Debug for Stats {
             .field("page_flips", &self.page_flips)
             .field("burst_ports", &self.burst_ports)
             .field("pit_yields", &self.pit_yields)
+            .field("vga_yields", &self.vga_yields)
             .field("io_ports", &ports)
             .finish()
     }
@@ -366,6 +371,9 @@ pub struct Pc<B: Backend = KvmVm> {
     idle_polls: Option<(Instant, Instant)>,
     /// Scrutation du compteur du PIT : début de la série et dernière lecture.
     pit_polls: Option<(Instant, Instant)>,
+    /// Scrutation du registre d'état VGA sans autre écriture sur un port :
+    /// début de la série et dernière lecture.
+    vga_polls: Option<(Instant, Instant)>,
     /// Souris PS/2 de l'interface du BIOS (vrai DOS).
     ps2: crate::mouse::Ps2,
     /// DOS fourni par l'hôte ; faux après un démarrage sur image disque.
@@ -557,6 +565,7 @@ impl<B: Backend> Pc<B> {
             a20: None,
             idle_polls: None,
             pit_polls: None,
+            vga_polls: None,
             ps2: Default::default(),
             dos_hle: true,
             boot_drive: 0,
@@ -1084,6 +1093,10 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::IoOut { port, size, data } => {
                     *self.stats.io_ports.entry(port).or_default() += 1;
+                    // Sauf l'acquittement des interruptions (PIC).
+                    if !matches!(port, 0x20 | 0x21 | 0xA0 | 0xA1) {
+                        self.vga_polls = None;
+                    }
                     self.io.write(port, size, data);
                     // Palette : 768 écritures de suite (Quake en charge une à
                     // presque chaque image), servies en rafale.
@@ -1116,6 +1129,11 @@ impl<B: Backend> Pc<B> {
                     *self.stats.io_ports.entry(port).or_default() += 1;
                     if matches!(port, 0x40..=0x42) && Self::pit_poll(&mut self.pit_polls) {
                         self.stats.pit_yields += 1;
+                    }
+                    if matches!(port, 0x3BA | 0x3DA)
+                        && Self::vga_poll(&mut self.vga_polls, &self.vga.borrow(), &self.pit.borrow(), port)
+                    {
+                        self.stats.vga_yields += 1;
                     }
                     self.io.read(port, size, data);
                     port_burst = data.len() == usize::from(size) && self.io.starts_burst(port);
@@ -1371,6 +1389,38 @@ impl<B: Backend> Pc<B> {
         }
         *polls = Some((start, Instant::now()));
         yields
+    }
+
+    /// Attente du blanc vertical par scrutation de 3DAh (Keen, Wolfenstein :
+    /// la routine d'id suit le bit 0 ligne à ligne, ≈ 47 000 lectures par
+    /// seconde). Au-delà de `PIT_POLL_AFTER` de lectures rapprochées sans
+    /// écriture sur un autre port que le PIC (un effet de raster écrirait la
+    /// palette ou un registre entre deux attentes), le vCPU dort jusqu'à
+    /// `VBLANK_MARGIN` avant le prochain blanc vertical, sans dépasser la
+    /// prochaine IRQ 0 : le programme voit des échantillons plus espacés
+    /// d'un signal exact.
+    fn vga_poll(polls: &mut Option<(Instant, Instant)>, vga: &Vga, pit: &crate::pit::Pit, port: u16) -> bool {
+        let now = Instant::now();
+        if !vga.is_status_port(port) {
+            return false;
+        }
+        let start = match *polls {
+            Some((start, last)) if now - last < PIT_POLL_GAP => start,
+            _ => now,
+        };
+        let mut slept = false;
+        if now - start > PIT_POLL_AFTER {
+            let mut d = vga.until_vblank().saturating_sub(VBLANK_MARGIN);
+            if let Some(irq) = pit.next_irq0() {
+                d = d.min(irq.saturating_duration_since(now));
+            }
+            if d >= PIT_POLL_SLEEP {
+                std::thread::sleep(d);
+                slept = true;
+            }
+        }
+        *polls = Some((start, Instant::now()));
+        slept
     }
 
     /// Boucle d'attente d'une touche par scrutation (FreeCOM à l'invite) :

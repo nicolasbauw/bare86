@@ -451,6 +451,18 @@ impl Vga {
         u8::from(vblank || hblank) | if vsync { 0x08 } else { 0 }
     }
 
+    /// Temps restant avant le prochain blanc vertical (nul pendant celui-ci).
+    pub fn until_vblank(&self) -> std::time::Duration {
+        let t = self.start.elapsed().as_nanos() % (LINES * LINE_NS);
+        let start = VISIBLE_LINES * LINE_NS;
+        std::time::Duration::from_nanos(start.saturating_sub(t) as u64)
+    }
+
+    /// Port d'état (3DAh en couleur, 3BAh en mono).
+    pub fn is_status_port(&self, port: u16) -> bool {
+        matches!(port, 0x3BA | 0x3DA) && self.crtc_port(port)
+    }
+
     /// Ports CRTC et état : 3Dxh en couleur (misc bit 0), 3Bxh en mono.
     fn crtc_port(&self, port: u16) -> bool {
         let color = self.misc & 1 != 0;
