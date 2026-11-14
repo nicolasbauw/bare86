@@ -449,6 +449,11 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
             };
             pc.mount(2, root);
             let dos = pc.dos_path_of(path).ok_or_else(|| format!("{} : introuvable sous le lecteur C:", path.display()))?;
+            // Le programme démarre dans son répertoire (avec --mount, il peut
+            // être plus bas que la racine) : les jeux y cherchent leurs données.
+            if let Some(cut) = dos.iter().rposition(|&c| c == b'\\') {
+                let _ = pc.chdir(&dos[..cut.max(2)]);
+            }
             pc.load_program(&dos, &o.tail)?;
         }
         None => {

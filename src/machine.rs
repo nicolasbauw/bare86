@@ -712,6 +712,11 @@ impl<B: Backend> Pc<B> {
         self.dos.dos_path_of(host)
     }
 
+    /// Répertoire courant du DOS intégré.
+    pub fn chdir(&mut self, path: &[u8]) -> std::result::Result<(), u16> {
+        self.dos.chdir(path)
+    }
+
     /// Charge un programme d'un lecteur monté (« C:\\JEU.EXE »).
     pub fn load_program(&mut self, path: &[u8], tail: &[u8]) -> Result<()> {
         let cpu = self.dos.start(self.vm.mem(), path, tail)?;

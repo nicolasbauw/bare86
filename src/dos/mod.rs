@@ -14,6 +14,7 @@ mod memory;
 mod mscdex;
 mod process;
 mod shell;
+mod win32;
 
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -206,6 +207,11 @@ impl Dos {
         self.cd.as_mut()?.int2f(cpu, mem)
     }
 
+    /// Répertoire courant (lecteur compris) : `Err` si le chemin est invalide.
+    pub fn chdir(&mut self, path: &[u8]) -> std::result::Result<(), u16> {
+        self.drives.chdir(path)
+    }
+
     /// Chemin DOS d'un fichier hôte situé sous un lecteur monté.
     pub fn dos_path_of(&self, host: &std::path::Path) -> Option<Vec<u8>> {
         self.drives.dos_path_of(host)
@@ -282,6 +288,31 @@ impl Dos {
         self.exec(mem, image, path, tail, 0, None, None).map_err(|e| format!("chargement : erreur DOS {e:02X}h"))
     }
 
+    /// Nom du fichier seul si `path` (canonique) est dans le répertoire
+    /// courant de son lecteur, sinon `path` : lignes de commande plus courtes.
+    fn short_name<'p>(&self, path: &'p [u8]) -> &'p [u8] {
+        let Some(cut) = path.iter().rposition(|&c| c == b'\\') else { return path };
+        let (dir, name) = (&path[..cut], &path[cut + 1..]);
+        let Some(drive) = path.first().map(|d| d.to_ascii_uppercase().wrapping_sub(b'A')) else { return path };
+        if drive != self.drives.current || !self.drives.is_mounted(drive) {
+            return path;
+        }
+        let mut cwd = fs::canonical(drive, &[]);
+        cwd.extend_from_slice(self.drives.cwd(drive));
+        let cwd = cwd.strip_suffix(b"\\").unwrap_or(&cwd);
+        if dir.eq_ignore_ascii_case(cwd) { name } else { path }
+    }
+
+    /// Valeur de PATH dans le bloc d'environnement `env` (maître si 0).
+    fn env_path(&self, mem: &GuestMem, env: u16) -> Vec<u8> {
+        let bytes = process::env_block(mem, env, self.master_env(), b"");
+        bytes
+            .split(|&c| c == 0)
+            .take_while(|v| !v.is_empty())
+            .find_map(|v| v.strip_prefix(b"PATH=").map(<[u8]>::to_vec))
+            .unwrap_or_default()
+    }
+
     /// Fichier d'un programme : contenu et chemin DOS canonique.
     fn read_program(&self, path: &[u8]) -> std::result::Result<(Vec<u8>, Vec<u8>), u16> {
         match self.drives.resolve(path)? {
@@ -303,10 +334,19 @@ impl Dos {
         fcbs: Option<([u8; 16], [u8; 16])>,
         parent_cpu: Option<Cpu>,
     ) -> std::result::Result<Cpu, u16> {
-        let exe = process::parse(image)?;
         let parent = self.current_psp;
         let parent_env = if env_param != 0 { env_param } else { mem.read_u16(psp_addr(parent, psp::ENV)) };
-        let env_bytes = process::env_block(mem, parent_env, self.master_env(), path);
+        // Programme Win32 : lancé par le chargeur PE de HX DOS Extender.
+        let win32 = win32::loader_for(image, self.short_name(path), tail, &self.env_path(mem, parent_env), |p| self.read_program(p).ok());
+        let (image, path, tail) = match &win32 {
+            Some(l) => (&l.image[..], &l.path[..], &l.tail[..]),
+            None => (image, path, tail),
+        };
+        let exe = process::parse(image)?;
+        let mut env_bytes = process::env_block(mem, parent_env, self.master_env(), path);
+        if let Some(l) = &win32 {
+            env_bytes = win32::with_path_dir(&env_bytes, &l.dir);
+        }
         let env_paras = (env_bytes.len() as u16).div_ceil(16);
         let env = memory::alloc(mem, env_paras, 0xFFFF, self.strategy).map_err(|(e, _)| e)?;
         mem.write(lin(env, 0), &env_bytes);

@@ -44,6 +44,14 @@ difference is under the hood, and shows with demanding late-90s games.
   reports version 5.00): a host directory becomes drive C:, `.COM` and `.EXE`
   programs start at once. XMS 3.0, EMS 4.0 (LIM) and the DOS extenders used by
   games work: DOS/4GW, DOS/32A, PMODE/W, CWSDPMI (DJGPP).
+- **Some Windows programs, through HX DOS Extender.** With Japheth's
+  [HX DOS Extender](https://github.com/Baron-von-Riedesel/HX) (freeware; the
+  HXRT and HXGUI packages unpacked in `C:\HX`, or in a directory of the
+  `PATH`), the built-in DOS runs Win32 programs by name: console programs, and
+  part of the games using DirectDraw, DirectSound and GDI. The Quake II demo
+  runs full screen at 640×480 (`--mem 64`; it also needs HX's dummy
+  `UNSUPP\WSOCK32.DLL` copied next to `quake2.exe`). There is no Windows
+  itself: no Windows 95/98 desktop, no Direct3D.
 - **Or a real DOS.** Boot FreeDOS (tested with 1.3, JEMMEX included) or another
   DOS from floppy and hard disk images, with its own drivers.
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
