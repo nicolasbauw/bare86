@@ -42,6 +42,8 @@ struct Transfer {
 }
 
 pub struct Sb16 {
+    /// Sound Blaster Pro (DSP 3.02) : commandes de la SB16 ignorées.
+    pub pro: bool,
     out: VecDeque<u8>,
     /// Commande en cours et ses arguments reçus.
     cmd: Option<u8>,
@@ -76,6 +78,7 @@ impl Default for Sb16 {
 impl Sb16 {
     pub fn new() -> Self {
         let mut sb = Self {
+            pro: false,
             out: VecDeque::new(),
             cmd: None,
             args: Vec::new(),
@@ -199,6 +202,8 @@ impl Sb16 {
                 let channels = if pro_stereo { 2 } else { 1 };
                 self.rate = 1_000_000 / (256 - u32::from(a[0])) / channels;
             }
+            // Commandes de la SB16 : inconnues d'une SB Pro.
+            0x41 | 0x42 | 0xB0..=0xCF | 0xD5 | 0xD6 | 0xD9 if self.pro => {}
             0x41 | 0x42 => self.rate = (u32::from(a[0]) << 8) | u32::from(a[1]),
             0x48 => self.block_size = word(a[0], a[1]),
             0x80 => self.silence = word(a[0], a[1]) + 1,
@@ -225,6 +230,7 @@ impl Sb16 {
             }
             0xD8 => self.out.push_back(0xFF),
             0xE0 => self.out.push_back(!a[0]),
+            0xE1 if self.pro => self.out.extend([3, 2]),
             0xE1 => self.out.extend([4, 5]),
             0xE3 => self.out.extend(b"COPYRIGHT (C) CREATIVE TECHNOLOGY LTD, 1992.\0"),
             0xE4 => self.test_reg = a[0],
@@ -461,5 +467,17 @@ mod tests {
         assert_eq!(sb.read_port(BASE + 5) & 1, 1);
         sb.read_port(BASE + 0x0E);
         assert_eq!(sb.read_port(BASE + 5) & 1, 0);
+    }
+
+    #[test]
+    fn sound_blaster_pro_identity() {
+        let mut sb = Sb16::new();
+        sb.pro = true;
+        dsp(&mut sb, &[0xE1]);
+        assert_eq!((sb.read_port(BASE + 0x0A), sb.read_port(BASE + 0x0A)), (3, 2));
+        // Taux de la SB16 (41h) : ignoré, ses arguments consommés.
+        dsp(&mut sb, &[0x41, 0x5D, 0xC0, 0xE1]);
+        assert_eq!(sb.rate, Sb16::new().rate);
+        assert_eq!(sb.read_port(BASE + 0x0A), 3);
     }
 }

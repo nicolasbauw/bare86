@@ -29,6 +29,7 @@ mod machine;
 mod mem;
 mod menu;
 mod mouse;
+mod mpu401;
 mod ne2000;
 mod net;
 mod opl;
@@ -73,6 +74,8 @@ usage: bare86 [options] [program [arguments…]]
                  guest 10.0.2.15 by DHCP, gateway 10.0.2.2, DNS 10.0.2.3
   --net-fwd tcp:HOST:GUEST   forward a host port (127.0.0.1) to the
                  guest (also udp:…; implies --net; repeatable)
+  --sb pro|16    sound card: Sound Blaster 16 (default) or Pro (DSP 3.02)
+  --midi-out F.mid   record the MIDI music sent to the MPU-401 (330h)
   --mips N       throttle to N million instructions per second
   --mem MB       total memory in MB (default 16)
   --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
@@ -208,6 +211,21 @@ fn main() -> ExitCode {
                 }
             },
             "--boot" => boot = true,
+            "--sb" => match args.next().as_deref() {
+                Some("pro") => cfg.sb_pro = true,
+                Some("16") => cfg.sb_pro = false,
+                _ => {
+                    eprintln!("--sb : pro ou 16 attendu");
+                    return ExitCode::from(2);
+                }
+            },
+            "--midi-out" => match args.next() {
+                Some(p) => cfg.midi_out = Some(p.into()),
+                None => {
+                    eprintln!("--midi-out : fichier attendu");
+                    return ExitCode::from(2);
+                }
+            },
             "--menu-key" => match args.next().and_then(|k| k.chars().next()).filter(char::is_ascii_alphabetic) {
                 Some(c) => menu_letter = c.to_ascii_uppercase(),
                 None => {

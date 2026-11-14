@@ -44,8 +44,11 @@ difference is under the hood, and shows with demanding late-90s games.
   banked windows). Text mode uses the built-in Terminus 8×16 font. The window
   keeps a 4:3 aspect ratio with sharp scaling.
 - **Sound.** Sound Blaster 16 (DSP 4.05, 8- and 16-bit DMA, mixer) at 220h,
-  IRQ 5, DMA 1 and 5, with the `BLASTER` variable set; OPL3 FM synthesis by
-  [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3); PC speaker.
+  IRQ 5, DMA 1 and 5, with the `BLASTER` variable set, or a Sound Blaster Pro
+  (`--sb pro`); OPL3 FM synthesis by
+  [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3); PC speaker; MPU-401
+  MIDI interface at 330h (UART mode), whose General MIDI music can be recorded
+  to a standard MIDI file (`--midi-out`).
 - **Input.** Keyboard by physical key position (the DOS sees a US keyboard),
   mouse (INT 33h driver under the built-in DOS, PS/2 under a real DOS),
   joystick or game controller on the game port.
@@ -131,6 +134,8 @@ sound need the window (or `--shot` and `--wav`).
 | `--ems MB` | EMS memory in MB, in addition (default 4, 0 to 32) |
 | `--mips N` | Throttle to N million instructions per second (default: full speed) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
+| `--sb pro\|16` | Sound card: Sound Blaster 16 (default) or Sound Blaster Pro (DSP 3.02, no 16-bit DMA) |
+| `--midi-out F.mid` | Record the MIDI music sent to the MPU-401 to a standard MIDI file (valid at any time, even if the session stops abruptly) |
 
 **Display and sound**
 
@@ -222,7 +227,8 @@ messages are in French for now.
 
 Memory: 640 KB of conventional memory, XMS through the built-in HIMEM-like
 driver, EMS in a page frame at E000h. The environment holds
-`BLASTER=A220 I5 D1 H5 T6`, so that games find the Sound Blaster.
+`BLASTER=A220 I5 D1 H5 P330 T6` (`A220 I5 D1 T4` with `--sb pro`), so that
+games find the Sound Blaster and the MPU-401.
 
 ## Booting a real DOS
 
@@ -304,6 +310,8 @@ among what does not, yet:
 - Linux x86-64 hosts only. Windows (WHPX) and Intel macOS hosts are planned
   behind the same virtual machine interface; Apple silicon is out of scope.
 - No IPX network for multiplayer games yet.
+- MIDI music is recorded, not played yet: a General MIDI synthesizer on the
+  OPL3 is planned.
 - Under FreeDOS, a CD changed while running is not seen by the UDVD2 and
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine

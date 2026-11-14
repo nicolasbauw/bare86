@@ -114,11 +114,15 @@ pub struct Config {
     pub net: Option<Vec<crate::net::Forward>>,
     /// Image du CD (lecteur ATAPI en maître du canal IDE secondaire).
     pub cdrom: Option<std::path::PathBuf>,
+    /// Sound Blaster Pro au lieu de la SB16 (`--sb pro`).
+    pub sb_pro: bool,
+    /// Enregistrement de la musique MIDI (MPU-401) en fichier MIDI standard.
+    pub midi_out: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, midi_out: None }
     }
 }
 
@@ -343,6 +347,7 @@ impl<B: Backend> Pc<B> {
         bios.disks = crate::disk::Disks::open(&cfg.disks)?;
         bios.install(vm.mem());
         let mut dos = dos::Dos::new();
+        dos.sb_pro = cfg.sb_pro;
         dos.boot(vm.mem());
         let throttle = cfg.mips.map(Throttle::new).transpose()?;
         let mut io = IoBus::default();
@@ -392,6 +397,14 @@ impl<B: Backend> Pc<B> {
         io.map(0x81..=0x8F, Box::new(crate::dma::DmaPorts(dma.clone())));
         io.map(0xC0..=0xDF, Box::new(crate::dma::DmaPorts(dma.clone())));
         let sb = Rc::new(RefCell::new(crate::sb16::Sb16::new()));
+        sb.borrow_mut().pro = cfg.sb_pro;
+        // Interface MIDI MPU-401 (UART), comme sur la SB16.
+        let sink: Option<Box<dyn crate::mpu401::MidiSink>> = match &cfg.midi_out {
+            Some(p) => Some(Box::new(crate::mpu401::MidiFile::create(p).map_err(|e| format!("{} : {e}", p.display()))?)),
+            None => None,
+        };
+        let mpu = crate::mpu401::Mpu401::new(sink).shared();
+        io.map(crate::mpu401::BASE..=crate::mpu401::BASE + 1, Box::new(crate::mpu401::MpuPorts(mpu)));
         // DSP et mixeur ; 228h–229h reviennent à la FM.
         io.map(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, Box::new(crate::sb16::Sb16Ports(sb.clone())));
         io.map(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, Box::new(crate::sb16::Sb16Ports(sb.clone())));

@@ -39,7 +39,9 @@ const LOL_OFF: u16 = 0x0020;
 const NUL_DEVICE_OFF: u16 = LOL_OFF + 0x22;
 
 /// Environnement maître du shell racine.
-const MASTER_ENV: &[u8] = b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0PROMPT=$P$G\0BLASTER=A220 I5 D1 H5 T6\0";
+const MASTER_ENV_SB16: &[u8] = b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0PROMPT=$P$G\0BLASTER=A220 I5 D1 H5 P330 T6\0";
+/// Sound Blaster Pro (`--sb pro`) : pas de DMA 16 bits, type 4.
+const MASTER_ENV_PRO: &[u8] = b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0PROMPT=$P$G\0BLASTER=A220 I5 D1 T4\0";
 const MASTER_ENV_PARAS: u16 = 0x20;
 
 const ERR_INVALID_FUNCTION: u16 = 0x01;
@@ -97,6 +99,8 @@ pub struct Dos {
     drives: Drives,
     /// Lecteur de CD (image ISO) et extensions MSCDEX.
     cd: Option<mscdex::Mscdex>,
+    /// Carte annoncée par `BLASTER` : Sound Blaster Pro (sinon SB16).
+    pub sb_pro: bool,
     /// Changements de disque demandés pendant que le shell attendait une ligne.
     pub pending_media: Vec<crate::host::InputEvent>,
     sft: Sft,
@@ -148,6 +152,7 @@ impl Dos {
             line_edit: None,
             flushed: false,
             cd: None,
+            sb_pro: false,
             pending_media: Vec::new(),
         }
     }
@@ -175,6 +180,11 @@ impl Dos {
         let root = cd.change(iso);
         self.drives.mount(cd.drive, root);
         Ok(())
+    }
+
+    /// Environnement maître : `BLASTER` selon la carte son.
+    fn master_env(&self) -> &'static [u8] {
+        if self.sb_pro { MASTER_ENV_PRO } else { MASTER_ENV_SB16 }
     }
 
     /// Étiquette de volume d'un lecteur (celle du CD).
@@ -217,7 +227,7 @@ impl Dos {
         memory::set_name(mem, root, b"COMMAND");
         let env = memory::alloc(mem, MASTER_ENV_PARAS, root, 0).expect("environnement maître");
         mem.fill(lin(env, 0), usize::from(MASTER_ENV_PARAS) * 16, 0);
-        mem.write(lin(env, 0), MASTER_ENV);
+        mem.write(lin(env, 0), self.master_env());
         let init = PspInit {
             parent: root,
             env,
@@ -279,7 +289,7 @@ impl Dos {
         let exe = process::parse(image)?;
         let parent = self.current_psp;
         let parent_env = if env_param != 0 { env_param } else { mem.read_u16(psp_addr(parent, psp::ENV)) };
-        let env_bytes = process::env_block(mem, parent_env, MASTER_ENV, path);
+        let env_bytes = process::env_block(mem, parent_env, self.master_env(), path);
         let env_paras = (env_bytes.len() as u16).div_ceil(16);
         let env = memory::alloc(mem, env_paras, 0xFFFF, self.strategy).map_err(|(e, _)| e)?;
         mem.write(lin(env, 0), &env_bytes);
