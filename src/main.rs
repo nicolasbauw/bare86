@@ -77,8 +77,9 @@ usage: bare86 [options] [program [arguments…]]
                  guest (also udp:…; implies --net; repeatable)
   --sb 16|pro2|pro1   sound card: Sound Blaster 16 (default), Pro 2 (also
                  pro: DSP 3.02, OPL3) or Pro 1 (DSP 3.02, two OPL2 chips)
-  --opl opl2|dualopl2|opl3   FM chip, instead of the card's own: OPL2
-                 (YM3812, AdLib and early Sound Blasters), two OPL2, OPL3
+  --opl opl2|dualopl2|opl3|cqm   FM chip, instead of the card's own: OPL2
+                 (YM3812, AdLib and early Sound Blasters), two OPL2, OPL3, or
+                 Creative's CQM (OPL3-compatible, Sound Blaster 16 Vibra, AWE64)
   --midi opl3|off   General MIDI music (MPU-401, 330h) played on OPL3 FM
                  chips (default) or not played
   --midi-bank N  FM instrument bank (default 58: Windows 9x FM synth);
@@ -239,7 +240,7 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
                 None => {
-                    eprintln!("--opl : opl2, dualopl2 ou opl3 attendu");
+                    eprintln!("--opl : opl2, dualopl2, opl3 ou cqm attendu");
                     return ExitCode::from(2);
                 }
             },

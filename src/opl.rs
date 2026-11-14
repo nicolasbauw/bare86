@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! FM : OPL3 (YMF262, Nuked-OPL3, third_party/nuked-opl3), OPL2 (YM3812,
-//! Nuked OPL2 Lite de third_party/libadlmidi) ou double OPL2 (SB Pro 1 :
-//! une puce par voie) ; LGPL-2.1+. Registres d'adresse, minuteries et
+//! Nuked OPL2 Lite de third_party/libadlmidi), double OPL2 (SB Pro 1 :
+//! une puce par voie) ou CQM de Creative (Nuked CQM) ; LGPL-2.1+. Registres d'adresse, minuteries et
 //! registre d'état (détection AdLib ; une OPL2 y rend 06h dans les bits
 //! bas). Ports 388h–38Bh, et 220h–223h, 228h–229h de la Sound Blaster. Côté vCPU (`Opl`) : adresse, minuteries, état, et
 //! écritures horodatées ; côté thread audio (`FmSynth`) : la puce, qui
@@ -23,7 +23,16 @@ struct Chip2 {
     _opaque: [u8; 0],
 }
 
+#[repr(C)]
+struct ChipCqm {
+    _opaque: [u8; 0],
+}
+
 unsafe extern "C" {
+    fn bare86_cqm_new(samplerate: u32) -> *mut ChipCqm;
+    fn bare86_cqm_free(chip: *mut ChipCqm);
+    fn CQM_WriteRegBuffered(chip: *mut ChipCqm, reg: u16, v: u8);
+    fn CQM_GenerateResampled(chip: *mut ChipCqm, buf: *mut i16);
     fn bare86_opl2_new(samplerate: u32) -> *mut Chip2;
     fn bare86_opl2_free(chip: *mut Chip2);
     fn OPL2_WriteRegBuffered(chip: *mut Chip2, reg: u8, v: u8);
@@ -70,6 +79,9 @@ pub enum OplModel {
     Opl2,
     /// Deux YM3812, une par voie (SB Pro 1).
     DualOpl2,
+    /// Synthèse « CQM » de Creative, compatible OPL3 (SB16 Vibra, AWE64) :
+    /// le son métallique de nombreuses cartes Creative tardives.
+    Cqm,
 }
 
 impl std::str::FromStr for OplModel {
@@ -79,7 +91,8 @@ impl std::str::FromStr for OplModel {
             "opl3" => OplModel::Opl3,
             "opl2" => OplModel::Opl2,
             "dualopl2" => OplModel::DualOpl2,
-            _ => return Err(format!("« {s} » : opl2, dualopl2 ou opl3 attendu")),
+            "cqm" => OplModel::Cqm,
+            _ => return Err(format!("« {s} » : opl2, dualopl2, opl3 ou cqm attendu")),
         })
     }
 }
@@ -128,14 +141,14 @@ impl Opl {
         }
         let (t1, t2) = (self.timers[0].expired, self.timers[1].expired);
         // Bits 2 et 1 : 0 sur une OPL3, 1 et 1 sur une OPL2 (détection).
-        let opl2 = if self.model == OplModel::Opl3 { 0 } else { 0x06 };
+        let opl2 = if matches!(self.model, OplModel::Opl3 | OplModel::Cqm) { 0 } else { 0x06 };
         (u8::from(t1 || t2) << 7) | (u8::from(t1) << 6) | (u8::from(t2) << 5) | opl2
     }
 
     fn write_data(&mut self, v: u8, now: Instant, real: Instant) {
         // Minuteries : registres 02h–04h du premier banc (OPL3), de toute
         // puce visée (OPL2 : bits 8–9 = puces).
-        let timer_reg = if self.model == OplModel::Opl3 { self.address } else { self.address & 0xFF };
+        let timer_reg = if matches!(self.model, OplModel::Opl3 | OplModel::Cqm) { self.address } else { self.address & 0xFF };
         match timer_reg {
             0x02 => self.timers[0].value = v,
             0x03 => self.timers[1].value = v,
@@ -165,6 +178,7 @@ impl Opl {
 /// Puces de la carte, sur le thread audio.
 enum Chips {
     Opl3(*mut Chip),
+    Cqm(*mut ChipCqm),
     /// Une OPL2 (mono) ou deux (gauche, droite).
     Opl2(Vec<*mut Chip2>),
 }
@@ -192,6 +206,11 @@ impl FmSynth {
                     assert!(!c.is_null(), "OPL3 : allocation impossible");
                     Chips::Opl3(c)
                 }
+                OplModel::Cqm => {
+                    let c = bare86_cqm_new(rate);
+                    assert!(!c.is_null(), "CQM : allocation impossible");
+                    Chips::Cqm(c)
+                }
                 OplModel::Opl2 | OplModel::DualOpl2 => {
                     let n = if model == OplModel::Opl2 { 1 } else { 2 };
                     let v: Vec<*mut Chip2> = (0..n).map(|_| bare86_opl2_new(rate)).collect();
@@ -213,6 +232,7 @@ impl FmSynth {
         unsafe {
             match &self.chips {
                 Chips::Opl3(c) => OPL3_WriteRegBuffered(*c, reg, v),
+                Chips::Cqm(c) => CQM_WriteRegBuffered(*c, reg, v),
                 Chips::Opl2(v2) => {
                     for (i, c) in v2.iter().enumerate() {
                         // Une seule puce : elle reçoit tout ce qui lui est destiné.
@@ -246,6 +266,10 @@ impl FmSynth {
             unsafe {
                 match &self.chips {
                     Chips::Opl3(c) => OPL3_GenerateResampled(*c, buf.as_mut_ptr()),
+                    // Niveau tel quel : proche de l'OPL3 dans notre mélange
+                    // (Doom : efficace ≈ 640 contre 540 ; libADLMIDI le divise
+                    // par deux pour son propre mélange).
+                    Chips::Cqm(c) => CQM_GenerateResampled(*c, buf.as_mut_ptr()),
                     Chips::Opl2(v2) => {
                         OPL2_GenerateResampled(v2[0], buf.as_mut_ptr());
                         if let Some(&right) = v2.get(1) {
@@ -268,6 +292,7 @@ impl Drop for FmSynth {
         unsafe {
             match &self.chips {
                 Chips::Opl3(c) => bare86_opl3_free(*c),
+                Chips::Cqm(c) => bare86_cqm_free(*c),
                 Chips::Opl2(v) => v.iter().for_each(|c| bare86_opl2_free(*c)),
             }
         }
@@ -292,7 +317,7 @@ impl IoDevice for OplPorts {
         if port & 1 == 0 {
             o.address = u16::from(v)
                 | match o.model {
-                    OplModel::Opl3 => u16::from(bank1) << 8,
+                    OplModel::Opl3 | OplModel::Cqm => u16::from(bank1) << 8,
                     // Une seule puce : le second banc n'existe pas (écritures
                     // perdues, faute de puce visée).
                     OplModel::Opl2 => if bank1 { 0 } else { 0x100 },
@@ -403,6 +428,11 @@ mod tests {
         assert!((f - 309.5).abs() < 3.0 && right == 0.0, "{f} Hz, droite {right}");
         let (_, right) = opl2_note(OplModel::DualOpl2, 0x228);
         assert!(right > 0.05, "droite {right}");
+        // CQM de Creative : se présente en OPL3, joue la même note.
+        o.model = OplModel::Cqm;
+        assert_eq!(o.status(Instant::now()) & 0x06, 0);
+        let (f, right) = opl2_note(OplModel::Cqm, 0x388);
+        assert!((f - 309.5).abs() < 3.0 && right > 0.01, "CQM : {f} Hz, droite {right}");
     }
 
     /// Détection AdLib servie en rafale (lectures de l'état enchaînées en
