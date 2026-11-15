@@ -46,6 +46,8 @@ difference is under the hood, and shows with demanding late-90s games.
   games work: DOS/4GW, DOS/32A, PMODE/W, CWSDPMI (DJGPP). Long file names are
   supported (the Windows 95 API, INT 21h AX=71xxh): a host file keeps its name,
   and DOS programs that only know 8.3 names see a short alias (`LONGFI~1.TXT`).
+- **Or a real DOS.** Boot FreeDOS (tested with 1.3, JEMMEX included) or another
+  DOS from floppy and hard disk images, with its own drivers.
 - **Some Windows programs, through HX DOS Extender.** The built-in DOS runs
   Win32 programs by name with Japheth's
   [HX DOS Extender](https://github.com/Baron-von-Riedesel/HX) (freeware, free
@@ -67,8 +69,6 @@ difference is under the hood, and shows with demanding late-90s games.
   runs with its 3dfx MiniGL driver
   (`+set vid_ref gl +set gl_driver 3dfxgl`), at about 875 frames/s in its
   timedemo against 634 with the software renderer.
-- **Or a real DOS.** Boot FreeDOS (tested with 1.3, JEMMEX included) or another
-  DOS from floppy and hard disk images, with its own drivers.
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
   modes), SVGA through VESA VBE 2.0 with a linear framebuffer (or VBE 1.2 with
   banked windows): 320×200 to 1024×768 in 8, 15, 16, 24 and 32 bits per pixel,
