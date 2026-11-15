@@ -57,6 +57,20 @@ fn read_only() -> io::Error {
     io::Error::from(io::ErrorKind::PermissionDenied)
 }
 
+/// Fichiers fournis par Bare86 à l'invité : vus dans tout répertoire où
+/// aucun fichier de ce nom n'existe (un vrai fichier reste prioritaire), en
+/// lecture seule, absents des listes de répertoire. La `glide2x.dll` de
+/// Bare86 est ainsi trouvée par le chargeur de HX à côté de chaque jeu.
+const BUILTIN: &[(&str, &[u8])] = &[("glide2x.dll", include_bytes!("../../guest/glide2x/glide2x.dll"))];
+
+/// Contenu fourni par Bare86 pour ce chemin (fichier absent de l'hôte, dans
+/// un répertoire existant).
+fn builtin(p: &Path) -> Option<&'static [u8]> {
+    let name = p.file_name()?.to_str()?;
+    let (_, data) = BUILTIN.iter().find(|(n, _)| n.eq_ignore_ascii_case(name))?;
+    (!is_virtual(p) && fs::symlink_metadata(p).is_err() && p.parent().is_some_and(Path::is_dir)).then_some(*data)
+}
+
 fn not_found() -> io::Error {
     io::Error::from(io::ErrorKind::NotFound)
 }
@@ -73,6 +87,12 @@ pub struct Meta {
 impl Meta {
     fn host(m: &fs::Metadata) -> Self {
         Self { dir: m.is_dir(), len: m.len(), modified: m.modified().unwrap_or(SystemTime::UNIX_EPOCH), readonly: m.permissions().readonly() }
+    }
+
+    fn builtin(data: &[u8]) -> Self {
+        // Date fixe : 1er janvier 1998.
+        let modified = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(883_612_800);
+        Self { dir: false, len: data.len() as u64, modified, readonly: true }
     }
 
     fn iso(e: &Entry) -> Self {
@@ -108,7 +128,10 @@ pub fn metadata(p: &Path) -> io::Result<Meta> {
     if is_virtual(p) {
         return iso_entry(p).map(|(_, e)| Meta::iso(&e)).ok_or_else(not_found);
     }
-    fs::metadata(p).map(|m| Meta::host(&m))
+    match fs::metadata(p) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => builtin(p).map(Meta::builtin).ok_or(e),
+        r => r.map(|m| Meta::host(&m)),
+    }
 }
 
 pub fn is_dir(p: &Path) -> bool {
@@ -155,6 +178,9 @@ pub fn read(p: &Path) -> io::Result<Vec<u8>> {
         buf.truncate(n);
         return Ok(buf);
     }
+    if let Some(data) = builtin(p) {
+        return Ok(data.to_vec());
+    }
     fs::read(p)
 }
 
@@ -174,6 +200,14 @@ pub fn open(p: &Path, a: Access) -> io::Result<VFile> {
         }
         let (iso, e) = iso_entry(p).ok_or_else(not_found)?;
         return Ok(VFile::Iso { iso, entry: e, pos: 0 });
+    }
+    if !a.create
+        && let Some(data) = builtin(p)
+    {
+        if a.write {
+            return Err(read_only());
+        }
+        return Ok(VFile::Builtin { data, pos: 0 });
     }
     let mut o = fs::OpenOptions::new();
     o.read(a.read).write(a.write || a.create);
@@ -212,6 +246,8 @@ pub fn set_readonly(p: &Path, on: bool) -> io::Result<()> {
 pub enum VFile {
     Host(fs::File),
     Iso { iso: Arc<IsoFs>, entry: Entry, pos: u64 },
+    /// Fichier fourni par Bare86 (`BUILTIN`).
+    Builtin { data: &'static [u8], pos: u64 },
 }
 
 impl VFile {
@@ -219,20 +255,21 @@ impl VFile {
         match self {
             VFile::Host(f) => f.metadata().map(|m| Meta::host(&m)),
             VFile::Iso { entry, .. } => Ok(Meta::iso(entry)),
+            VFile::Builtin { data, .. } => Ok(Meta::builtin(data)),
         }
     }
 
     pub fn set_len(&self, len: u64) -> io::Result<()> {
         match self {
             VFile::Host(f) => f.set_len(len),
-            VFile::Iso { .. } => Err(read_only()),
+            VFile::Iso { .. } | VFile::Builtin { .. } => Err(read_only()),
         }
     }
 
     pub fn set_modified(&self, t: SystemTime) -> io::Result<()> {
         match self {
             VFile::Host(f) => f.set_modified(t),
-            VFile::Iso { .. } => Err(read_only()),
+            VFile::Iso { .. } | VFile::Builtin { .. } => Err(read_only()),
         }
     }
 }
@@ -246,6 +283,13 @@ impl Read for VFile {
                 *pos += n as u64;
                 Ok(n)
             }
+            VFile::Builtin { data, pos } => {
+                let rest = data.get(*pos as usize..).unwrap_or(&[]);
+                let n = rest.len().min(buf.len());
+                buf[..n].copy_from_slice(&rest[..n]);
+                *pos += n as u64;
+                Ok(n)
+            }
         }
     }
 }
@@ -254,14 +298,14 @@ impl Write for VFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
             VFile::Host(f) => f.write(buf),
-            VFile::Iso { .. } => Err(read_only()),
+            VFile::Iso { .. } | VFile::Builtin { .. } => Err(read_only()),
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
             VFile::Host(f) => f.flush(),
-            VFile::Iso { .. } => Ok(()),
+            VFile::Iso { .. } | VFile::Builtin { .. } => Ok(()),
         }
     }
 }
@@ -270,14 +314,19 @@ impl Seek for VFile {
     fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
         match self {
             VFile::Host(f) => f.seek(from),
-            VFile::Iso { entry, pos, .. } => {
+            VFile::Iso { .. } | VFile::Builtin { .. } => {
+                let (pos, len) = match self {
+                    VFile::Iso { entry, pos, .. } => (pos, u64::from(entry.len)),
+                    VFile::Builtin { data, pos } => (pos, data.len() as u64),
+                    VFile::Host(_) => unreachable!(),
+                };
                 let base = match from {
                     SeekFrom::Start(o) => {
                         *pos = o;
                         return Ok(o);
                     }
                     SeekFrom::Current(d) => (*pos as i64).checked_add(d),
-                    SeekFrom::End(d) => i64::from(entry.len).checked_add(d),
+                    SeekFrom::End(d) => (len as i64).checked_add(d),
                 };
                 match base {
                     Some(n) if n >= 0 => {
@@ -288,5 +337,32 @@ impl Seek for VFile {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod builtin_tests {
+    use super::*;
+
+    /// La glide2x.dll de Bare86 est vue là où l'hôte n'en a pas, en lecture
+    /// seule ; un vrai fichier du même nom reste prioritaire.
+    #[test]
+    fn builtin_file_where_missing() {
+        let dir = std::env::temp_dir().join(format!("bare86-builtin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("GLIDE2X.DLL");
+        let size = include_bytes!("../../guest/glide2x/glide2x.dll").len() as u64;
+        assert_eq!(metadata(&p).unwrap().len(), size);
+        let mut f = open(&p, Access { read: true, write: false, create: false }).unwrap();
+        let mut head = [0u8; 2];
+        f.read_exact(&mut head).unwrap();
+        assert_eq!(&head, b"MZ");
+        assert!(open(&p, Access { read: true, write: true, create: false }).is_err());
+        assert!(!exists(&dir.join("absent").join("glide2x.dll")));
+        assert!(read_dir(&dir).unwrap().is_empty());
+        fs::write(dir.join("glide2x.dll"), b"x").unwrap();
+        assert_eq!(metadata(&dir.join("glide2x.dll")).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

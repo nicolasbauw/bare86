@@ -58,8 +58,10 @@ difference is under the hood, and shows with demanding late-90s games.
   `glide2x.dll` (`guest/glide2x/`, prebuilt) passes the Glide 2 calls of a
   Win32 game to the host, which replays them with OpenGL (offscreen, through
   EGL) and shows the result instead of the VGA picture, like a Voodoo card's
-  VGA pass-through. No Voodoo hardware is emulated. Copy `glide2x.dll` next to
-  the game: the Quake II demo then runs with its 3dfx MiniGL driver
+  VGA pass-through. No Voodoo hardware is emulated. The built-in DOS shows
+  this DLL in every directory that has no `glide2x.dll` of its own (a real
+  file wins), so games find it without copying anything: the Quake II demo
+  runs with its 3dfx MiniGL driver
   (`+set vid_ref gl +set gl_driver 3dfxgl`), at about 875 frames/s in its
   timedemo against 634 with the software renderer.
 - **Or a real DOS.** Boot FreeDOS (tested with 1.3, JEMMEX included) or another

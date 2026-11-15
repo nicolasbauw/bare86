@@ -249,7 +249,12 @@ impl Drives {
         let dir = self.host_dir(drive, parents)?;
         Ok(match list(&dir).into_iter().find(|e| &e.short == last) {
             Some(e) => Target::Path { host: e.host, exists: true, dos },
-            None => Target::Path { host: dir.join(String::from_utf8_lossy(last).as_ref()), exists: false, dos },
+            None => {
+                let host = dir.join(String::from_utf8_lossy(last).as_ref());
+                // Absent de l'hôte : peut-être un fichier fourni par Bare86.
+                let exists = vfs::is_file(&host);
+                Target::Path { host, exists, dos }
+            }
         })
     }
 
@@ -347,7 +352,9 @@ impl Drives {
             }
             None => {
                 shorts.push(last.to_ascii_uppercase());
-                Target::Path { host: dir.join(String::from_utf8_lossy(last).as_ref()), exists: false, dos: canonical(drive, &shorts) }
+                let host = dir.join(String::from_utf8_lossy(last).as_ref());
+                let exists = vfs::is_file(&host);
+                Target::Path { host, exists, dos: canonical(drive, &shorts) }
             }
         })
     }
