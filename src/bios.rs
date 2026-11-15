@@ -93,9 +93,43 @@ const VBE_OEM: u16 = 0xE8E0;
 const VBE_VENDOR: u16 = 0xE8F0;
 const VBE_PRODUCT: u16 = 0xE900;
 const VBE_REVISION: u16 = 0xE910;
-const VBE_MODES: u16 = 0xE918;
+/// Liste des modes VBE (écrite par `install_rom`, terminée par FFFFh).
+const VBE_MODES: u16 = 0xEA00;
 
-/// Mode VBE de la liste (même ordre que `vbe_modes` dans asm/bios.S).
+/// Modes VBE : numéro, largeur, hauteur, bits par point. Numéros de VBE 1.2
+/// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
+/// parcourent la liste et lisent les caractéristiques de chaque mode) : 32 bits
+/// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2).
+const VBE_MODE_LIST: [(u16, usize, usize, usize); 26] = [
+    (0x100, 640, 400, 8),
+    (0x101, 640, 480, 8),
+    (0x103, 800, 600, 8),
+    (0x105, 1024, 768, 8),
+    (0x10D, 320, 200, 15),
+    (0x10E, 320, 200, 16),
+    (0x10F, 320, 200, 24),
+    (0x110, 640, 480, 15),
+    (0x111, 640, 480, 16),
+    (0x112, 640, 480, 24),
+    (0x113, 800, 600, 15),
+    (0x114, 800, 600, 16),
+    (0x115, 800, 600, 24),
+    (0x116, 1024, 768, 15),
+    (0x117, 1024, 768, 16),
+    (0x118, 1024, 768, 24),
+    (0x120, 320, 200, 32),
+    (0x121, 640, 480, 32),
+    (0x122, 800, 600, 32),
+    (0x123, 1024, 768, 32),
+    (0x124, 512, 384, 8),
+    (0x125, 512, 384, 15),
+    (0x126, 512, 384, 16),
+    (0x127, 512, 384, 32),
+    (0x128, 320, 240, 8),
+    (0x129, 320, 240, 32),
+];
+
+/// Mode VBE de la liste.
 struct VbeMode {
     mode: u16,
     width: usize,
@@ -110,23 +144,7 @@ impl VbeMode {
 }
 
 fn vbe_mode(mode: u16) -> Option<VbeMode> {
-    let (width, height, bpp) = match mode {
-        0x100 => (640, 400, 8),
-        0x101 => (640, 480, 8),
-        0x103 => (800, 600, 8),
-        0x105 => (1024, 768, 8),
-        0x110 => (640, 480, 15),
-        0x111 => (640, 480, 16),
-        0x112 => (640, 480, 24),
-        0x113 => (800, 600, 15),
-        0x114 => (800, 600, 16),
-        0x115 => (800, 600, 24),
-        0x116 => (1024, 768, 15),
-        0x117 => (1024, 768, 16),
-        0x118 => (1024, 768, 24),
-        _ => return None,
-    };
-    Some(VbeMode { mode, width, height, bpp })
+    VBE_MODE_LIST.iter().find(|m| m.0 == mode).map(|&(mode, width, height, bpp)| VbeMode { mode, width, height, bpp })
 }
 
 /// Bloc d'information d'un mode (INT 10h AX=4F01h), 256 octets.
@@ -153,6 +171,7 @@ fn write_mode_info(mem: &GuestMem, at: usize, m: &VbeMode, lfb: bool) {
         15 => [5, 10, 5, 5, 5, 0, 1, 15],
         16 => [5, 11, 6, 5, 5, 0, 0, 0],
         24 => [8, 16, 8, 8, 8, 0, 0, 0],
+        32 => [8, 16, 8, 8, 8, 0, 8, 24],
         _ => [0; 8],
     };
     mem.write(at + 0x1F, &masks);
@@ -173,6 +192,11 @@ pub fn install_rom(mem: &GuestMem) {
     mem.write(ROM.start + usize::from(FONT_8X16), crate::font::BUILTIN);
     mem.write(ROM.start + usize::from(FONT_8X14), &crate::font::builtin_8x14());
     mem.write_u8(ROM.start + usize::from(FONT_ALT_EMPTY), 0);
+    let modes = ROM.start + usize::from(VBE_MODES);
+    for (i, m) in VBE_MODE_LIST.iter().enumerate() {
+        mem.write_u16(modes + 2 * i, m.0);
+    }
+    mem.write_u16(modes + 2 * VBE_MODE_LIST.len(), 0xFFFF);
     let set = |n: u16, off: u16| {
         mem.write_u16(usize::from(n) * 4, off);
         mem.write_u16(usize::from(n) * 4 + 2, ROM_SEG);

@@ -1,5 +1,5 @@
 # VBE 2.0 : bloc d'information, informations du mode 101h, passage en
-# 640×480×8, banques par INT 10h et par la fonction de fenêtre (appel
+# 640×480×8 (et la liste, le mode 32 bits 121h), banques par INT 10h et par la fonction de fenêtre (appel
 # lointain), relecture. Code de sortie : 0, ou n° du contrôle en échec.
     .code16
     .intel_syntax noprefix
@@ -14,6 +14,29 @@
     cmp dword ptr [info], 0x41534556
     jne fail
     cmp word ptr [info + 4], 0x0200
+    jne fail
+    push es                       # 8. liste des modes : 127h (512×384×32) présent
+    les si, [info + 14]
+    mov di, 8
+1:  mov ax, es:[si]
+    add si, 2
+    cmp ax, 0xFFFF
+    je fail_es
+    cmp ax, 0x127
+    jne 1b
+    pop es
+    mov ax, 0x4F01                # 9. mode 121h : 640×480×32, ligne de 2560 octets,
+    mov cx, 0x121                 #    octet réservé en 24..31
+    mov di, offset info
+    int 0x10
+    mov di, 9
+    cmp ax, 0x004F
+    jne fail
+    cmp byte ptr [info + 0x19], 32
+    jne fail
+    cmp word ptr [info + 0x10], 2560
+    jne fail
+    cmp word ptr [info + 0x25], 0x1808
     jne fail
     mov ax, 0x4F01                # 2. mode 101h : 640×480, 8 bits, LFB
     mov cx, 0x101

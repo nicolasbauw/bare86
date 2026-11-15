@@ -131,11 +131,6 @@ vbe_product:
     .org 0xE910, 0xFF
 vbe_revision:
     .asciz "0.1"
-    .org 0xE918, 0xFF
-vbe_modes:
-    .word 0x100, 0x101, 0x103, 0x105
-    .word 0x110, 0x111, 0x112, 0x113, 0x114, 0x115, 0x116, 0x117, 0x118
-    .word 0xFFFF
 
     # Souris PS/2 (INT 15h AX=C2xxh) : routine du pilote (déposée par l'hôte)
     # et INT 74h (IRQ 12), qui demande un paquet à l'hôte (AX ≠ 0 : état en
@@ -183,6 +178,12 @@ int09:
     out 0x20, al
     pop ax
     iret
+
+    # Liste des modes VBE (INT 10h AX=4F00h), écrite par l'hôte depuis
+    # `bios::VBE_MODE_LIST` : place réservée (64 modes et la fin).
+    .org 0xEA00, 0xFF
+vbe_modes:
+    .fill 130, 1, 0xFF
 
     # Table des paramètres de disquette (vecteur 1Eh, INT 13h AH=08h), à son
     # adresse traditionnelle : 1,44 Mo, 18 secteurs par piste.

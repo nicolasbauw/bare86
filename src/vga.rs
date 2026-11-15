@@ -830,10 +830,11 @@ mod tests {
             }
         };
         // (bpp, octets du point 1, couleur attendue en 0xRRGGBB)
-        let cases: [(usize, &[u8], u32); 3] = [
+        let cases: [(usize, &[u8], u32); 4] = [
             (15, &[0x00, 0x7C], 0xFF0000), // rouge 5:5:5
             (16, &[0xE0, 0x07], 0x00FF00), // vert 5:6:5
-            (24, &[0xFF, 0x00, 0x00], 0x0000FF), // bleu, ordre B, V, R
+            (32, &[0x00, 0x80, 0xFF, 0x77], 0xFF8000), // B, V, R, octet réservé ignoré
+            (24, &[0xFF, 0x00, 0x00], 0x0000FF), // bleu, ordre B, V, R (en dernier : suite du test)
         ];
         for (bpp, bytes, want) in cases {
             let mode = Vbe { mode: 0x111, width: 640, height: 480, bpp, pitch: 640 * bpp.div_ceil(8), start: 0, bank: 0, lfb: false };

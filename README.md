@@ -58,7 +58,8 @@ difference is under the hood, and shows with demanding late-90s games.
   DOS from floppy and hard disk images, with its own drivers.
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
   modes), SVGA through VESA VBE 2.0 with a linear framebuffer (or VBE 1.2 with
-  banked windows). Text mode uses the built-in Terminus 8×16 font. The window
+  banked windows): 320×200 to 1024×768 in 8, 15, 16, 24 and 32 bits per pixel,
+  plus 320×240 and 512×384. Text mode uses the built-in Terminus 8×16 font. The window
   keeps a 4:3 aspect ratio with sharp scaling.
 - **Sound.** Sound Blaster 16 (DSP 4.05, 8- and 16-bit DMA, mixer) at 220h,
   IRQ 5, DMA 1 and 5, with the `BLASTER` variable set, a Sound Blaster Pro
