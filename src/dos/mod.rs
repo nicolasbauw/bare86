@@ -365,7 +365,20 @@ impl Dos {
         let parent = self.current_psp;
         let parent_env = if env_param != 0 { env_param } else { mem.read_u16(psp_addr(parent, psp::ENV)) };
         // Programme Win32 : lancé par le chargeur PE de HX DOS Extender.
-        let win32 = win32::loader_for(image, self.short_name(path), tail, &self.env_path(mem, parent_env), |p| self.read_program(p).ok());
+        let mut win32 = win32::loader_for(image, self.short_name(path), tail, &self.env_path(mem, parent_env), |p| self.read_program(p).ok());
+        // HX absent du jeu : celui de Bare86, téléchargé au besoin, monté en Z:.
+        if win32.is_none() && win32::is_win32(image) && self.drives.root(win32::HX_DRIVE).is_none() {
+            match crate::runtime::hx_dir_or_install() {
+                Ok(dir) => {
+                    self.drives.mount(win32::HX_DRIVE, dir);
+                    win32 = win32::loader_for(image, self.short_name(path), tail, &self.env_path(mem, parent_env), |p| self.read_program(p).ok());
+                }
+                Err(e) => eprintln!("[win32] HX DOS Extender: {e}"),
+            }
+        }
+        if win32.is_none() && win32::is_win32(image) {
+            eprintln!("[win32] {}: Windows program; HX DOS Extender not found", String::from_utf8_lossy(path));
+        }
         let (image, path, tail) = match &win32 {
             Some(l) => (&l.image[..], &l.path[..], &l.tail[..]),
             None => (image, path, tail),

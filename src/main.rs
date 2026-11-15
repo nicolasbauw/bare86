@@ -39,6 +39,7 @@ mod pic;
 mod pit;
 mod render;
 mod rtc;
+mod runtime;
 mod sb16;
 mod sdl;
 mod term;

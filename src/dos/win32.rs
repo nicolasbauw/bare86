@@ -7,8 +7,11 @@
 //! leur stub ferait de même, mais sans pouvoir compléter le PATH. Un PE à
 //! stub inconnu (programme DOS à extendeur intégré, WDOSX) tourne tel quel.
 
-/// Répertoire de HX essayé après ceux du PATH.
-const DEFAULT_DIR: &[u8] = b"C:\\HX\\BIN";
+/// Répertoires de HX essayés après ceux du PATH : celui du jeu, puis celui
+/// que Bare86 installe et monte en Z: (`runtime::hx_dir`).
+const DEFAULT_DIRS: [&[u8]; 2] = [b"C:\\HX\\BIN", b"Z:\\BIN"];
+/// Lecteur où Bare86 monte son HX.
+pub const HX_DRIVE: u8 = 25;
 const LOADER: &[u8] = b"DPMILD32.EXE";
 
 /// Chargeur à lancer à la place du programme.
@@ -38,7 +41,7 @@ pub fn is_win32(image: &[u8]) -> bool {
 }
 
 /// Chargeur de HX pour `image` (chemin DOS `path`, arguments `tail`), cherché
-/// dans les répertoires de `path_var` puis dans `C:\HX\BIN` ; `read` rend le
+/// dans les répertoires de `path_var` puis dans `C:\HX\BIN` et `Z:\BIN` ; `read` rend le
 /// contenu et le chemin canonique d'un fichier. `None` : pas un PE pour
 /// Windows, ou HX introuvable (le stub du programme s'exécute alors).
 pub fn loader_for(
@@ -51,7 +54,7 @@ pub fn loader_for(
     if !is_win32(image) {
         return None;
     }
-    let dirs = path_var.split(|&c| c == b';').map(<[u8]>::trim_ascii).filter(|d| !d.is_empty()).chain([DEFAULT_DIR]);
+    let dirs = path_var.split(|&c| c == b';').map(<[u8]>::trim_ascii).filter(|d| !d.is_empty()).chain(DEFAULT_DIRS);
     for dir in dirs {
         let dir = dir.strip_suffix(b"\\").unwrap_or(dir);
         if let Some((image, path_found)) = read(&[dir, b"\\", LOADER].concat()) {
@@ -69,7 +72,6 @@ pub fn loader_for(
             return Some(Loader { image, path: path_found, tail: line, dir });
         }
     }
-    eprintln!("[win32] {}: Windows program; HX DOS Extender not found (PATH, C:\\HX\\BIN)", String::from_utf8_lossy(path));
     None
 }
 

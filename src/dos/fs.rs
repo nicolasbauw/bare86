@@ -155,6 +155,11 @@ impl Drives {
         Self { roots: Default::default(), cwd: Default::default(), current: 2 }
     }
 
+    /// Racine hôte d'un lecteur monté.
+    pub fn root(&self, drive: u8) -> Option<&PathBuf> {
+        self.roots.get(usize::from(drive))?.as_ref()
+    }
+
     pub fn mount(&mut self, drive: u8, root: PathBuf) {
         self.roots[usize::from(drive)] = Some(root);
         self.cwd[usize::from(drive)].clear();

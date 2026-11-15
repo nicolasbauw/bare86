@@ -46,11 +46,14 @@ difference is under the hood, and shows with demanding late-90s games.
   games work: DOS/4GW, DOS/32A, PMODE/W, CWSDPMI (DJGPP). Long file names are
   supported (the Windows 95 API, INT 21h AX=71xxh): a host file keeps its name,
   and DOS programs that only know 8.3 names see a short alias (`LONGFI~1.TXT`).
-- **Some Windows programs, through HX DOS Extender.** With Japheth's
-  [HX DOS Extender](https://github.com/Baron-von-Riedesel/HX) (freeware; the
-  HXRT and HXGUI packages unpacked in `C:\HX`, or in a directory of the
-  `PATH`), the built-in DOS runs Win32 programs by name: console programs, and
-  part of the games using DirectDraw, DirectSound and GDI. The Quake II demo
+- **Some Windows programs, through HX DOS Extender.** The built-in DOS runs
+  Win32 programs by name with Japheth's
+  [HX DOS Extender](https://github.com/Baron-von-Riedesel/HX) (freeware, free
+  to redistribute): console programs, and part of the games using DirectDraw,
+  DirectSound and GDI. HX is taken from the game's `PATH` or `C:\HX`; if there
+  is none, Bare86 downloads the official HXRT and HXGUI 2.23 archives once
+  (with `curl`, SHA-256 checked) into `~/.local/share/bare86/HX` and shows it
+  as drive Z:. The Quake II demo
   runs full screen at 640×480 (`--mem 64`; it also needs HX's dummy
   `UNSUPP\WSOCK32.DLL` copied next to `quake2.exe`). There is no Windows
   itself: no Windows 95/98 desktop, no Direct3D.
