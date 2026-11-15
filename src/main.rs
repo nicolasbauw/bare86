@@ -15,6 +15,7 @@ mod dos;
 mod ems;
 mod font;
 mod gameport;
+mod glide;
 mod hle;
 mod host;
 mod ide;

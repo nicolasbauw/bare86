@@ -409,6 +409,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Script en attente d'un texte à l'écran (`{until:…}`), et dernier examen.
     until_text: Option<(String, Instant)>,
     font: Option<crate::font::Font>,
+    /// Glide (3dfx) servi par l'hôte, créé au premier appel de la DLL.
+    glide: std::cell::RefCell<Option<Box<crate::glide::Glide>>>,
     started: Instant,
     limit: Option<Duration>,
     last_frame: Option<Instant>,
@@ -616,6 +618,7 @@ impl<B: Backend> Pc<B> {
             polled_after_drain: false,
             last_render: None,
             font: None,
+            glide: std::cell::RefCell::new(None),
             started: Instant::now(),
             limit: cfg.limit,
             last_frame: None,
@@ -1175,6 +1178,7 @@ impl<B: Backend> Pc<B> {
             }
             self.stats.exits += 1;
             let mut host_call = false;
+            let mut glide_call = false;
             let mut mmio = false;
             // Sortie sur un port de périphérique très sollicité (carte réseau) :
             // les accès suivants sont servis en rafale par l'interpréteur.
@@ -1184,6 +1188,7 @@ impl<B: Backend> Pc<B> {
             let mut plane_read = false;
             match self.vm.run()? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
+                Exit::IoOut { port: crate::glide::proto::PORT, .. } => glide_call = true,
                 Exit::IoOut { port: HOST_KBD_PORT, data, .. } => {
                     let code = data[0];
                     self.bios.scancode(self.vm.mem(), code);
@@ -1294,6 +1299,9 @@ impl<B: Backend> Pc<B> {
                     t.credit(burst.instructions);
                 }
             }
+            if glide_call {
+                self.glide_call()?;
+            }
             if host_call && let Some(code) = self.host_call()? {
                 return Ok(Event::Exit(code));
             }
@@ -1337,6 +1345,33 @@ impl<B: Backend> Pc<B> {
 
     /// Sortie sur le port d'appel hôte. Vrai appel seulement depuis un stub
     /// de la ROM ; sinon le programme a simplement écrit sur le port E0h.
+    /// Appel de la `glide2x.dll` de Bare86 (`glide::proto`) : EBX = tampon de
+    /// commandes (dans DS), ECX = sa longueur ; EAX = valeur rendue.
+    fn glide_call(&mut self) -> Result<()> {
+        let mut cpu = self.vm.state()?;
+        let ds = cpu.seg[3].base;
+        let len = (cpu.gpr[1] as usize).min(16 << 20) & !3;
+        let mut bytes = vec![0u8; len];
+        let mem = self.vm.mem();
+        let ret = if interp::read_linear(&cpu, mem, ds.wrapping_add(cpu.gpr[3]), &mut bytes) {
+            let words: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let mut glide = self.glide.borrow_mut();
+            let g = glide.get_or_insert_with(|| Box::new(crate::glide::Glide::new()));
+            let mut read = |at: u32, buf: &mut [u8]| {
+                interp::read_linear(&cpu, mem, ds.wrapping_add(at), buf);
+            };
+            let mut write = |at: u32, data: &[u8]| {
+                interp::write_linear(&cpu, mem, ds.wrapping_add(at), data);
+            };
+            g.execute(&words, &mut read, &mut write)
+        } else {
+            0
+        };
+        cpu.gpr[0] = ret;
+        self.vm.set_state(&cpu)?;
+        Ok(())
+    }
+
     fn host_call(&mut self) -> Result<Option<u8>> {
         let mut cpu = self.vm.state()?;
         let xms_entry = (u32::from(bios::XMS_ENTRY)..u32::from(bios::XMS_ENTRY) + 16).contains(&cpu.ip);
@@ -1587,6 +1622,12 @@ impl<B: Backend> Pc<B> {
 
     /// Image de l'écran : mode graphique, ou texte si une police est chargée.
     pub fn frame(&self) -> Option<(usize, usize, Vec<u32>)> {
+        // Glide ouvert : son image remplace celle de la VGA (relais de la Voodoo).
+        if let Some(g) = self.glide.borrow_mut().as_mut()
+            && let Some(f) = g.frame()
+        {
+            return Some(f);
+        }
         frame_of(&self.vga.borrow(), self.vm.mem(), self.font.as_ref(), self.started)
     }
 

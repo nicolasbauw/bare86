@@ -54,6 +54,14 @@ difference is under the hood, and shows with demanding late-90s games.
   runs full screen at 640×480 (`--mem 64`; it also needs HX's dummy
   `UNSUPP\WSOCK32.DLL` copied next to `quake2.exe`). There is no Windows
   itself: no Windows 95/98 desktop, no Direct3D.
+- **3dfx Glide, drawn by the host's graphics card.** Bare86's own
+  `glide2x.dll` (`guest/glide2x/`, prebuilt) passes the Glide 2 calls of a
+  Win32 game to the host, which replays them with OpenGL (offscreen, through
+  EGL) and shows the result instead of the VGA picture, like a Voodoo card's
+  VGA pass-through. No Voodoo hardware is emulated. Copy `glide2x.dll` next to
+  the game: the Quake II demo then runs with its 3dfx MiniGL driver
+  (`+set vid_ref gl +set gl_driver 3dfxgl`), at about 875 frames/s in its
+  timedemo against 634 with the software renderer.
 - **Or a real DOS.** Boot FreeDOS (tested with 1.3, JEMMEX included) or another
   DOS from floppy and hard disk images, with its own drivers.
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
@@ -120,6 +128,10 @@ cargo build --release
 
 The executable is `target/release/bare86`. `cargo test --release` runs the test
 suite (it needs `/dev/kvm`).
+
+The DLLs that run inside the guest (`guest/`, such as `glide2x.dll`) are
+prebuilt and committed; rebuilding them needs `clang` and `lld`
+(`guest/glide2x/build.sh`).
 
 ## Quick start
 
@@ -368,8 +380,7 @@ key. `--limit` stops a run that hangs.
 Bare86 is young and under active development. What works is listed above;
 among what does not, yet:
 
-- Linux x86-64 hosts only. Windows (WHPX) and Intel macOS hosts are planned
-  behind the same virtual machine interface; Apple silicon is out of scope.
+- Linux x86-64 hosts only. Windows and Intel macOS hosts are not planned.
 - No IPX network for multiplayer games yet.
 - Under FreeDOS, a CD changed while running is not seen by the UDVD2 and
   SHSUCDX drivers (the built-in DOS sees it).

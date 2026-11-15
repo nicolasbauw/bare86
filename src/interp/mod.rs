@@ -214,6 +214,38 @@ impl Cpu {
     }
 }
 
+/// Lit `buf.len()` octets à l'adresse linéaire `lin` de l'invité, page par
+/// page à travers sa pagination ; `false` si une page est absente.
+pub fn read_linear(cpu: &Cpu, mem: &GuestMem, lin: u32, buf: &mut [u8]) -> bool {
+    let mut done = 0;
+    while done < buf.len() {
+        let at = lin.wrapping_add(done as u32);
+        let n = (0x1000 - (at & 0xFFF) as usize).min(buf.len() - done);
+        match exec::translate(cpu, mem, at, false, false) {
+            Some(p) if p as usize + n <= mem.size() => mem.read(p as usize, &mut buf[done..done + n]),
+            _ => return false,
+        }
+        done += n;
+    }
+    true
+}
+
+/// Écrit `data` à l'adresse linéaire `lin` de l'invité (pagination, bits A
+/// et D posés comme par le processeur) ; `false` si une page est absente.
+pub fn write_linear(cpu: &Cpu, mem: &GuestMem, lin: u32, data: &[u8]) -> bool {
+    let mut done = 0;
+    while done < data.len() {
+        let at = lin.wrapping_add(done as u32);
+        let n = (0x1000 - (at & 0xFFF) as usize).min(data.len() - done);
+        match exec::translate(cpu, mem, at, true, true) {
+            Some(p) if p as usize + n <= mem.size() => mem.write(p as usize, &data[done..done + n]),
+            _ => return false,
+        }
+        done += n;
+    }
+    true
+}
+
 /// Instruction décodée à CS:IP, avec l'indicateur d'adressage 32 bits
 /// (taille par défaut du segment de code, inversée par 67h).
 fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
