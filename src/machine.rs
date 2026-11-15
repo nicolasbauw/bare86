@@ -1016,6 +1016,13 @@ impl<B: Backend> Pc<B> {
         if self.ps2.take_irq() {
             self.pic.borrow_mut().raise(12);
         }
+        // Gestionnaire de l'INT 33h : IRQ 12 démasquée comme par un pilote
+        // souris PS/2, dès qu'un programme a installé sa routine.
+        if self.dos_hle && self.bios.mouse.take_irq() {
+            let mut pic = self.pic.borrow_mut();
+            pic.unmask(12);
+            pic.raise(12);
+        }
         let now = Instant::now();
         // Une touche reste enfoncée KEY_HOLD avant son relâchement : les jeux
         // qui lisent l'état du clavier à chaque image (Wolfenstein 3D) la voient.
@@ -1376,7 +1383,27 @@ impl<B: Backend> Pc<B> {
         let mut cpu = self.vm.state()?;
         let xms_entry = (u32::from(bios::XMS_ENTRY)..u32::from(bios::XMS_ENTRY) + 16).contains(&cpu.ip);
         let ps2_fetch = (u32::from(bios::PS2_FETCH)..u32::from(bios::PS2_FETCH) + 3).contains(&cpu.ip);
-        if cpu.seg[1].selector != ROM_SEG || (cpu.ip >= 0x1000 && !xms_entry && !ps2_fetch) {
+        let mouse33_fetch = (u32::from(bios::MOUSE33_FETCH)..u32::from(bios::MOUSE33_FETCH) + 3).contains(&cpu.ip);
+        if cpu.seg[1].selector != ROM_SEG || (cpu.ip >= 0x1000 && !xms_entry && !ps2_fetch && !mouse33_fetch) {
+            return Ok(None);
+        }
+        if mouse33_fetch {
+            let mut cpu = cpu;
+            match self.bios.mouse.user_event() {
+                Some(([ax, bx, cx, dx, si, di], (off, seg))) => {
+                    let at = bios::ROM.start + usize::from(bios::MOUSE33_HANDLER);
+                    self.vm.mem().write_u16(at, off);
+                    self.vm.mem().write_u16(at + 2, seg);
+                    cpu.set_w(AX, ax);
+                    cpu.set_w(crate::hle::BX, bx);
+                    cpu.set_w(crate::hle::CX, cx);
+                    cpu.set_w(crate::hle::DX, dx);
+                    cpu.set_w(crate::hle::SI, si);
+                    cpu.set_w(crate::hle::DI, di);
+                }
+                None => cpu.set_w(AX, 0),
+            }
+            self.vm.set_state(&cpu)?;
             return Ok(None);
         }
         if ps2_fetch {

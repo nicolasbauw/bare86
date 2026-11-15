@@ -140,28 +140,7 @@ ps2_handler:
     .word 0, 0
     .org 0xE940, 0xFF
 int74:
-    pusha
-    push ds
-    push es
-    xor ax, ax
-    .org 0xE948, 0x90
-ps2_fetch:
-    out HOST_CALL, al
-    test ax, ax
-    jz 1f
-    push bx
-    push cx
-    push dx
-    push 0
-    call dword ptr cs:[ps2_handler]
-    add sp, 8
-1:  mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
-    pop es
-    pop ds
-    popa
-    iret
+    jmp int74_body
 
     # INT 09h, IRQ 1 (adresse de l'IBM AT) : scancode lu au 8042, proposé à
     # INT 15h AH=4Fh, puis confié à l'hôte (port E1h) qui tient la BDA.
@@ -184,6 +163,47 @@ int09:
     .org 0xEA00, 0xFF
 vbe_modes:
     .fill 130, 1, 0xFF
+
+    # Suite de l'INT 74h (IRQ 12). Souris PS/2 du BIOS : paquet demandé à
+    # l'hôte (AX ≠ 0 : état en BX, X en CX, Y en DX), passé à la routine du
+    # pilote en pile (état, X, Y, 0). Pilote INT 33h intégré : événement
+    # demandé à l'hôte (AX = conditions ≠ 0, BX boutons, CX/DX position,
+    # SI/DI mickeys), gestionnaire de l'utilisateur appelé (adresse déposée
+    # par l'hôte en mouse33_handler).
+    .org 0xEAA0, 0xFF
+int74_body:
+    pusha
+    push ds
+    push es
+    xor ax, ax
+    .org 0xEAA8, 0x90
+ps2_fetch:
+    out HOST_CALL, al
+    test ax, ax
+    jz 1f
+    push bx
+    push cx
+    push dx
+    push 0
+    call dword ptr cs:[ps2_handler]
+    add sp, 8
+1:  xor ax, ax
+    .org 0xEAC0, 0x90
+mouse33_fetch:
+    out HOST_CALL, al
+    test ax, ax
+    jz 2f
+    call dword ptr cs:[mouse33_handler]
+2:  mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop es
+    pop ds
+    popa
+    iret
+    .org 0xEAE0, 0xFF
+mouse33_handler:
+    .word 0, 0
 
     # Table des paramètres de disquette (vecteur 1Eh, INT 13h AH=08h), à son
     # adresse traditionnelle : 1,44 Mo, 18 secteurs par piste.

@@ -2,8 +2,9 @@
 //! Pilote souris en HLE (INT 33h, compatible Microsoft 8.05) : position
 //! virtuelle (640 × 200 en texte et CGA), boutons, compteurs de mickeys,
 //! curseur texte (attribut inversé). Les mouvements arrivent de l'hôte
-//! (`event`). Le gestionnaire utilisateur (AX=000Ch) est enregistré mais
-//! pas encore appelé.
+//! (`event`). Le gestionnaire utilisateur (AX=000Ch, 0014h) est appelé par
+//! l'INT 74h de la ROM (IRQ 12) quand un événement de son masque survient
+//! (`take_irq`, `user_event`), comme le fait un pilote PS/2.
 
 use crate::hle::{AX, BX, CX, DX, ES, Flow, Regs};
 use crate::interp::Cpu;
@@ -37,6 +38,13 @@ pub struct Mouse {
     releases: [ButtonLog; 3],
     /// Gestionnaire utilisateur : masque d'événements, adresse.
     handler: (u16, u16, u16),
+    /// Événements survenus et pas encore remis au gestionnaire (bit 0
+    /// mouvement, 1/2 bouton gauche appuyé/relâché, 3/4 droit, 5/6 milieu).
+    pending: u16,
+    /// IRQ 12 levée, événement pas encore lu par la ROM.
+    in_flight: bool,
+    /// Mickeys cumulés (SI, DI du gestionnaire).
+    mickeys: (i32, i32),
     /// Cellule texte sous le curseur affiché, et son attribut d'origine.
     drawn: Option<(usize, u8)>,
 }
@@ -62,6 +70,9 @@ impl Mouse {
             presses: [ButtonLog::default(); 3],
             releases: [ButtonLog::default(); 3],
             handler: (0, 0, 0),
+            pending: 0,
+            in_flight: false,
+            mickeys: (0, 0),
             drawn: None,
         }
     }
@@ -75,6 +86,11 @@ impl Mouse {
     pub fn event(&mut self, mem: &GuestMem, dx: i32, dy: i32, buttons: u8) {
         self.motion.0 += dx;
         self.motion.1 += dy;
+        self.mickeys.0 += dx;
+        self.mickeys.1 += dy;
+        if dx != 0 || dy != 0 {
+            self.pending |= 1;
+        }
         let px = self.frac.0 + dx * 8;
         let py = self.frac.1 + dy * 8;
         self.x += px / self.ratio.0;
@@ -88,11 +104,35 @@ impl Mouse {
                 (1, 0) => &mut self.releases[b],
                 _ => continue,
             };
+            // Gauche, droit, milieu : appui puis relâchement, deux bits chacun.
+            self.pending |= 1 << (1 + 2 * b + usize::from(now == 0));
             log.count = log.count.wrapping_add(1);
             (log.x, log.y) = (self.x, self.y);
         }
         self.buttons = buttons;
         self.redraw(mem);
+    }
+
+    /// Un événement attendu par le gestionnaire utilisateur est arrivé :
+    /// vrai une fois par IRQ 12 à lever.
+    pub fn take_irq(&mut self) -> bool {
+        let (mask, off, seg) = self.handler;
+        let go = !self.in_flight && (off != 0 || seg != 0) && self.pending & mask != 0;
+        self.in_flight |= go;
+        go
+    }
+
+    /// Événement pour l'INT 74h de la ROM : (conditions, boutons, x, y,
+    /// mickeys x, mickeys y, adresse du gestionnaire), ou `None`.
+    pub fn user_event(&mut self) -> Option<([u16; 6], (u16, u16))> {
+        self.in_flight = false;
+        let (mask, off, seg) = self.handler;
+        let cond = std::mem::take(&mut self.pending) & mask;
+        if cond == 0 || (off == 0 && seg == 0) {
+            return None;
+        }
+        let regs = [cond, u16::from(self.buttons), self.x as u16, self.y as u16, self.mickeys.0 as u16, self.mickeys.1 as u16];
+        Some((regs, (off, seg)))
     }
 
     /// Bloc d'état lu par l'INT 33h de la ROM (AX=0003h sans sortie de VM).
@@ -262,6 +302,28 @@ impl Mouse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gestionnaire utilisateur (AX=000Ch) : IRQ 12 une fois par lot
+    /// d'événements de son masque, conditions et position remises à la ROM.
+    #[test]
+    fn user_handler_events() {
+        let mem = GuestMem::new(0x10_0000).unwrap();
+        let mut m = Mouse::new();
+        m.event(&mem, 8, 0, 0);
+        assert!(!m.take_irq(), "aucun gestionnaire");
+        m.handler = (0x02 | 0x04, 0x1234, 0x5678);
+        m.event(&mem, 8, 0, 0);
+        assert!(!m.take_irq(), "mouvement hors du masque");
+        m.event(&mem, 0, 0, 1);
+        assert!(m.take_irq());
+        assert!(!m.take_irq(), "déjà en vol");
+        let (regs, at) = m.user_event().unwrap();
+        assert_eq!((regs[0], regs[1], at), (0x02, 1, (0x1234, 0x5678)));
+        m.event(&mem, 0, 0, 0);
+        assert!(m.take_irq());
+        assert_eq!(m.user_event().unwrap().0[0], 0x04);
+        assert!(m.user_event().is_none());
+    }
 
     #[test]
     fn motion_and_buttons() {

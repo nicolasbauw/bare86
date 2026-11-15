@@ -89,7 +89,11 @@ pub const XMS_ENTRY: u16 = 0xE8A0;
 /// Souris PS/2 (asm/bios.S) : routine du pilote, INT 74h, appel hôte.
 pub const PS2_HANDLER: usize = 0xF_E938;
 const INT74: u16 = 0xE940;
-pub const PS2_FETCH: u16 = 0xE948;
+pub const PS2_FETCH: u16 = 0xEAA8;
+/// Demande d'événement du pilote INT 33h intégré, et adresse de son
+/// gestionnaire utilisateur (asm/bios.S).
+pub const MOUSE33_FETCH: u16 = 0xEAC0;
+pub const MOUSE33_HANDLER: u16 = 0xEAE0;
 /// VBE (asm/bios.S) : fonction de fenêtre, chaînes, liste des modes.
 const VBE_WIN_FUNC: u16 = 0xE8D0;
 const VBE_OEM: u16 = 0xE8E0;
