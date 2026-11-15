@@ -39,6 +39,9 @@ pub mod bda {
     pub const HARD_DISKS: usize = 0x475;
     pub const MEM_KB: usize = 0x413;
     pub const SHIFT: usize = 0x417;
+    /// État étendu du clavier (KB_FLAG_3) : bit 4 clavier MF2 présent, bit 1
+    /// dernier code reçu E0h.
+    pub const KB_FLAG_3: usize = 0x496;
     pub const KB_HEAD: usize = 0x41A;
     pub const KB_TAIL: usize = 0x41C;
     pub const VIDEO_MODE: usize = 0x449;
@@ -257,6 +260,7 @@ impl Bios {
         mem.write_u16(bda::KB_END, 0x3E);
         mem.write_u16(bda::KB_HEAD, 0x1E);
         mem.write_u16(bda::KB_TAIL, 0x1E);
+        mem.write_u8(bda::KB_FLAG_3, KBX);
         mem.write_u8(bda::EGA_MISC, 0x60);
         mem.write_u8(bda::EGA_SWITCHES, 0x09);
         mem.write_u8(bda::VGA_FLAGS, 0x11);
@@ -1004,6 +1008,11 @@ pub fn read_key(mem: &GuestMem) -> Option<u16> {
     Some(word)
 }
 
+/// KB_FLAG_3 : clavier MF2 (101/102 touches) installé.
+const KBX: u8 = 0x10;
+/// KB_FLAG_3 : le dernier code reçu était le préfixe E0h.
+const LC_E0: u8 = 0x02;
+
 /// Mot clavier vu par les fonctions « non étendues » (00h, 01h).
 fn classic(word: u16) -> u16 {
     if word as u8 == 0xE0 { word & 0xFF00 } else { word }
@@ -1015,9 +1024,11 @@ impl Bios {
     pub fn scancode(&mut self, mem: &GuestMem, code: u8) {
         if code == 0xE0 {
             self.e0 = true;
+            mem.write_u8(bda::KB_FLAG_3, mem.read_u8(bda::KB_FLAG_3) | LC_E0);
             return;
         }
         let extended = std::mem::take(&mut self.e0);
+        mem.write_u8(bda::KB_FLAG_3, mem.read_u8(bda::KB_FLAG_3) & !LC_E0);
         let scan = code & 0x7F;
         let make = code & 0x80 == 0;
         // Maj « fictives » ajoutées par le clavier autour des touches étendues.

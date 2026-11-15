@@ -215,8 +215,17 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
                 _ => Err(format!("unknown modifier: {m}")),
             })
             .collect::<Result<_, _>>()?;
+        // Flèches et pavé de navigation : touches étendues du clavier MF2
+        // (préfixe E0h), distinctes de leurs doubles du pavé numérique.
+        let extended = matches!(key.as_str(), "up" | "down" | "left" | "right" | "home" | "end" | "pgup" | "pgdn" | "ins" | "del");
         out.extend(mods.iter().map(|&m| Key(m)));
+        if extended {
+            out.push(Key(0xE0));
+        }
         out.push(Key(scan));
+        if extended {
+            out.push(Key(0xE0));
+        }
         out.push(Key(scan | 0x80));
         out.extend(mods.iter().rev().map(|&m| Key(m | 0x80)));
     }

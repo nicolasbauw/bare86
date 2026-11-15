@@ -20,6 +20,10 @@ pub struct Kbc {
     pending: Option<Pending>,
     /// Nouvel octet dans le tampon : IRQ 1 à lever.
     irq: bool,
+    /// Dernier octet lu : le registre de données le garde après la lecture
+    /// (tampon vide). Un gestionnaire d'IRQ 1 qui lit le port 60h puis passe
+    /// la main à l'INT 09h du BIOS (HX, beaucoup de jeux) compte dessus.
+    last: u8,
     /// Réinitialisation du processeur demandée (impulsion FEh, bit 0 du
     /// port de sortie ou du port 92h).
     pub reset: bool,
@@ -35,7 +39,7 @@ enum Pending {
 
 impl Kbc {
     pub fn new() -> Self {
-        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCD, pending: None, irq: false, reset: false }
+        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCD, pending: None, irq: false, last: 0, reset: false }
     }
 
     pub fn shared(self) -> Rc<RefCell<Self>> {
@@ -86,7 +90,8 @@ impl Kbc {
     }
 
     fn read_data(&mut self) -> u8 {
-        let b = self.out.pop_front().unwrap_or(0);
+        let Some(b) = self.out.pop_front() else { return self.last };
+        self.last = b;
         if !self.out.is_empty() {
             self.irq = true;
         }
@@ -211,5 +216,18 @@ mod tests {
         k.write_data(0xED);
         k.write_data(0x02);
         assert_eq!((k.read_data(), k.read_data()), (0xFA, 0xFA));
+    }
+
+    /// Le registre de données garde le dernier octet : un gestionnaire d'IRQ 1
+    /// qui lit le port 60h puis chaîne sur l'INT 09h du BIOS (HX) voit le
+    /// même scancode deux fois, préfixe E0h compris.
+    #[test]
+    fn data_survives_read() {
+        let mut k = Kbc::new();
+        k.feed(0xE0);
+        assert_eq!((k.read_data(), k.status() & 1), (0xE0, 0));
+        assert_eq!(k.read_data(), 0xE0);
+        k.feed(0x48);
+        assert_eq!((k.read_data(), k.read_data()), (0x48, 0x48));
     }
 }
