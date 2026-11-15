@@ -39,6 +39,9 @@ pub struct KvmVm {
     pub mem: GuestMem,
     vga_mapped: std::cell::Cell<bool>,
     single_step: bool,
+    /// Interruption confiée à KVM (KVM_INTERRUPT) que l'invité n'a pas encore
+    /// prise : KVM_RUN doit être exécuté avant toute autre injection.
+    injected: bool,
     /// Registres système à la création du vCPU (réinitialisation).
     reset_sregs: kvm_bindings::kvm_sregs,
 }
@@ -88,7 +91,7 @@ impl KvmVm {
         .map_err(|e| format!("MSR PAT : {e:?}"))?;
         vcpu.set_msrs(&pat)?;
         let reset_sregs = vcpu.get_sregs()?;
-        Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false, reset_sregs })
+        Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false, injected: false, reset_sregs })
     }
 
     /// Mappe `plane` (64 Ko) sur la fenêtre VGA, ou la démappe (`None`).
@@ -177,9 +180,21 @@ impl Backend for KvmVm {
             // KVM ne pose TF que si RIP est celui mémorisé par cet appel.
             self.arm_single_step()?;
         }
+        // Signal arrivé pendant le service de la sortie précédente : rendu
+        // comme s'il avait interrompu KVM_RUN. Pas avec une interruption
+        // injectée en attente : les champs de kvm_run (prêt à injecter) ne
+        // seraient pas remis à jour, et une seconde injection écraserait la
+        // première (IRQ 0 restée « en service » au PIC, sans gestionnaire :
+        // Doom privé de tics jusqu'à l'EOI d'une autre IRQ). Le signal reste
+        // alors noté, pour la sortie suivante.
+        if !self.injected && crate::timer::take_kick() {
+            return Ok(Exit::Interrupted);
+        }
         // Le mappage de kvm_run est fixe pour toute la vie du vCPU.
         let kvm_run: *const kvm_bindings::kvm_run = self.vcpu.get_kvm_run();
-        Ok(match self.vcpu.run() {
+        let r = self.vcpu.run();
+        self.injected = false;
+        Ok(match r {
             // kvm-ioctls ne rend pas la taille d'un accès : elle est relue
             // dans kvm_run.
             Ok(VcpuExit::IoOut(port, data)) => {
@@ -197,7 +212,10 @@ impl Backend for KvmVm {
             Ok(VcpuExit::Debug(_)) => Exit::Step,
             Ok(VcpuExit::Shutdown) => Exit::Shutdown,
             Ok(other) => Exit::Other(format!("{other:?}")),
-            Err(e) if e.errno() == libc::EINTR => Exit::Interrupted,
+            Err(e) if e.errno() == libc::EINTR => {
+                crate::timer::take_kick();
+                Exit::Interrupted
+            }
             Err(e) => return Err(e.into()),
         })
     }
@@ -259,6 +277,7 @@ impl Backend for KvmVm {
         if r != 0 {
             return Err(std::io::Error::last_os_error().into());
         }
+        self.injected = true;
         Ok(())
     }
 

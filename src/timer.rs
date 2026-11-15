@@ -6,9 +6,23 @@
 //! que d'une période.
 
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-extern "C" fn on_signal(_: libc::c_int) {}
+/// Signal arrivé et pas encore vu par la boucle du vCPU. Hors de `KVM_RUN`
+/// (pendant le service d'une sortie de VM), le signal n'interrompt rien : sans
+/// ce drapeau, la sonde d'attente active qui suit un réveil se perdait une
+/// fois sur quelques-unes, et le vCPU tournait à vide jusqu'au battement.
+static KICKED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_signal(_: libc::c_int) {
+    KICKED.store(true, Ordering::Relaxed);
+}
+
+/// Rend et efface le drapeau d'un signal reçu.
+pub fn take_kick() -> bool {
+    KICKED.swap(false, Ordering::Relaxed)
+}
 
 /// Signal du battement ; envoyé aussi par d'autres threads (réseau) pour
 /// faire sortir le vCPU de `KVM_RUN` sans attendre la période.
