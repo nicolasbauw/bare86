@@ -383,6 +383,66 @@ The `--keys` script types its text as is, and understands:
 The session ends once the script is typed and the program is waiting for a
 key. `--limit` stops a run that hangs.
 
+## Developer corner
+
+Notes for those who work on Bare86 itself. The design journal
+([docs/JOURNAL.md](docs/JOURNAL.md), in French) holds the reasoning,
+measurements and pitfalls behind each step.
+
+**Source map.** The guest code runs natively under KVM; everything else is
+software in `src/`:
+
+| Where | What |
+|---|---|
+| `kvm.rs`, `backend.rs`, `mem.rs`, `machine.rs` | Virtual machine, guest memory, main loop and VM exits |
+| `interp/` | Host x86 interpreter (iced-x86) that runs bursts of emulated video memory and port accesses without leaving the host |
+| `bios.rs`, `asm/bios.S`, `hle.rs` | BIOS ROM (GNU `as`, Intel syntax) and the common helpers of the services run by the host (BIOS, DOS) |
+| `dos/` | Built-in DOS: files, processes, long names, MSCDEX, shell, Win32 loading through HX |
+| `vga.rs`, `render.rs`, `sdl.rs`, `menu.rs`, `launcher.rs` | Video card, picture, window, in-game menu and launcher |
+| `sb16.rs`, `opl.rs`, `mpu401.rs`, `midisynth.rs`, `audio.rs` | Sound cards, FM, MIDI and mixing |
+| `pic.rs`, `pit.rs`, `dma.rs`, `kbc.rs`, `rtc.rs`, `ide.rs`, `ne2000.rs`, `net/`… | The rest of the PC |
+| `glide/` | Glide replayed with the host's OpenGL; its guest side is `guest/glide2x/` |
+
+**Tests.** `cargo test --release` (needs `/dev/kvm`; the OpenGL tests are
+skipped without an offscreen context, the CD tests without `xorriso`). The
+interpreter has a differential test: each random instruction is run both by
+the processor (KVM single step) and by the interpreter, then registers, flags
+and memory are compared:
+
+```sh
+DIFFTEST_CASES=100000 DIFFTEST_SEED=7 cargo test --release interpreter_matches_cpu -- --nocapture
+```
+
+`DIFFTEST_TRACE=1` prints every instruction compared.
+
+**Measuring.** Pin the process to the same cores (`taskset -c 0-3`): on hybrid
+processors, the small cores make random runs slower. Game benchmarks are
+noisy (±3 %): take the median of five runs. `--stats` gives the VM exit
+counters, `--no-interp` turns the interpreter off for comparison, and three
+micro-benchmarks from the feasibility study remain, each run alone without
+other options:
+
+| Option | Measures |
+|---|---|
+| `bare86 --bench` | Cost of a VM exit: I/O port, video memory access, and the same accesses coalesced or run by the interpreter |
+| `bare86 --throttle` | Accuracy of `--mips` from 1 to 500 MIPS, and the unthrottled speed |
+| `bare86 --remap` | Cost of mapping another VGA plane at A0000h (KVM slot recreated, or host view remapped) |
+
+**Glide.** The guest DLLs (`guest/glide2x/glide2x.dll` for Win32,
+`glide2x.ovl` for DOS/4GW) are built by `guest/glide2x/build.sh` (clang,
+lld, Python) and committed. The commands they send to the host are numbered
+in `src/glide/proto.rs` and `guest/glide2x/glide2x.c`, which must agree. A
+DOS game calling a Glide function that Bare86 lacks gets a terminal line
+`glide2x.ovl: _NAME@n is not implemented (ignored)`.
+
+**Tools** (`tools/`):
+
+| Tool | Use |
+|---|---|
+| `netbench.sh IMAGE MB [RUNS]` | Network throughput: a FreeDOS image downloads a file from a host HTTP server, timed from the `BARE86_NETLOG=1` TCP trace |
+| `is5x.py CABDIR DEST` | Extract InstallShield 5 cabinets that `unshield` cannot (some game demos) |
+| `terminus_cp437.py` | Rebuild the built-in font `fonts/terminus-cp437-8x16.bin` from Terminus |
+
 ## Status and limits
 
 Bare86 is young and under active development. What works is listed above;
