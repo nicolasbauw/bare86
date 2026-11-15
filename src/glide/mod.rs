@@ -238,6 +238,9 @@ pub struct Glide {
     last_swap: Option<Instant>,
     batch: Vec<f32>,
     batch_prim: Prim,
+    /// Table de correction gamma de la sortie vidéo (la Voodoo Graphics la
+    /// règle à 1,7 à l'ouverture), appliquée à l'image affichée seulement.
+    gamma: [u8; 256],
     /// État du dernier lot envoyé à OpenGL (évite de tout renvoyer).
     applied: bool,
     pub swaps: u64,
@@ -271,6 +274,7 @@ impl Glide {
             last_swap: None,
             batch: Vec::new(),
             batch_prim: Prim::Triangles,
+            gamma: gamma_table(1.7),
             applied: false,
             swaps: 0,
         }
@@ -287,6 +291,11 @@ impl Glide {
             let front = self.front;
             if let Some(g) = &mut self.gpu {
                 g.off.read(front, &mut self.frame);
+            }
+            let t = &self.gamma;
+            for p in &mut self.frame {
+                let c = |s: u32| u32::from(t[(*p >> s & 0xFF) as usize]) << s;
+                *p = c(16) | c(8) | c(0);
             }
             self.frame_dirty = false;
         }
@@ -345,6 +354,7 @@ impl Glide {
                 }
                 self.active = true;
                 self.frame_dirty = true;
+                self.gamma = gamma_table(1.7);
                 return u32::from(self.gpu.is_some());
             }
             WIN_CLOSE | SHUTDOWN => {
@@ -495,6 +505,10 @@ impl Glide {
             }
             LFB_READ => self.lfb_read(arg(0), arg(1) == 1, arg(2), arg(3) as usize, write),
             LFB_WRITE => self.lfb_write(arg(0), arg(1), arg(2) == 1, arg(3), arg(4) as usize, read),
+            GAMMA => {
+                self.gamma = gamma_table(f(0));
+                self.frame_dirty = true;
+            }
             FOG_GENERATE => {
                 let table = fog_table(arg(0), f(1), f(2));
                 write(arg(3), &table);
@@ -856,6 +870,12 @@ impl Glide {
             self.frame_dirty = true;
         }
     }
+}
+
+/// Correction gamma de la sortie vidéo : v' = 255 · (v / 255)^(1/γ).
+fn gamma_table(gamma: f32) -> [u8; 256] {
+    let g = if gamma.is_finite() && gamma > 0.05 { gamma } else { 1.0 };
+    std::array::from_fn(|i| ((i as f32 / 255.0).powf(1.0 / g) * 255.0).round() as u8)
 }
 
 /// Tables de brouillard de `guFogGenerateExp` (0), `Exp2` (1), `Linear` (2) :

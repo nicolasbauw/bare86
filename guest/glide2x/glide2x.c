@@ -28,6 +28,7 @@ enum {
     OP_TEX_MIPMAP, OP_TEX_SOURCE, OP_TEX_DOWNLOAD, OP_TEX_DOWNLOAD_PARTIAL,
     OP_TEX_TABLE, OP_TRIANGLE, OP_LINE, OP_POINT, OP_SAVE_STATE,
     OP_RESTORE_STATE, OP_LFB_READ, OP_LFB_WRITE, OP_FOG_GENERATE, OP_SHUTDOWN,
+    OP_GAMMA,
 };
 #define VERTEX_WORDS 11
 
@@ -234,7 +235,7 @@ API void grFogTable(const u8 *t) {
 API void grDitherMode(i32 m) { (void)m; }
 API void grChromakeyMode(i32 m) { (void)m; }
 API void grChromakeyValue(u32 v) { (void)v; }
-API void grGammaCorrectionValue(float g) { (void)g; }
+API void grGammaCorrectionValue(float g) { cmd1(OP_GAMMA, fbits(g)); }
 API void grDisableAllEffects(void) {
     grAlphaBlendFunction(4, 0, 4, 0);
     grAlphaTestFunction(7);

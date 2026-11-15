@@ -74,6 +74,8 @@ pub const LFB_WRITE: u16 = 38;
 /// la table de 64 octets que l'hôte remplit
 pub const FOG_GENERATE: u16 = 39;
 pub const SHUTDOWN: u16 = 40;
+/// correction gamma de la sortie vidéo (flottant) ; 1,7 à l'ouverture
+pub const GAMMA: u16 = 41;
 
 /// Sommet transmis : x, y, ooz, oow, r, g, b, a, sow, tow, oow (TMU 0).
 pub const VERTEX_WORDS: usize = 11;
