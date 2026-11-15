@@ -87,6 +87,9 @@ usage: bare86 [options] [program [arguments…]]
   --midi-bank N  FM instrument bank (default 58: Windows 9x FM synth);
                  --midi-bank list prints the banks
   --midi-out F.mid   record the MIDI music sent to the MPU-401
+  --set NAME=VALUE   environment variable for the built-in DOS (repeatable;
+                 in a profile, one \"set = NAME=VALUE\" line each), e.g.
+                 DPMILDR=16 for some Win32 programs under HX
   --mips N       throttle to N million instructions per second
   --mem MB       total memory in MB (default 16)
   --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
@@ -305,6 +308,13 @@ fn main() -> ExitCode {
                 }
                 None => {
                     eprintln!("--net-fwd: tcp:HOST:GUEST expected");
+                    return ExitCode::from(2);
+                }
+            },
+            "--set" => match args.next().as_deref().and_then(|v| v.split_once('=')) {
+                Some((name, value)) if !name.trim().is_empty() => cfg.env.push((name.trim().to_ascii_uppercase(), value.to_string())),
+                _ => {
+                    eprintln!("--set: NAME=VALUE expected");
                     return ExitCode::from(2);
                 }
             },

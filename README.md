@@ -159,6 +159,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--ems MB` | EMS memory in MB, in addition (default 4, 0 to 32) |
 | `--mips N` | Throttle to N million instructions per second (default: full speed) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
+| `--set NAME=VALUE` | Environment variable for the built-in DOS (repeatable; in a profile, one `set = NAME=VALUE` line each), e.g. `DPMILDR=16` for Heretic II under HX |
 | `--sb 16\|pro2\|pro1\|ess` | Sound card: Sound Blaster 16 (default), Sound Blaster Pro 2 (`pro` too: DSP 3.02, OPL3), Pro 1 (two OPL2 chips), or ESS AudioDrive ES1688 (Sound Blaster Pro compatible, ESS identification, ESFM FM: the aggressive, saturated FM sound of many cheap mid-90s PCs); the Creative Pro models filter their output like the real cards |
 | `--opl opl2\|dualopl2\|opl3\|cqm\|esfm` | FM chip, instead of the card's own: OPL2 (YM3812, AdLib and Sound Blaster 1.x/2.0), two OPL2, OPL3 (YMF262), Creative's CQM (Sound Blaster 16 Vibra and AWE64, with its metallic sound) or ESS's ESFM (AudioDrive cards); the last two are OPL3-compatible clones found on many cheap cards |
 | `--midi opl3\|off` | General MIDI music played on OPL3 FM chips (default), or not played |

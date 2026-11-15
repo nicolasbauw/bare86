@@ -110,6 +110,9 @@ pub struct Dos {
     cd: Option<mscdex::Mscdex>,
     /// Carte annoncée par `BLASTER` : Sound Blaster Pro (sinon SB16).
     pub sb_pro: bool,
+    /// Variables ajoutées à l'environnement maître (`--set NOM=VALEUR`),
+    /// prioritaires sur celles par défaut.
+    pub env: Vec<(String, String)>,
     /// Changements de disque demandés pendant que le shell attendait une ligne.
     pub pending_media: Vec<crate::host::InputEvent>,
     sft: Sft,
@@ -165,6 +168,7 @@ impl Dos {
             flushed: false,
             cd: None,
             sb_pro: false,
+            env: Vec::new(),
             pending_media: Vec::new(),
         }
     }
@@ -194,9 +198,29 @@ impl Dos {
         Ok(())
     }
 
-    /// Environnement maître : `BLASTER` selon la carte son.
-    fn master_env(&self) -> &'static [u8] {
-        if self.sb_pro { MASTER_ENV_PRO } else { MASTER_ENV_SB16 }
+    /// Environnement maître : `BLASTER` selon la carte son, puis les
+    /// variables de `--set` (une variable existante est remplacée). Ce qui ne
+    /// tient pas dans le bloc est laissé de côté, avec un avertissement.
+    fn master_env(&self) -> Vec<u8> {
+        let base = if self.sb_pro { MASTER_ENV_PRO } else { MASTER_ENV_SB16 };
+        let mut vars: Vec<Vec<u8>> = base.split(|&b| b == 0).filter(|v| !v.is_empty()).map(<[u8]>::to_vec).collect();
+        for (name, value) in &self.env {
+            let entry = format!("{name}={value}").into_bytes();
+            vars.retain(|v| !v.starts_with(format!("{name}=").as_bytes()));
+            let size: usize = vars.iter().map(|v| v.len() + 1).sum::<usize>() + entry.len() + 2;
+            if size > usize::from(MASTER_ENV_PARAS) * 16 {
+                eprintln!("[dos] environment full: {name} not set");
+                continue;
+            }
+            vars.push(entry);
+        }
+        let mut out = Vec::new();
+        for v in vars {
+            out.extend_from_slice(&v);
+            out.push(0);
+        }
+        out.push(0);
+        out
     }
 
     /// Étiquette de volume d'un lecteur (celle du CD).
@@ -244,7 +268,7 @@ impl Dos {
         memory::set_name(mem, root, b"COMMAND");
         let env = memory::alloc(mem, MASTER_ENV_PARAS, root, 0).expect("master environment");
         mem.fill(lin(env, 0), usize::from(MASTER_ENV_PARAS) * 16, 0);
-        mem.write(lin(env, 0), self.master_env());
+        mem.write(lin(env, 0), &self.master_env());
         let init = PspInit {
             parent: root,
             env,
@@ -309,7 +333,7 @@ impl Dos {
 
     /// Valeur de PATH dans le bloc d'environnement `env` (maître si 0).
     fn env_path(&self, mem: &GuestMem, env: u16) -> Vec<u8> {
-        let bytes = process::env_block(mem, env, self.master_env(), b"");
+        let bytes = process::env_block(mem, env, &self.master_env(), b"");
         bytes
             .split(|&c| c == 0)
             .take_while(|v| !v.is_empty())
@@ -347,7 +371,7 @@ impl Dos {
             None => (image, path, tail),
         };
         let exe = process::parse(image)?;
-        let mut env_bytes = process::env_block(mem, parent_env, self.master_env(), path);
+        let mut env_bytes = process::env_block(mem, parent_env, &self.master_env(), path);
         if let Some(l) = &win32 {
             env_bytes = win32::with_path_dir(&env_bytes, &l.dir);
         }
@@ -1586,6 +1610,22 @@ impl Dos {
 }
 
 /// Chaîne de MCB : (propriétaire, taille) de chaque bloc (tests).
+#[cfg(test)]
+mod env_tests {
+    #[test]
+    fn set_adds_and_replaces_variables() {
+        let mut dos = super::Dos::new();
+        dos.env = vec![("DPMILDR".into(), "16".into()), ("PATH".into(), "C:\\HX\\BIN".into())];
+        let env = dos.master_env();
+        let vars: Vec<&[u8]> = env.split(|&b| b == 0).filter(|v| !v.is_empty()).collect();
+        assert!(vars.contains(&&b"DPMILDR=16"[..]) && vars.contains(&&b"PATH=C:\\HX\\BIN"[..]), "{vars:?}");
+        assert_eq!(vars.iter().filter(|v| v.starts_with(b"PATH=")).count(), 1);
+        assert!(env.ends_with(&[0, 0]));
+        dos.env = vec![("BIG".into(), "x".repeat(600))];
+        assert!(!dos.master_env().windows(4).any(|w| w == b"BIG="));
+    }
+}
+
 #[cfg(test)]
 pub fn mcb_chain(mem: &GuestMem) -> Vec<(u16, u16)> {
     memory::chain(mem).expect("MCB chain").iter().map(|m| (m.owner, m.size)).collect()

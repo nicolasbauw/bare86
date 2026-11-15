@@ -140,6 +140,8 @@ pub struct Config {
     pub cdrom: Option<std::path::PathBuf>,
     /// Sound Blaster Pro au lieu de la SB16 (`--sb pro`).
     pub sb_pro: bool,
+    /// Variables d'environnement du DOS intégré (`--set`).
+    pub env: Vec<(String, String)>,
     /// ESS AudioDrive ES1688 (`--sb ess`) : compatible SB Pro, FM ESFM.
     pub sb_ess: bool,
     /// Puce FM : OPL3 (SB Pro 2, SB16), OPL2, double OPL2 (SB Pro 1).
@@ -152,7 +154,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -479,6 +481,7 @@ impl<B: Backend> Pc<B> {
         bios.install(vm.mem());
         let mut dos = dos::Dos::new();
         dos.sb_pro = cfg.sb_pro || cfg.sb_ess;
+        dos.env = cfg.env.clone();
         dos.boot(vm.mem());
         let throttle = cfg.mips.map(Throttle::new).transpose()?;
         let mut io = IoBus::default();
