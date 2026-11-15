@@ -57,7 +57,7 @@ impl TermScreen {
             if self.graphics != Some(mode) {
                 self.graphics = Some(mode);
                 self.shown = None;
-                s.push_str(&format!("\x1b[0m\x1b[2J\x1b[H[mode graphique {mode:02X}h : affichage à l'étape 5]"));
+                s.push_str(&format!("\x1b[0m\x1b[2J\x1b[H[graphics mode {mode:02X}h: not shown in the terminal]"));
                 write_out(&s);
             }
             return;

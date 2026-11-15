@@ -30,7 +30,7 @@ impl GuestMem {
     }
 
     pub fn write(&self, addr: usize, data: &[u8]) {
-        assert!(addr + data.len() <= self.size, "écriture hors mémoire invitée");
+        assert!(addr + data.len() <= self.size, "write outside guest memory");
         // SAFETY: bornes vérifiées ; le vCPU est arrêté pendant les accès hôte.
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.add(addr), data.len()) }
     }
@@ -44,13 +44,13 @@ impl GuestMem {
     }
 
     pub fn read(&self, addr: usize, buf: &mut [u8]) {
-        assert!(addr + buf.len() <= self.size, "lecture hors mémoire invitée");
+        assert!(addr + buf.len() <= self.size, "read outside guest memory");
         // SAFETY: bornes vérifiées ; le vCPU est arrêté pendant les accès hôte.
         unsafe { ptr::copy_nonoverlapping(self.ptr.add(addr), buf.as_mut_ptr(), buf.len()) }
     }
 
     pub fn read_u8(&self, addr: usize) -> u8 {
-        assert!(addr < self.size, "lecture hors mémoire invitée");
+        assert!(addr < self.size, "read outside guest memory");
         // SAFETY: bornes vérifiées.
         unsafe { ptr::read_volatile(self.ptr.add(addr)) }
     }

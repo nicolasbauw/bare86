@@ -62,7 +62,7 @@ pub fn scan(root: &Path) -> Vec<Profile> {
 /// Ligne du lanceur : nom, puis programme ou mode de démarrage, et le CD.
 pub fn line(p: &Profile) -> String {
     let what = match (&p.program, p.boot) {
-        (_, true) => "vrai DOS".to_string(),
+        (_, true) => "real DOS".to_string(),
         (Some(prog), _) => Path::new(prog).file_name().map_or(prog.clone(), |n| n.to_string_lossy().into_owned()),
         (None, false) => "shell".to_string(),
     };
@@ -139,8 +139,8 @@ const FIELDS: [Field; 15] = [
 fn choices(f: Field) -> Option<(&'static str, &'static [(Option<&'static str>, &'static str)])> {
     Some(match f {
         Field::Sound => ("sb", &[(None, "Sound Blaster 16"), (Some("pro2"), "Sound Blaster Pro 2"), (Some("pro1"), "Sound Blaster Pro 1"), (Some("ess"), "ESS AudioDrive")]),
-        Field::Fm => ("opl", &[(None, "celle de la carte"), (Some("opl2"), "OPL2"), (Some("dualopl2"), "deux OPL2"), (Some("opl3"), "OPL3"), (Some("cqm"), "Creative CQM"), (Some("esfm"), "ESS ESFM")]),
-        Field::Midi => ("midi", &[(None, "synthèse FM"), (Some("off"), "aucun")]),
+        Field::Fm => ("opl", &[(None, "the card's own"), (Some("opl2"), "OPL2"), (Some("dualopl2"), "dual OPL2"), (Some("opl3"), "OPL3"), (Some("cqm"), "Creative CQM"), (Some("esfm"), "ESS ESFM")]),
+        Field::Midi => ("midi", &[(None, "FM synthesis"), (Some("off"), "none")]),
         // Choix restreint de timbres parlants (numéros de `--midi-bank list`) ;
         // une autre valeur écrite à la main reste affichée telle quelle.
         Field::MidiBank => (
@@ -154,8 +154,8 @@ fn choices(f: Field) -> Option<(&'static str, &'static [(Option<&'static str>, &
                 (Some("62"), "Apogee (Duke Nukem 3D)"),
             ],
         ),
-        Field::Speed => ("mips", &[(None, "sans bridage"), (Some("3"), "3 MIPS"), (Some("6"), "6 MIPS"), (Some("12"), "12 MIPS"), (Some("25"), "25 MIPS"), (Some("50"), "50 MIPS"), (Some("100"), "100 MIPS"), (Some("200"), "200 MIPS"), (Some("400"), "400 MIPS")]),
-        Field::Memory => ("mem", &[(Some("4"), "4 Mo"), (Some("8"), "8 Mo"), (None, "16 Mo"), (Some("32"), "32 Mo"), (Some("64"), "64 Mo")]),
+        Field::Speed => ("mips", &[(None, "unthrottled"), (Some("3"), "3 MIPS"), (Some("6"), "6 MIPS"), (Some("12"), "12 MIPS"), (Some("25"), "25 MIPS"), (Some("50"), "50 MIPS"), (Some("100"), "100 MIPS"), (Some("200"), "200 MIPS"), (Some("400"), "400 MIPS")]),
+        Field::Memory => ("mem", &[(Some("4"), "4 MB"), (Some("8"), "8 MB"), (None, "16 MB"), (Some("32"), "32 MB"), (Some("64"), "64 MB")]),
         _ => return None,
     })
 }
@@ -238,10 +238,10 @@ impl Editor {
             return cur;
         }
         if let Some(key) = toggle_key(f) {
-            return if is_true(self.doc.get(key)) { "oui".into() } else { "non".into() };
+            return if is_true(self.doc.get(key)) { "yes".into() } else { "no".into() };
         }
         if let Some((key, _)) = file_field(f) {
-            return self.doc.get(key).unwrap_or_else(|| "(aucun)".into());
+            return self.doc.get(key).unwrap_or_else(|| "(none)".into());
         }
         match f {
             _ => String::new(),
@@ -250,42 +250,42 @@ impl Editor {
 
     fn label(f: Field) -> &'static str {
         match f {
-            Field::Program => "Programme",
-            Field::Boot => "Démarrer un vrai DOS",
-            Field::HardDisk => "Disque dur C:",
+            Field::Program => "Program",
+            Field::Boot => "Boot a real DOS",
+            Field::HardDisk => "Hard disk C:",
             Field::Cdrom => "CD-ROM",
-            Field::Floppy => "Disquette A:",
-            Field::Sound => "Carte son",
-            Field::Fm => "Puce FM",
-            Field::Midi => "Synthé General MIDI",
-            Field::MidiBank => "Timbres General MIDI",
-            Field::Speed => "Vitesse",
-            Field::Memory => "Mémoire",
-            Field::Network => "Réseau",
-            Field::Fullscreen => "Plein écran",
-            Field::Save => "[ Enregistrer ]",
-            Field::SaveAndRun => "[ Enregistrer et lancer ]",
+            Field::Floppy => "Floppy A:",
+            Field::Sound => "Sound card",
+            Field::Fm => "FM chip",
+            Field::Midi => "General MIDI synth",
+            Field::MidiBank => "General MIDI sounds",
+            Field::Speed => "Speed",
+            Field::Memory => "Memory",
+            Field::Network => "Network",
+            Field::Fullscreen => "Full screen",
+            Field::Save => "[ Save ]",
+            Field::SaveAndRun => "[ Save and run ]",
         }
     }
 
     /// Aide d'un réglage (ligne du bas de l'éditeur).
     fn hint(f: Field) -> &'static str {
         match f {
-            Field::Program => "Programme lancé par le DOS intégré",
-            Field::Boot => "Démarre le disque dur (FreeDOS...) au lieu du DOS intégré",
-            Field::HardDisk => "Image de disque dur pour C:, avec un vrai DOS",
-            Field::Cdrom => "Image .iso ou .cue du CD du jeu (lecteur D:)",
-            Field::Floppy => "Image de disquette pour A:",
-            Field::Sound => "Son numérique et musique FM (réglage Sound Blaster du jeu)",
-            Field::Fm => "Puce FM : « celle de la carte » convient presque toujours",
-            Field::Midi => "Seulement si le jeu est réglé sur General MIDI",
-            Field::MidiBank => "Sonorité du synthé General MIDI (sans matériel d'époque)",
-            Field::Speed => "Bride le processeur pour les jeux trop rapides",
-            Field::Memory => "Mémoire totale de la machine",
-            Field::Network => "Carte réseau NE2000, accès à Internet",
-            Field::Fullscreen => "Démarre en plein écran (Alt+Entrée bascule)",
-            Field::Save => "Écrit bare86.conf dans le dossier du jeu",
-            Field::SaveAndRun => "Écrit bare86.conf et lance le jeu",
+            Field::Program => "Program started by the built-in DOS",
+            Field::Boot => "Boots the hard disk (FreeDOS...), not the built-in DOS",
+            Field::HardDisk => "Hard disk image for C:, with a real DOS",
+            Field::Cdrom => "The game CD as an .iso or .cue image (drive D:)",
+            Field::Floppy => "Floppy image for A:",
+            Field::Sound => "Digital sound and FM music (game's Sound Blaster setting)",
+            Field::Fm => "FM chip: \"the card's own\" is almost always right",
+            Field::Midi => "Only if the game is set to General MIDI",
+            Field::MidiBank => "Sound of the General MIDI synth (no period hardware)",
+            Field::Speed => "Slows the processor down for games that run too fast",
+            Field::Memory => "Total memory of the machine",
+            Field::Network => "NE2000 network card, Internet access",
+            Field::Fullscreen => "Starts in full screen (Alt+Enter toggles)",
+            Field::Save => "Writes bare86.conf in the game folder",
+            Field::SaveAndRun => "Writes bare86.conf and runs the game",
         }
     }
 
@@ -304,7 +304,7 @@ impl Editor {
     }
 
     fn save(&self) -> Result<(), String> {
-        std::fs::write(&self.conf, self.doc.text()).map_err(|e| format!("{} : {e}", self.conf.display()))
+        std::fs::write(&self.conf, self.doc.text()).map_err(|e| format!("{}: {e}", self.conf.display()))
     }
 }
 
@@ -334,7 +334,7 @@ pub struct Ui {
     message: Option<String>,
 }
 
-const NEW_GAME: &str = "+ Nouveau jeu...";
+const NEW_GAME: &str = "+ New game...";
 
 impl Ui {
     pub fn new(root: PathBuf) -> Self {
@@ -431,7 +431,7 @@ impl Ui {
                                         return UiAction::Launch(conf);
                                     }
                                     if !conf.starts_with(&self.root) || !self.profiles.iter().any(|p| p.conf == conf) {
-                                        self.message = Some("Enregistré (hors du répertoire des jeux : absent de la liste)".into());
+                                        self.message = Some("Saved (outside the games directory: not in the list)".into());
                                     }
                                 }
                                 Err(e) => self.message = Some(e),
@@ -467,11 +467,11 @@ impl Ui {
                 let name = self.root.file_name().map_or_else(|| self.root.display().to_string(), |n| n.to_string_lossy().into_owned());
                 let name: String = name.chars().take(COLS - 20).collect();
                 return crate::menu::list_page(
-                    &format!("Bare86 : {name}"),
+                    &format!("Bare86: {name}"),
                     &lines,
                     self.sel,
                     "",
-                    "Entrée lancer   E modifier   Échap quitter",
+                    "Enter run   E edit   Esc quit",
                 )
                 .into_iter()
                 .enumerate()
@@ -480,7 +480,7 @@ impl Ui {
             }
             Page::Browse(b, _) => b.draw(&mut s),
             Page::Edit(ed) => {
-                s.frame(&format!("Profil : {}", ed.name));
+                s.frame(&format!("Profile: {}", ed.name));
                 for (i, f) in FIELDS.iter().enumerate() {
                     let text = match f {
                         Field::Save | Field::SaveAndRun => Editor::label(*f).to_string(),
@@ -489,7 +489,7 @@ impl Ui {
                     s.item(2 + i, &text, i == ed.sel);
                 }
                 s.text(ROWS - 3, 3, Editor::hint(FIELDS[ed.sel]), 0x1B);
-                s.footer("←→ changer  Entrée choisir  Suppr effacer  Échap annuler");
+                s.footer("←→ change  Enter select  Del clear  Esc cancel");
             }
         }
         let mut cells = s.cells;
@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(names, ["doom", "Dune"]);
         assert_eq!(p[0].program.as_deref(), Some("c/DOOM.EXE"));
         assert!(line(&p[0]).ends_with("DOOM.EXE"));
-        assert!(p[1].boot && line(&p[1]).contains("vrai DOS  [CD DUNE.CUE]"));
+        assert!(p[1].boot && line(&p[1]).contains("real DOS  [CD DUNE.CUE]"));
         std::fs::remove_dir_all(&root).unwrap();
 
         let cli: Vec<String> = ["--launcher", "/jeux", "--mips", "50"].iter().map(|s| s.to_string()).collect();
@@ -565,12 +565,12 @@ mod tests {
         std::fs::write(root.join("doom").join(PROFILE), "# mon Doom\nvbe1 = true\n").unwrap();
         let mut ui = Ui::new(root.clone());
         let t = screen(&ui);
-        assert!(t.contains("doom") && t.contains("Nouveau jeu") && !t.contains("wolf"), "{t}");
+        assert!(t.contains("doom") && t.contains("New game") && !t.contains("wolf"), "{t}");
 
         // Modifier Doom : carte son → SB Pro 2 (Sound : 6e réglage), vitesse
         // → 3 MIPS, réseau → oui ; programme choisi dans l'explorateur.
         ui.key(Key::Edit);
-        assert!(screen(&ui).contains("Profil : doom"));
+        assert!(screen(&ui).contains("Profile: doom"));
         keys(&mut ui, &[Key::Down; 5]);
         ui.key(Key::Right);
         keys(&mut ui, &[Key::Down; 4]);
@@ -585,7 +585,7 @@ mod tests {
         assert!(screen(&ui).contains("DOOM.EXE"));
         // Échap : retour à l'éditeur, rien de changé ; puis choix réel.
         ui.key(Key::Esc);
-        assert!(screen(&ui).contains("Profil : doom"));
+        assert!(screen(&ui).contains("Profile: doom"));
         ui.key(Key::Enter);
         keys(&mut ui, &[Key::Down, Key::Enter]);
         assert!(screen(&ui).contains("DOOM.EXE"), "{}", screen(&ui));
@@ -600,12 +600,12 @@ mod tests {
         // wolf/ ; puis « .. », WOLF3D.EXE) ; le profil va dans wolf/.
         keys(&mut ui, &[Key::End, Key::Enter]);
         let t = screen(&ui);
-        assert!(t.contains("Programme à lancer") && t.contains("wolf/"), "{t}");
+        assert!(t.contains("Program to run") && t.contains("wolf/"), "{t}");
         keys(&mut ui, &[Key::Down, Key::Down, Key::Down, Key::Enter]);
         assert!(screen(&ui).contains("WOLF3D.EXE"), "{}", screen(&ui));
         keys(&mut ui, &[Key::Down, Key::Enter]);
         let t = screen(&ui);
-        assert!(t.contains("Profil : wolf") && t.contains("WOLF3D.EXE"), "{t}");
+        assert!(t.contains("Profile: wolf") && t.contains("WOLF3D.EXE"), "{t}");
         // Enregistrer et lancer (dernière ligne).
         ui.key(Key::End);
         assert_eq!(ui.key(Key::Enter), UiAction::Launch(root.canonicalize().unwrap().join("wolf").join(PROFILE)));

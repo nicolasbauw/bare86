@@ -19,7 +19,7 @@ pub enum Action {
     Exit,
 }
 
-const BAD_COMMAND: &[u8] = b"Commande ou nom de fichier incorrect\r\n";
+const BAD_COMMAND: &[u8] = b"Bad command or file name\r\n";
 
 fn eq(a: &[u8], b: &str) -> bool {
     a.eq_ignore_ascii_case(b.as_bytes())
@@ -119,14 +119,14 @@ impl Dos {
                 if self.drives.is_mounted(n) {
                     self.drives.current = n;
                 } else {
-                    out(b"Lecteur non valide\r\n");
+                    out(b"Invalid drive specification\r\n");
                 }
             }
             _ if eq(cmd, "EXIT") => return Ok(Action::Exit),
             _ if eq(cmd, "CLS") => {
                 crate::bios::clear_screen(mem);
             }
-            _ if eq(cmd, "VER") => out(b"\r\nMS-DOS version 5.00 (DOS en HLE sous KVM)\r\n\r\n"),
+            _ if eq(cmd, "VER") => out(b"\r\nMS-DOS version 5.00 (HLE DOS under KVM)\r\n\r\n"),
             _ if eq(cmd, "ECHO") => {
                 let text = rest.strip_prefix(b" ").unwrap_or(rest);
                 out(text);
@@ -150,10 +150,10 @@ impl Dos {
                         vars.push([&name[..], b"=", value].concat());
                     }
                     if !self.write_master_vars(mem, &vars) {
-                        out(b"Espace d'environnement insuffisant\r\n");
+                        out(b"Out of environment space\r\n");
                     }
                 }
-                _ => out(b"Syntaxe incorrecte\r\n"),
+                _ => out(b"Syntax error\r\n"),
             },
             _ if eq(cmd, "CD") || eq(cmd, "CHDIR") => {
                 if arg.is_empty() {
@@ -163,20 +163,20 @@ impl Dos {
                     out(&p);
                     out(b"\r\n");
                 } else if self.drives.chdir(arg).is_err() {
-                    out(b"Repertoire non valide\r\n");
+                    out(b"Invalid directory\r\n");
                 }
             }
             _ if eq(cmd, "MD") || eq(cmd, "MKDIR") => match self.drives.resolve(arg) {
                 Ok(Target::Path { host: h, exists: false, .. }) if vfs::create_dir(&h).is_ok() => {}
-                _ => out(b"Impossible de creer le repertoire\r\n"),
+                _ => out(b"Unable to create directory\r\n"),
             },
             _ if eq(cmd, "RD") || eq(cmd, "RMDIR") => match self.drives.resolve(arg) {
                 Ok(Target::Path { host: h, exists: true, .. }) if vfs::remove_dir(&h).is_ok() => {}
-                _ => out(b"Chemin non valide, ou repertoire non vide\r\n"),
+                _ => out(b"Invalid path, not directory,\r\nor directory not empty\r\n"),
             },
             _ if eq(cmd, "DEL") || eq(cmd, "ERASE") => match self.drives.resolve(arg) {
                 Ok(Target::Path { host: h, exists: true, .. }) if vfs::is_file(&h) && vfs::remove_file(&h).is_ok() => {}
-                _ => out(b"Fichier introuvable\r\n"),
+                _ => out(b"File not found\r\n"),
             },
             // REN source nouveau-nom : le nouveau nom reste dans le répertoire de la source.
             _ if eq(cmd, "REN") || eq(cmd, "RENAME") => {
@@ -193,7 +193,7 @@ impl Dos {
                     _ => false,
                 };
                 if !renamed {
-                    out(b"Fichier introuvable ou nom en double\r\n");
+                    out(b"Duplicate file name or file not found\r\n");
                 }
             }
             _ if eq(cmd, "TYPE") => match self.drives.resolve(arg) {
@@ -203,7 +203,7 @@ impl Dos {
                     let end = data.iter().position(|&c| c == 0x1A).unwrap_or(data.len());
                     out(&data[..end]);
                 }
-                _ => out(b"Fichier introuvable\r\n"),
+                _ => out(b"File not found\r\n"),
             },
             _ if eq(cmd, "DIR") => self.dir(mem, host, arg),
             _ => {
@@ -300,7 +300,7 @@ impl Dos {
             }
         };
         let Ok((dir, pat)) = self.drives.search(&pattern) else {
-            out(b"Chemin non valide\r\n");
+            out(b"Invalid path\r\n");
             return;
         };
         let shown = match self.drives.split(&pattern) {
@@ -310,15 +310,15 @@ impl Dos {
             }
             Err(_) => b"?".to_vec(),
         };
-        out(b"\r\n Le volume dans le lecteur ");
+        out(b"\r\n Volume in drive ");
         out(&shown[..1]);
         match self.volume_label(shown[0].wrapping_sub(b'A')) {
             Some(label) => {
-                out(b" est ");
+                out(b" is ");
                 out(label.as_bytes());
-                out(b"\r\n Repertoire de ");
+                out(b"\r\n Directory of ");
             }
-            None => out(b" n'a pas de nom\r\n Repertoire de "),
+            None => out(b" has no label\r\n Directory of "),
         }
         out(&shown);
         out(b"\r\n\r\n");
@@ -327,7 +327,7 @@ impl Dos {
             let p = fs::fcb_pattern(&e.short);
             let (time, date) = fs::dos_time(e.meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH));
             let size = if e.meta.is_dir() {
-                "<REP>    ".to_string()
+                "<DIR>    ".to_string()
             } else {
                 files += 1;
                 bytes += e.meta.len();
@@ -346,6 +346,6 @@ impl Dos {
             );
             out(line.as_bytes());
         }
-        out(format!("{files:>9} fichier(s) {bytes:>12} octets\r\n\r\n").as_bytes());
+        out(format!("{files:>9} file(s) {bytes:>12} bytes\r\n\r\n").as_bytes());
     }
 }

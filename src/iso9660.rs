@@ -77,7 +77,7 @@ impl IsoFs {
         // Descripteurs à partir du secteur 16 : le primaire est de type 1.
         let mut found = false;
         for lba in 16..32 {
-            disc.read_data(lba, &mut pvd).map_err(|_| "ISO 9660 : descripteur illisible")?;
+            disc.read_data(lba, &mut pvd).map_err(|_| "ISO 9660: unreadable descriptor")?;
             if &pvd[1..6] != b"CD001" || pvd[0] == 0xFF {
                 break;
             }
@@ -87,7 +87,7 @@ impl IsoFs {
             }
         }
         if !found {
-            return Err("ISO 9660 : pas de descripteur de volume primaire".into());
+            return Err("ISO 9660: no primary volume descriptor".into());
         }
         let mut root = parse_record(&pvd[156..190]).unwrap_or(Entry {
             name: String::new(),
@@ -218,7 +218,7 @@ pub(crate) mod tests {
             .output()
             .is_ok_and(|o| o.status.success());
         if !ok {
-            eprintln!("xorriso absent : test sauté");
+            eprintln!("xorriso missing: test skipped");
             let _ = std::fs::remove_dir_all(&dir);
             return None;
         }

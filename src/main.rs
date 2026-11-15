@@ -151,7 +151,7 @@ fn main() -> ExitCode {
             Ok(Some(conf)) => cli = launcher::command_line(&cli, &conf),
             Ok(None) => return ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("lanceur : {e}");
+                eprintln!("launcher: {e}");
                 return ExitCode::FAILURE;
             }
         }
@@ -159,7 +159,7 @@ fn main() -> ExitCode {
     let conf = match config::load(&cli) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("configuration : {e}");
+            eprintln!("configuration: {e}");
             return ExitCode::from(2);
         }
     };
@@ -178,7 +178,7 @@ fn main() -> ExitCode {
             return match bench() {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("erreur : {e}");
+                    eprintln!("error: {e}");
                     ExitCode::from(1)
                 }
             };
@@ -186,7 +186,7 @@ fn main() -> ExitCode {
         let mut value = |name: &str| -> Option<f64> {
             let v = args.next().and_then(|v| v.parse().ok());
             if v.is_none() {
-                eprintln!("{name} : nombre attendu");
+                eprintln!("{name}: number expected");
             }
             v
         };
@@ -219,7 +219,7 @@ fn main() -> ExitCode {
                     list.push(p.into());
                 }
                 None => {
-                    eprintln!("{a} : image attendue");
+                    eprintln!("{a}: image expected");
                     return ExitCode::from(2);
                 }
             },
@@ -231,18 +231,18 @@ fn main() -> ExitCode {
                 Some("16") => (cfg.sb_pro, cfg.sb_ess, card_opl) = (false, false, opl::OplModel::Opl3),
                 Some("ess") => (cfg.sb_pro, cfg.sb_ess, card_opl) = (false, true, opl::OplModel::Esfm),
                 _ => {
-                    eprintln!("--sb : 16, pro2 (ou pro), pro1 ou ess attendu");
+                    eprintln!("--sb: 16, pro2 (or pro), pro1 or ess expected");
                     return ExitCode::from(2);
                 }
             },
             "--opl" => match args.next().map(|m| m.parse::<opl::OplModel>()) {
                 Some(Ok(m)) => opl_choice = Some(m),
                 Some(Err(e)) => {
-                    eprintln!("--opl : {e}");
+                    eprintln!("--opl: {e}");
                     return ExitCode::from(2);
                 }
                 None => {
-                    eprintln!("--opl : opl2, dualopl2, opl3, cqm ou esfm attendu");
+                    eprintln!("--opl: opl2, dualopl2, opl3, cqm or esfm expected");
                     return ExitCode::from(2);
                 }
             },
@@ -250,7 +250,7 @@ fn main() -> ExitCode {
                 Some("opl3") => cfg.midi_bank = cfg.midi_bank.or(Some(midisynth::DEFAULT_BANK)),
                 Some("off") => cfg.midi_bank = None,
                 _ => {
-                    eprintln!("--midi : opl3 ou off attendu");
+                    eprintln!("--midi: opl3 or off expected");
                     return ExitCode::from(2);
                 }
             },
@@ -264,33 +264,33 @@ fn main() -> ExitCode {
                 Some(n) => match n.parse() {
                     Ok(b) => cfg.midi_bank = Some(b),
                     Err(_) => {
-                        eprintln!("--midi-bank : numéro ou « list » attendu");
+                        eprintln!("--midi-bank: number or \"list\" expected");
                         return ExitCode::from(2);
                     }
                 },
                 None => {
-                    eprintln!("--midi-bank : numéro ou « list » attendu");
+                    eprintln!("--midi-bank: number or \"list\" expected");
                     return ExitCode::from(2);
                 }
             },
             "--midi-out" => match args.next() {
                 Some(p) => cfg.midi_out = Some(p.into()),
                 None => {
-                    eprintln!("--midi-out : fichier attendu");
+                    eprintln!("--midi-out: file expected");
                     return ExitCode::from(2);
                 }
             },
             "--menu-key" => match args.next().and_then(|k| k.chars().next()).filter(char::is_ascii_alphabetic) {
                 Some(c) => menu_letter = c.to_ascii_uppercase(),
                 None => {
-                    eprintln!("--menu-key : lettre attendue");
+                    eprintln!("--menu-key: letter expected");
                     return ExitCode::from(2);
                 }
             },
             "--cdrom" => match args.next() {
                 Some(p) => cfg.cdrom = Some(p.into()),
                 None => {
-                    eprintln!("--cdrom : image attendue");
+                    eprintln!("--cdrom: image expected");
                     return ExitCode::from(2);
                 }
             },
@@ -300,11 +300,11 @@ fn main() -> ExitCode {
             "--net-fwd" => match args.next().map(|f| f.parse::<net::Forward>()) {
                 Some(Ok(f)) => cfg.net.get_or_insert_with(Vec::new).push(f),
                 Some(Err(e)) => {
-                    eprintln!("--net-fwd : {e}");
+                    eprintln!("--net-fwd: {e}");
                     return ExitCode::from(2);
                 }
                 None => {
-                    eprintln!("--net-fwd : tcp:HÔTE:INVITÉ attendu");
+                    eprintln!("--net-fwd: tcp:HOST:GUEST expected");
                     return ExitCode::from(2);
                 }
             },
@@ -325,18 +325,18 @@ fn main() -> ExitCode {
             "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
                 Some(Ok(ev)) => keys = Some(ev),
                 Some(Err(e)) => {
-                    eprintln!("--keys : {e}");
+                    eprintln!("--keys: {e}");
                     return ExitCode::from(2);
                 }
                 None => {
-                    eprintln!("--keys : script attendu");
+                    eprintln!("--keys: script expected");
                     return ExitCode::from(2);
                 }
             },
             "--mount" => match args.next() {
                 Some(d) => mount = Some(d.into()),
                 None => {
-                    eprintln!("--mount : répertoire attendu");
+                    eprintln!("--mount: directory expected");
                     return ExitCode::from(2);
                 }
             },
@@ -345,7 +345,7 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             _ if a.starts_with("--") => {
-                eprintln!("option inconnue : {a}\n{USAGE}");
+                eprintln!("unknown option: {a}\n{USAGE}");
                 return ExitCode::from(2);
             }
             _ => {
@@ -404,7 +404,7 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
-            eprintln!("erreur : {e}");
+            eprintln!("error: {e}");
             ExitCode::from(1)
         }
     }
@@ -448,7 +448,7 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
                 None => path.parent().map(|p| if p.as_os_str().is_empty() { ".".into() } else { p.to_path_buf() }).unwrap_or(".".into()),
             };
             pc.mount(2, root);
-            let dos = pc.dos_path_of(path).ok_or_else(|| format!("{} : introuvable sous le lecteur C:", path.display()))?;
+            let dos = pc.dos_path_of(path).ok_or_else(|| format!("{}: not found under drive C:", path.display()))?;
             // Le programme démarre dans son répertoire (avec --mount, il peut
             // être plus bas que la racine) : les jeux y cherchent leurs données.
             if let Some(cut) = dos.iter().rposition(|&c| c == b'\\') {
@@ -479,10 +479,10 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
         match pc.frame() {
             Some((w, h, px)) => {
                 if let Err(e) = std::fs::write(path, render::png(w, h, &px)) {
-                    eprintln!("{path} : {e}");
+                    eprintln!("{path}: {e}");
                 }
             }
-            None => eprintln!("--shot : mode texte sans police (--font)"),
+            None => eprintln!("--shot: text mode without a font (--font)"),
         }
     }
     Ok(code?)

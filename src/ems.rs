@@ -158,7 +158,7 @@ impl Ems {
                 } else if self.handles.len() >= 255 {
                     Err(0x85)
                 } else {
-                    let h = (1..=0xFE).find(|h| !self.handles.contains_key(h)).expect("handle libre");
+                    let h = (1..=0xFE).find(|h| !self.handles.contains_key(h)).expect("free handle");
                     self.handles.insert(h, (0..n).map(|_| vec![0u8; PAGE].into_boxed_slice()).collect());
                     cpu.set_w(DX, h);
                     Ok(())

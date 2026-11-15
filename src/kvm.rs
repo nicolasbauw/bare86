@@ -60,7 +60,7 @@ impl KvmVm {
     }
 
     pub fn with_layout(mem_size: usize, regions: &[Region]) -> Result<Self> {
-        let kvm = Kvm::new().map_err(|e| format!("ouverture de /dev/kvm impossible : {e}"))?;
+        let kvm = Kvm::new().map_err(|e| format!("cannot open /dev/kvm: {e}"))?;
         let vm = kvm.create_vm()?;
         let mem = GuestMem::new(mem_size)?;
         for (slot, r) in regions.iter().enumerate() {
@@ -88,7 +88,7 @@ impl KvmVm {
             data: 0x0606_0606_0606_0606,
             ..Default::default()
         }])
-        .map_err(|e| format!("MSR PAT : {e:?}"))?;
+        .map_err(|e| format!("PAT MSR: {e:?}"))?;
         vcpu.set_msrs(&pat)?;
         let reset_sregs = vcpu.get_sregs()?;
         Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false, injected: false, reset_sregs })
@@ -231,7 +231,7 @@ impl Backend for KvmVm {
                 }
                 // Instruction terminée : KVM rend la main sans relancer l'invité.
                 Err(e) if e.errno() == libc::EINTR => break Ok(()),
-                Ok(other) => break Err(format!("fin d'instruction : sortie inattendue {other:?}").into()),
+                Ok(other) => break Err(format!("instruction completion: unexpected exit {other:?}").into()),
                 Err(e) => break Err(e.into()),
             }
         };
@@ -330,5 +330,5 @@ fn dos_era_cpuid(kvm: &Kvm) -> Result<kvm_bindings::CpuId> {
         e.edx &= FEATURES;
         entries.push(e);
     }
-    Ok(kvm_bindings::CpuId::from_entries(&entries).map_err(|e| format!("CPUID : {e:?}"))?)
+    Ok(kvm_bindings::CpuId::from_entries(&entries).map_err(|e| format!("CPUID: {e:?}"))?)
 }

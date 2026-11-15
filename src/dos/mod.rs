@@ -239,10 +239,10 @@ impl Dos {
         mem.write_u16(nul + 4, 0x8004);
         mem.write(nul + 10, b"NUL     ");
 
-        let root = memory::alloc(mem, 0x10, 0xFFFF, 0).expect("PSP du shell");
+        let root = memory::alloc(mem, 0x10, 0xFFFF, 0).expect("shell PSP");
         memory::set_owner(mem, root, root);
         memory::set_name(mem, root, b"COMMAND");
-        let env = memory::alloc(mem, MASTER_ENV_PARAS, root, 0).expect("environnement maître");
+        let env = memory::alloc(mem, MASTER_ENV_PARAS, root, 0).expect("master environment");
         mem.fill(lin(env, 0), usize::from(MASTER_ENV_PARAS) * 16, 0);
         mem.write(lin(env, 0), self.master_env());
         let init = PspInit {
@@ -276,8 +276,8 @@ impl Dos {
     /// Lance un programme du disque depuis l'hôte (sa fin termine la session).
     pub fn start(&mut self, mem: &GuestMem, path: &[u8], tail: &[u8]) -> std::result::Result<Cpu, String> {
         let (image, dos) =
-            self.read_program(path).map_err(|e| format!("{} : erreur DOS {e:02X}h", String::from_utf8_lossy(path)))?;
-        self.exec(mem, &image, &dos, tail, 0, None, None).map_err(|e| format!("chargement : erreur DOS {e:02X}h"))
+            self.read_program(path).map_err(|e| format!("{}: DOS error {e:02X}h", String::from_utf8_lossy(path)))?;
+        self.exec(mem, &image, &dos, tail, 0, None, None).map_err(|e| format!("loading: DOS error {e:02X}h"))
     }
 
     /// Lance une image en mémoire sous le nom `path` (tests).
@@ -289,7 +289,7 @@ impl Dos {
         path: &[u8],
         tail: &[u8],
     ) -> std::result::Result<Cpu, String> {
-        self.exec(mem, image, path, tail, 0, None, None).map_err(|e| format!("chargement : erreur DOS {e:02X}h"))
+        self.exec(mem, image, path, tail, 0, None, None).map_err(|e| format!("loading: DOS error {e:02X}h"))
     }
 
     /// Nom du fichier seul si `path` (canonique) est dans le répertoire
@@ -394,7 +394,7 @@ impl Dos {
         if self.procs.len() <= 1 {
             return Out::Flow(Flow::Exit(code));
         }
-        let p = self.procs.pop().expect("processus");
+        let p = self.procs.pop().expect("process");
         if kind != 3 {
             for (h, idx) in handles::all(mem, p.psp) {
                 self.sft.release(idx);
@@ -1588,7 +1588,7 @@ impl Dos {
 /// Chaîne de MCB : (propriétaire, taille) de chaque bloc (tests).
 #[cfg(test)]
 pub fn mcb_chain(mem: &GuestMem) -> Vec<(u16, u16)> {
-    memory::chain(mem).expect("chaîne de MCB").iter().map(|m| (m.owner, m.size)).collect()
+    memory::chain(mem).expect("MCB chain").iter().map(|m| (m.owner, m.size)).collect()
 }
 
 /// FCB 1 et 2 du PSP d'après les deux premiers mots de la ligne de commande.
@@ -1647,7 +1647,7 @@ fn con_out(mem: &GuestMem, host: &mut Host, bytes: &[u8]) {
 pub fn load_com(mem: &GuestMem, image: &[u8]) -> std::result::Result<Cpu, String> {
     const SEG: u16 = 0x1000;
     if image.len() > 0xFF00 - 2 {
-        return Err("fichier .COM trop gros".into());
+        return Err(".COM file too large".into());
     }
     let p = lin(SEG, 0);
     mem.write(p, &[0xCD, 0x20]);

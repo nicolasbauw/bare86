@@ -12,12 +12,12 @@ use crate::machine::{Event, Pc};
 use crate::mem::GuestMem;
 
 const HELP: &str = "\
-  r              registres
-  s [n]          n pas (1 par défaut)
-  c              continuer jusqu'à la fin
-  d <adr> [n]    mémoire (adr : seg:off ou linéaire, en hexa)
-  u [adr] [n]    désassembler (CS:IP par défaut)
-  q              quitter";
+  r              registers
+  s [n]          n steps (default 1)
+  c              continue to the end
+  d <adr> [n]    memory (adr: seg:off or linear, in hex)
+  u [adr] [n]    disassemble (default CS:IP)
+  q              quit";
 
 pub fn format_regs(c: &Cpu) -> String {
     let g = &c.gpr;
@@ -102,7 +102,7 @@ pub fn step<B: Backend>(pc: &mut Pc<B>, n: usize) -> Result<Option<u8>> {
 
 /// Boucle interactive ; renvoie le code de sortie du programme, s'il a fini.
 pub fn repl<B: Backend>(pc: &mut Pc<B>) -> Result<Option<u8>> {
-    println!("Débogueur ; « h » pour l'aide.");
+    println!("Debugger; \"h\" for help.");
     let stdin = std::io::stdin();
     let show = |pc: &Pc<B>| -> Result<()> {
         let cpu = pc.vm.state()?;
@@ -126,7 +126,7 @@ pub fn repl<B: Backend>(pc: &mut Pc<B>) -> Result<Option<u8>> {
             Some("r") => show(pc)?,
             Some("s") => {
                 if let Some(code) = step(pc, num(1, 1))? {
-                    println!("Programme terminé, code {code}.");
+                    println!("Program finished, code {code}.");
                     return Ok(Some(code));
                 }
                 show(pc)?;
@@ -134,7 +134,7 @@ pub fn repl<B: Backend>(pc: &mut Pc<B>) -> Result<Option<u8>> {
             Some("c") => return pc.run().map(Some),
             Some("d") => {
                 let Some((seg, off)) = words.get(1).and_then(|w| parse_addr(w)) else {
-                    println!("adresse ?");
+                    println!("address?");
                     continue;
                 };
                 let n = num(2, 128);

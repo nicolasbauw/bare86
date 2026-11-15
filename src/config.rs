@@ -23,7 +23,7 @@ const PATH_KEYS: &[&str] = &["mount", "program", "font", "shot", "wav", "fda", "
 
 /// Fichier désigné ou trouvé, lu et analysé (vide s'il n'y en a pas).
 pub fn load(cli: &[String]) -> Result<Config, String> {
-    let explicit = cli.iter().position(|a| a == "--config").map(|i| cli.get(i + 1).cloned().ok_or("--config : fichier attendu"));
+    let explicit = cli.iter().position(|a| a == "--config").map(|i| cli.get(i + 1).cloned().ok_or("--config: file expected"));
     let path = match explicit {
         Some(p) => Some(PathBuf::from(p?)),
         None => {
@@ -44,7 +44,7 @@ pub fn parse(text: &str, dir: &Path) -> Result<Config, String> {
         if line.is_empty() {
             continue;
         }
-        let (key, value) = line.split_once('=').ok_or(format!("ligne {} : « option = valeur » attendu", n + 1))?;
+        let (key, value) = line.split_once('=').ok_or(format!("line {}: \"option = value\" expected", n + 1))?;
         let (key, value) = (key.trim().trim_start_matches("--").to_ascii_lowercase(), value.trim());
         let value = if PATH_KEYS.contains(&key.as_str()) && !value.is_empty() {
             let p = Path::new(value);

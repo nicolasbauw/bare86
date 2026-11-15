@@ -100,10 +100,10 @@ impl Target {
 
     fn title(self) -> &'static str {
         match self {
-            Target::Floppy => "Image de disquette pour A:",
-            Target::Cd => "Image de CD (.iso, .cue)",
-            Target::Program => "Programme à lancer (.EXE, .COM, .BAT)",
-            Target::HardDisk => "Image de disque dur pour C:",
+            Target::Floppy => "Floppy image for A:",
+            Target::Cd => "CD image (.iso, .cue)",
+            Target::Program => "Program to run (.EXE, .COM, .BAT)",
+            Target::HardDisk => "Hard disk image for C:",
         }
     }
 }
@@ -230,13 +230,13 @@ impl Browser {
         };
         s.text(2, 3, &dir, ATTR_TITLE);
         if self.entries.is_empty() {
-            s.text(4, 3, "(rien ici)", ATTR_TEXT);
+            s.text(4, 3, "(nothing here)", ATTR_TEXT);
         }
         for (row, (i, (name, is_dir))) in self.entries.iter().enumerate().skip(self.top).take(LIST_ROWS).enumerate() {
             let text = if *is_dir { format!("{name}/") } else { name.clone() };
             s.item(4 + row, &text, i == self.sel);
         }
-        s.footer("Entrée choisir   ← dossier parent   Échap retour");
+        s.footer("Enter select   ← parent folder   Esc back");
     }
 }
 
@@ -265,7 +265,7 @@ fn start_dir(current: Option<&Path>) -> PathBuf {
 }
 
 fn name_of(p: Option<&Path>) -> String {
-    p.and_then(Path::file_name).map_or("(aucun)".into(), |n| n.to_string_lossy().into_owned())
+    p.and_then(Path::file_name).map_or("(none)".into(), |n| n.to_string_lossy().into_owned())
 }
 
 impl Default for Menu {
@@ -366,41 +366,41 @@ impl Menu {
         match &self.page {
             Page::Main => {
                 s.frame("Bare86");
-                let speed = st.speed.map_or("sans bridage".into(), |m| format!("{m} MIPS"));
+                let speed = st.speed.map_or("unthrottled".into(), |m| format!("{m} MIPS"));
                 for (i, item) in Self::items(st).into_iter().enumerate() {
                     let text = match item {
-                        Item::Floppy => format!("Disquette A:      {}", name_of(st.floppy.as_deref())),
+                        Item::Floppy => format!("Floppy A:         {}", name_of(st.floppy.as_deref())),
                         Item::Cd if st.cd_drive => format!("CD-ROM            {}", name_of(st.cd.as_deref())),
-                        Item::Cd => "CD-ROM            (pas de lecteur : option --cdrom)".into(),
-                        Item::Eject => "Éjecter le CD".into(),
-                        Item::Speed => format!("Vitesse           ◄ {speed} ►"),
-                        Item::Fullscreen => format!("Plein écran       {}", if st.fullscreen { "oui" } else { "non" }),
-                        Item::Screenshot => "Capture d'écran".into(),
-                        Item::Keys => "Raccourcis clavier".into(),
-                        Item::Quit => "Quitter Bare86".into(),
+                        Item::Cd => "CD-ROM            (no drive: --cdrom option)".into(),
+                        Item::Eject => "Eject the CD".into(),
+                        Item::Speed => format!("Speed             ◄ {speed} ►"),
+                        Item::Fullscreen => format!("Full screen       {}", if st.fullscreen { "yes" } else { "no" }),
+                        Item::Screenshot => "Screenshot".into(),
+                        Item::Keys => "Keyboard shortcuts".into(),
+                        Item::Quit => "Quit Bare86".into(),
                     };
                     s.item(2 + i, &text, i == self.sel);
                 }
-                s.footer("↑↓ choisir   Entrée valider   ←→ régler   Échap fermer");
+                s.footer("↑↓ select   Enter confirm   ←→ adjust   Esc close");
             }
             Page::Keys => {
-                s.frame("Raccourcis clavier");
-                let menu = format!("Ctrl+Alt+{}        ce menu", st.menu_letter);
+                s.frame("Keyboard shortcuts");
+                let menu = format!("Ctrl+Alt+{}        this menu", st.menu_letter);
                 let lines = [
                     menu.as_str(),
-                    "Alt+Entrée        plein écran (aussi Ctrl+Alt+F)",
-                    "Ctrl+Alt+D        disquette suivante (--fda répété)",
-                    "Ctrl+Alt+S        capture d'écran (bare86_NNN.png)",
-                    "Ctrl+Alt+G        libérer la souris (ou bouton central)",
-                    "Ctrl+Alt+−        plus lent",
-                    "Ctrl+Alt++        plus vite",
+                    "Alt+Enter         full screen (also Ctrl+Alt+F)",
+                    "Ctrl+Alt+D        next floppy (repeated --fda)",
+                    "Ctrl+Alt+S        screenshot (bare86_NNN.png)",
+                    "Ctrl+Alt+G        release the mouse (or middle button)",
+                    "Ctrl+Alt+−        slower",
+                    "Ctrl+Alt++        faster",
                     "",
-                    "Un clic dans la fenêtre capture la souris.",
+                    "A click in the window captures the mouse.",
                 ];
                 for (i, l) in lines.iter().enumerate() {
                     s.text(2 + i, 3, l, ATTR_TEXT);
                 }
-                s.footer("Échap retour");
+                s.footer("Esc back");
             }
             Page::Browse(b) => b.draw(&mut s),
         }
@@ -550,7 +550,7 @@ mod tests {
         let st = State { cd_drive: true, cd: Some("/jeux/a.iso".into()), speed: Some(50.0), ..State::default() };
         let mut m = Menu::new();
         let t = text_of(&m.render(&st));
-        assert!(t.contains("a.iso") && t.contains("Éjecter le CD") && t.contains("◄ 50 MIPS ►"), "{t}");
+        assert!(t.contains("a.iso") && t.contains("Eject the CD") && t.contains("◄ 50 MIPS ►"), "{t}");
         // Ordre : disquette, CD, éjecter, vitesse…
         assert_eq!(m.key(Key::Down, &st), Action::None);
         assert_eq!(m.key(Key::Down, &st), Action::None);
@@ -591,7 +591,7 @@ mod tests {
         m.key(Key::Down, &st);
         assert_eq!(m.key(Key::Enter, &st), Action::Cd(Some(base.join("Jeux/c.iso"))));
         // Retour au menu principal après le choix.
-        assert!(text_of(&m.render(&st)).contains("Quitter Bare86"));
+        assert!(text_of(&m.render(&st)).contains("Quit Bare86"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -44,14 +44,14 @@ impl std::str::FromStr for Forward {
         let (proto, ports) = match parts.as_slice() {
             [p, h, g] => (*p, [*h, *g]),
             [h, g] => ("tcp", [*h, *g]),
-            _ => return Err(format!("« {s} » : tcp:HÔTE:INVITÉ attendu")),
+            _ => return Err(format!("\"{s}\": tcp:HOST:GUEST expected")),
         };
         let udp = match proto {
             "tcp" => false,
             "udp" => true,
-            _ => return Err(format!("« {proto} » : tcp ou udp attendu")),
+            _ => return Err(format!("\"{proto}\": tcp or udp expected")),
         };
-        let port = |p: &str| p.parse::<u16>().map_err(|_| format!("« {p} » : numéro de port attendu"));
+        let port = |p: &str| p.parse::<u16>().map_err(|_| format!("\"{p}\": port number expected"));
         Ok(Self { udp, host: port(ports[0])?, guest: port(ports[1])? })
     }
 }
@@ -137,13 +137,13 @@ impl NetLink {
             // SAFETY: rappel et contexte valides tant que ce thread vit.
             let net = unsafe { bare86_net_new(on_frame, user) };
             if net.is_null() {
-                let _ = ready_tx.send(Err("libslirp : initialisation impossible".into()));
+                let _ = ready_tx.send(Err("libslirp: initialization failed".into()));
                 return;
             }
             for f in &forwards {
                 // SAFETY: `net` valide.
                 if unsafe { bare86_net_hostfwd(net, f.udp.into(), f.host.into(), f.guest.into()) } != 0 {
-                    let _ = ready_tx.send(Err(format!("redirection du port {} impossible", f.host)));
+                    let _ = ready_tx.send(Err(format!("cannot forward port {}", f.host)));
                     // SAFETY: plus aucun usage de `net` après.
                     unsafe { bare86_net_free(net) };
                     return;
@@ -155,7 +155,7 @@ impl NetLink {
             // SAFETY: plus aucun usage de `net` après.
             unsafe { bare86_net_free(net) };
         })?;
-        ready.recv().map_err(|_| "thread réseau arrêté")??;
+        ready.recv().map_err(|_| "network thread stopped")??;
         Ok(Self { outgoing, wake: write, incoming, kick })
     }
 

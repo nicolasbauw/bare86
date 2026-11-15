@@ -105,7 +105,7 @@ impl std::str::FromStr for OplModel {
             "dualopl2" => OplModel::DualOpl2,
             "cqm" => OplModel::Cqm,
             "esfm" => OplModel::Esfm,
-            _ => return Err(format!("« {s} » : opl2, dualopl2, opl3, cqm ou esfm attendu")),
+            _ => return Err(format!("\"{s}\": opl2, dualopl2, opl3, cqm or esfm expected")),
         })
     }
 }
@@ -222,23 +222,23 @@ impl FmSynth {
             match model {
                 OplModel::Opl3 => {
                     let c = bare86_opl3_new(rate);
-                    assert!(!c.is_null(), "OPL3 : allocation impossible");
+                    assert!(!c.is_null(), "OPL3: allocation failed");
                     Chips::Opl3(c)
                 }
                 OplModel::Esfm => {
                     let c = bare86_esfm_new();
-                    assert!(!c.is_null(), "ESFM : allocation impossible");
+                    assert!(!c.is_null(), "ESFM: allocation failed");
                     Chips::Esfm { chip: c, prev: [0; 2], next: [0; 2], phase: 1.0 }
                 }
                 OplModel::Cqm => {
                     let c = bare86_cqm_new(rate);
-                    assert!(!c.is_null(), "CQM : allocation impossible");
+                    assert!(!c.is_null(), "CQM: allocation failed");
                     Chips::Cqm(c)
                 }
                 OplModel::Opl2 | OplModel::DualOpl2 => {
                     let n = if model == OplModel::Opl2 { 1 } else { 2 };
                     let v: Vec<*mut Chip2> = (0..n).map(|_| bare86_opl2_new(rate)).collect();
-                    assert!(v.iter().all(|c| !c.is_null()), "OPL2 : allocation impossible");
+                    assert!(v.iter().all(|c| !c.is_null()), "OPL2: allocation failed");
                     Chips::Opl2(v)
                 }
             }

@@ -64,12 +64,12 @@ pub fn loader_for(
             }
             if line.len() > 126 {
                 // Limite du PSP, que DPMILD32 reprend pour le programme.
-                eprintln!("[win32] ligne de commande de plus de 126 caractères : tronquée");
+                eprintln!("[win32] command line longer than 126 characters: truncated");
             }
             return Some(Loader { image, path: path_found, tail: line, dir });
         }
     }
-    eprintln!("[win32] {} : programme Windows ; HX DOS Extender introuvable (PATH, C:\\HX\\BIN)", String::from_utf8_lossy(path));
+    eprintln!("[win32] {}: Windows program; HX DOS Extender not found (PATH, C:\\HX\\BIN)", String::from_utf8_lossy(path));
     None
 }
 

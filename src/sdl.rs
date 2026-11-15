@@ -78,8 +78,8 @@ fn screenshot(frame: &Mutex<SharedFrame>) {
     drop(f);
     let Some(path) = (1..10_000).map(|n| format!("bare86_{n:03}.png")).find(|p| !std::path::Path::new(p).exists()) else { return };
     match std::fs::write(&path, png) {
-        Ok(()) => eprintln!("capture : {path}"),
-        Err(e) => eprintln!("{path} : {e}"),
+        Ok(()) => eprintln!("screenshot: {path}"),
+        Err(e) => eprintln!("{path}: {e}"),
     }
 }
 
@@ -182,7 +182,7 @@ where
     F: FnOnce(Host) -> Result<u8, String> + Send + 'static,
 {
     let menu_letter = menu_state.menu_letter;
-    let menu_hotkey = Scancode::from_name(&menu_letter.to_string()).ok_or(format!("touche du menu invalide : {menu_letter}"))?;
+    let menu_hotkey = Scancode::from_name(&menu_letter.to_string()).ok_or(format!("invalid menu key: {menu_letter}"))?;
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     // Haute densité : sur un écran mis à l'échelle (4K à 135 %, par
@@ -221,7 +221,7 @@ where
         }
         if let Some(j) = joysticks.as_ref().and_then(|s| s.open(id).ok()) {
             let sticks = if j.num_axes() >= 4 { 2 } else { 1 };
-            eprintln!("joystick : {} ({} axes)", j.name(), j.num_axes());
+            eprintln!("joystick: {} ({} axes)", j.name(), j.num_axes());
             let _ = tx.send(InputEvent::JoyPresent(sticks));
             *joystick = Some(j);
         }
@@ -271,8 +271,8 @@ where
         let _ = canvas.window_mut().set_fullscreen(true);
     }
     let set_title = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, captured: bool, speed: Option<f64>| {
-        let hint = if captured { "bouton central ou Ctrl+Alt+G libère la souris" } else { "cliquer pour capturer la souris" };
-        let mips = speed.map_or("vitesse max".to_string(), |m| format!("{m} MIPS"));
+        let hint = if captured { "middle button or Ctrl+Alt+G releases the mouse" } else { "click to capture the mouse" };
+        let mips = speed.map_or("full speed".to_string(), |m| format!("{m} MIPS"));
         let _ = canvas.window_mut().set_title(&format!("{title} — {mips} — {hint} — Ctrl+Alt+{menu_letter} menu"));
     };
     let set_capture = |canvas: &mut sdl3::render::Canvas<sdl3::video::Window>, on: bool, captured: &mut bool, speed: Option<f64>| {
@@ -332,7 +332,7 @@ where
                 }
                 Event::KeyDown { scancode: Some(sc), .. } if menu.is_some() => {
                     let Some(key) = menu_key(sc) else { continue };
-                    let m = menu.as_mut().expect("menu ouvert");
+                    let m = menu.as_mut().expect("menu open");
                     menu_state.speed = speed;
                     menu_state.fullscreen = fullscreen;
                     menu_state.message = None;
@@ -364,7 +364,7 @@ where
                                 let _ = tx.send(InputEvent::InsertCd(p.clone()));
                                 menu_state.message = Some(match &p {
                                     Some(p) => format!("CD = {}", p.file_name().unwrap_or_default().to_string_lossy()),
-                                    None => "CD éjecté".into(),
+                                    None => "CD ejected".into(),
                                 });
                                 menu_state.cd = p;
                             }
@@ -495,7 +495,7 @@ where
                 u.set_scale_mode(sdl3::render::ScaleMode::Linear);
                 upscaled = Some((up_size, u));
             }
-            let (_, up) = upscaled.as_mut().expect("texture agrandie");
+            let (_, up) = upscaled.as_mut().expect("upscaled texture");
             let mut copied = Ok(());
             canvas
                 .with_texture_canvas(up, |c| copied = c.copy(t, None, None))

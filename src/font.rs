@@ -36,7 +36,7 @@ impl Font {
         } else {
             raw
         };
-        Self::parse(&data).ok_or_else(|| format!("{} : police PSF illisible", path.display()))
+        Self::parse(&data).ok_or_else(|| format!("{}: unreadable PSF font", path.display()))
     }
 
     /// Police embarquée (Terminus 8×16).

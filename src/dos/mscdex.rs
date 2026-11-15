@@ -80,7 +80,7 @@ impl Mscdex {
         super::vfs::unmount(&self.root);
         self.root = match &iso {
             Some(i) => super::vfs::mount_iso(self.drive, i.clone()),
-            None => PathBuf::from(format!("\0cd:{}:vide", char::from(b'A' + self.drive))),
+            None => PathBuf::from(format!("\0cd:{}:empty", char::from(b'A' + self.drive))),
         };
         self.iso = iso;
         self.changed = true;

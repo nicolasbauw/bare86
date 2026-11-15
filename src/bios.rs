@@ -283,7 +283,7 @@ impl Bios {
         };
         let text = is_text(mode);
         if !text && !matches!(mode, 0x0D | 0x0E | 0x10 | 0x12 | 0x13) && self.warned_modes.insert(mode) {
-            eprintln!("[bios] mode vidéo {mode:02X}h : registres VGA non programmés");
+            eprintln!("[bios] video mode {mode:02X}h: VGA registers not programmed");
         }
         self.vga.borrow_mut().set_mode(mode, al & 0x80 == 0);
         mem.write_u8(bda::VIDEO_MODE, mode);

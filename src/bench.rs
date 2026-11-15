@@ -119,7 +119,7 @@ fn run_case(op: &[u8], mode: Mode) -> Result<(Duration, Stats), Box<dyn std::err
                 st.mmio_write += 1;
                 (false, true)
             }
-            other => return Err(format!("sortie inattendue : {other:?}").into()),
+            other => return Err(format!("unexpected exit: {other:?}").into()),
         };
         if mode == Mode::Coalesced {
             while m.vcpu.coalesced_mmio_read()?.is_some() {
@@ -133,7 +133,7 @@ fn run_case(op: &[u8], mode: Mode) -> Result<(Duration, Stats), Box<dyn std::err
             // Contrôle : BX = CX = 0 en fin de boucle.
             let r = m.vcpu.get_regs()?;
             if r.rbx & 0xFFFF != 0 || r.rcx & 0xFFFF != 0 {
-                return Err(format!("état final faux : BX={:04X} CX={:04X}", r.rbx, r.rcx).into());
+                return Err(format!("wrong final state: BX={:04X} CX={:04X}", r.rbx, r.rcx).into());
             }
             return Ok((start.elapsed(), st));
         }
@@ -144,21 +144,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     const WRITE: &[u8] = &[0x26, 0x88, 0x05]; // mov es:[di], al
     const READ: &[u8] = &[0x26, 0x8A, 0x05]; // mov al, es:[di]
     let cases: [(&str, &[u8], Mode); 8] = [
-        ("boucle vide (nop)", &[0x90], Mode::Exit),
+        ("empty loop (nop)", &[0x90], Mode::Exit),
         // push cx ; push bx ; xor ax, ax ; cpuid ; pop bx ; pop cx
-        ("cpuid (sortie noyau seule)", &[0x51, 0x53, 0x31, 0xC0, 0x0F, 0xA2, 0x5B, 0x59], Mode::Exit),
+        ("cpuid (kernel exit only)", &[0x51, 0x53, 0x31, 0xC0, 0x0F, 0xA2, 0x5B, 0x59], Mode::Exit),
         ("out 80h, al", &[0xE6, 0x80], Mode::Exit),
-        ("écriture VRAM (MMIO)", WRITE, Mode::Exit),
-        ("lecture VRAM (MMIO)", READ, Mode::Exit),
-        ("écriture VRAM (regroupé)", WRITE, Mode::Coalesced),
-        ("écriture VRAM (interprété)", WRITE, Mode::Interp),
-        ("lecture VRAM (interprété)", READ, Mode::Interp),
+        ("VRAM write (MMIO)", WRITE, Mode::Exit),
+        ("VRAM read (MMIO)", READ, Mode::Exit),
+        ("VRAM write (coalesced)", WRITE, Mode::Coalesced),
+        ("VRAM write (interpreted)", WRITE, Mode::Interp),
+        ("VRAM read (interpreted)", READ, Mode::Interp),
     ];
     // Accès VRAM par image du critère (20 000 à 70 Hz).
     let per_second = 20_000.0 * 70.0;
     let mut base_ns = 0.0;
-    println!("{ITERATIONS} itérations par cas\n");
-    println!("{:<28} {:>9} {:>11} {:>9}  sorties io/lect/écr, regroupées, interprétées", "cas", "total ms", "ns/accès", "% CPU");
+    println!("{ITERATIONS} iterations per case\n");
+    println!("{:<28} {:>9} {:>11} {:>9}  exits io/read/write, coalesced, interpreted", "case", "total ms", "ns/access", "% CPU");
     for (i, (name, op, mode)) in cases.iter().enumerate() {
         let (t, st) = run_case(op, *mode)?;
         let ns = t.as_nanos() as f64 / ITERATIONS as f64;
@@ -177,7 +177,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             st.interpreted
         );
     }
-    println!("\n% CPU : part d'un cœur pour 20 000 accès × 70 images/s (critère étape 0).");
+    println!("\n% CPU: share of one core for 20,000 accesses × 70 frames/s (step 0 criterion).");
     Ok(())
 }
 
@@ -205,7 +205,7 @@ fn throttle_case(target: Option<f64>) -> Result<(f64, f64, u64), Box<dyn std::er
     loop {
         match m.vcpu.run() {
             Err(e) if e.errno() == libc::EINTR => {}
-            Ok(exit) => return Err(format!("sortie inattendue : {exit:?}").into()),
+            Ok(exit) => return Err(format!("unexpected exit: {exit:?}").into()),
             Err(e) => return Err(e.into()),
         }
         interrupts += 1;
@@ -229,17 +229,17 @@ fn throttle_case(target: Option<f64>) -> Result<(f64, f64, u64), Box<dyn std::er
 }
 
 pub fn run_throttle() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Tranches de {} ms, {} ms par cas\n", SLICE.as_millis(), THROTTLE_RUN.as_millis());
-    println!("{:>12} {:>14} {:>12} {:>8} {:>12}", "visé MIPS", "invité MIPS", "perf MIPS", "écart", "interruptions");
+    println!("Slices of {} ms, {} ms per case\n", SLICE.as_millis(), THROTTLE_RUN.as_millis());
+    println!("{:>12} {:>14} {:>12} {:>8} {:>12}", "target MIPS", "guest MIPS", "perf MIPS", "error", "interrupts");
     for target in TARGETS {
         let (guest, perf, n) = throttle_case(target)?;
         let (label, err) = match target {
             Some(t) => (format!("{t}"), format!("{:+.1}%", (guest / t - 1.0) * 100.0)),
-            None => ("libre".into(), "-".into()),
+            None => ("free".into(), "-".into()),
         };
         println!("{label:>12} {guest:>14.1} {perf:>12.1} {err:>8} {n:>12}");
     }
-    println!("\ninvité : compté par le programme lui-même (inc eax) ; perf : compteur matériel.");
+    println!("\nguest: counted by the program itself (inc eax); perf: hardware counter.");
     Ok(())
 }
 
@@ -336,7 +336,7 @@ fn remap_case(op: &[u8], remap: Remap) -> Result<f64, Box<dyn std::error::Error>
     loop {
         let (port, value) = match m.vcpu.run()? {
             VcpuExit::IoOut(port, data) => (port, data[0]),
-            other => return Err(format!("sortie inattendue : {other:?}").into()),
+            other => return Err(format!("unexpected exit: {other:?}").into()),
         };
         if port == 0x3C5 && remap == Remap::Slot {
             m.map_vga_window(Some(&planes[usize::from(value & 3)]))?;
@@ -354,7 +354,7 @@ fn remap_case(op: &[u8], remap: Remap) -> Result<f64, Box<dyn std::error::Error>
         Remap::HostView => (0..4).all(|i| file.first_byte(i) != 0),
     };
     if !op.is_empty() && !written {
-        return Err("un plan n'a reçu aucune écriture".into());
+        return Err("a plane received no write".into());
     }
     Ok(us)
 }
@@ -372,17 +372,17 @@ pub fn run_remap() -> Result<(), Box<dyn std::error::Error>> {
     const WRITE: &[u8] = &[0x26, 0x88, 0x05]; // mov es:[di], al
     // mov cx, 16000 ; xor di, di ; rep stosb  (un quart d'écran mode X)
     const FILL: &[u8] = &[0xB9, 0x80, 0x3E, 0x31, 0xFF, 0xF3, 0xAA];
-    println!("{REMAP_COUNT} changements de plan par cas\n");
-    println!("{:<46} {:>10}", "cas", "µs/changement");
-    println!("{:<46} {ioctl_us:>10.1}", "ioctl seules (supprimer + recréer le slot)");
+    println!("{REMAP_COUNT} plane changes per case\n");
+    println!("{:<46} {:>10}", "case", "µs/change");
+    println!("{:<46} {ioctl_us:>10.1}", "ioctls only (delete + recreate the slot)");
     let cases: [(&str, &[u8], Remap); 7] = [
-        ("out 3C5h seul, sans remappage", &[], Remap::None),
-        ("out 3C5h + 16 000 écritures, sans remappage", FILL, Remap::None),
-        ("slot : out 3C5h + remappage", &[], Remap::Slot),
-        ("slot : idem + 1 écriture", WRITE, Remap::Slot),
-        ("slot : idem + 16 000 écritures", FILL, Remap::Slot),
-        ("vue hôte : out 3C5h + remappage + 1 écriture", WRITE, Remap::HostView),
-        ("vue hôte : idem + 16 000 écritures", FILL, Remap::HostView),
+        ("out 3C5h alone, no remapping", &[], Remap::None),
+        ("out 3C5h + 16,000 writes, no remapping", FILL, Remap::None),
+        ("slot: out 3C5h + remapping", &[], Remap::Slot),
+        ("slot: same + 1 write", WRITE, Remap::Slot),
+        ("slot: same + 16,000 writes", FILL, Remap::Slot),
+        ("host view: out 3C5h + remapping + 1 write", WRITE, Remap::HostView),
+        ("host view: same + 16,000 writes", FILL, Remap::HostView),
     ];
     for (name, op, remap) in cases {
         println!("{name:<46} {:>10.1}", remap_case(op, remap)?);

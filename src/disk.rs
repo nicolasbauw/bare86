@@ -46,7 +46,7 @@ impl Disk {
                 .iter()
                 .chain(std::iter::once(&FLOPPY_288))
                 .find(|f| f.0 == kb)
-                .ok_or(format!("{} : taille de disquette inconnue ({kb} Ko)", path.display()))?;
+                .ok_or(format!("{}: unknown floppy size ({kb} KB)", path.display()))?;
             (d.cylinders, d.heads, d.spt) = (c, h, s);
         } else {
             let (h, s) = d.mbr_geometry().unwrap_or((16, 63));
@@ -139,14 +139,14 @@ impl Disks {
         if let Some(i) = self.a_images.iter().position(|p| p == path) {
             self.a_index = i;
         }
-        eprintln!("[disque] A: = {}", path.display());
+        eprintln!("[disk] A: = {}", path.display());
         Ok(())
     }
 
     /// Change la disquette de A: pour l'image suivante de la liste.
     pub fn next_floppy(&mut self) {
         if self.a_images.len() < 2 {
-            eprintln!("[disque] une seule image pour A: (--fda répété pour en donner plusieurs)");
+            eprintln!("[disk] a single image for A: (repeat --fda to give several)");
             return;
         }
         self.a_index = (self.a_index + 1) % self.a_images.len();
@@ -155,19 +155,19 @@ impl Disks {
             Ok(d) => {
                 self.floppies[0] = Some(d);
                 self.changed[0] = true;
-                eprintln!("[disque] A: = {}", path.display());
+                eprintln!("[disk] A: = {}", path.display());
             }
-            Err(e) => eprintln!("[disque] {e}"),
+            Err(e) => eprintln!("[disk] {e}"),
         }
     }
 
     /// Secteur d'amorce du lecteur (signature 55AAh vérifiée).
     pub fn boot_sector(&mut self, drive: u8) -> Result<[u8; SECTOR], String> {
-        let d = self.get(drive).ok_or(format!("lecteur {drive:02X}h absent"))?;
+        let d = self.get(drive).ok_or(format!("drive {drive:02X}h absent"))?;
         let mut s = [0u8; SECTOR];
-        d.read(0, &mut s).map_err(|e| format!("secteur d'amorce : {e}"))?;
+        d.read(0, &mut s).map_err(|e| format!("boot sector: {e}"))?;
         if s[510..] != [0x55, 0xAA] {
-            return Err(format!("lecteur {drive:02X}h non amorçable (pas de signature 55AAh)"));
+            return Err(format!("drive {drive:02X}h not bootable (no 55AAh signature)"));
         }
         Ok(s)
     }

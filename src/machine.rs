@@ -576,7 +576,7 @@ impl<B: Backend> Pc<B> {
                 // Masque et fin d'interruption de son gestionnaire d'IRQ.
                 io.burst_on(0x20..=0x21, false);
                 io.burst_on(0xA0..=0xA1, false);
-                Some((nic, crate::net::NetLink::start(forwards).map_err(|e| format!("réseau : {e}"))?))
+                Some((nic, crate::net::NetLink::start(forwards).map_err(|e| format!("network: {e}"))?))
             }
             None => None,
         };
@@ -651,7 +651,7 @@ impl<B: Backend> Pc<B> {
         match e {
             InputEvent::InsertFloppy(path) => {
                 if let Err(e) = self.bios.disks.insert_floppy(&path) {
-                    eprintln!("[disque] {e}");
+                    eprintln!("[disk] {e}");
                 }
             }
             InputEvent::InsertCd(path) => {
@@ -667,7 +667,7 @@ impl<B: Backend> Pc<B> {
     /// et D: du DOS intégré s'il est monté. Le programme l'apprend comme sur
     /// un vrai lecteur (UNIT ATTENTION, MSCDEX IOCTL 9).
     pub fn change_cd(&mut self, image: Option<&std::path::Path>) -> Result<()> {
-        let Some((_, player)) = &self.cd else { return Err("pas de lecteur de CD (option --cdrom au lancement)".into()) };
+        let Some((_, player)) = &self.cd else { return Err("no CD drive (--cdrom option at startup)".into()) };
         let disc = image.map(crate::cdrom::Disc::open).transpose()?.map(std::sync::Arc::new);
         let player = player.clone();
         {
@@ -684,14 +684,14 @@ impl<B: Backend> Pc<B> {
         }
         match image {
             Some(p) => eprintln!("[cd] {}", p.display()),
-            None => eprintln!("[cd] disque éjecté"),
+            None => eprintln!("[cd] disc ejected"),
         }
         Ok(())
     }
 
     /// Monte une image ISO comme lecteur de CD du DOS intégré (MSCDEX).
     pub fn mount_cd(&mut self, drive: u8) -> Result<()> {
-        let (disc, player) = self.cd.clone().ok_or("pas d'image de CD (--cdrom)")?;
+        let (disc, player) = self.cd.clone().ok_or("no CD image (--cdrom)")?;
         self.dos.mount_cd(self.vm.mem(), drive, disc, player).map_err(Into::into)
     }
 
@@ -753,7 +753,7 @@ impl<B: Backend> Pc<B> {
         if self.dos_hle {
             return Ok(Some(0));
         }
-        eprintln!("[boot] redémarrage");
+        eprintln!("[boot] reboot");
         self.vm.reset_cpu()?;
         let mem = self.vm.mem();
         mem.fill(0, 0xA_0000, 0);
@@ -992,7 +992,7 @@ impl<B: Backend> Pc<B> {
                 Some(InputEvent::JoyButton(i, down)) => self.gameport.borrow_mut().set_button(usize::from(i), down),
                 Some(InputEvent::Speed(mips)) => match mips.map(Throttle::new).transpose() {
                     Ok(t) => self.throttle = t,
-                    Err(e) => eprintln!("bridage : {e}"),
+                    Err(e) => eprintln!("throttling: {e}"),
                 },
                 Some(InputEvent::NextDisk) => self.bios.disks.next_floppy(),
                 Some(e @ (InputEvent::InsertFloppy(_) | InputEvent::InsertCd(_))) => self.media_event(e),
@@ -1090,7 +1090,7 @@ impl<B: Backend> Pc<B> {
             return Ok(());
         }
         if self.vm.state()?.flags & (1 << 9) == 0 {
-            return Err("HLT avec les interruptions masquées (IF = 0)".into());
+            return Err("HLT with interrupts disabled (IF = 0)".into());
         }
         let now = Instant::now();
         let until = self.pit.borrow().next_irq0().unwrap_or(now + HALT_MAX).min(now + HALT_MAX);
@@ -1271,8 +1271,8 @@ impl<B: Backend> Pc<B> {
                     self.vm.reset_cpu()?;
                     self.reboot()?;
                 }
-                Exit::Shutdown => return Err("arrêt du processeur (triple faute ?)".into()),
-                Exit::Other(e) => return Err(format!("sortie de VM inattendue : {e}").into()),
+                Exit::Shutdown => return Err("processor shutdown (triple fault?)".into()),
+                Exit::Other(e) => return Err(format!("unexpected VM exit: {e}").into()),
             }
             if mmio {
                 self.stats.mmio_exits += 1;
@@ -1305,7 +1305,7 @@ impl<B: Backend> Pc<B> {
             let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);
             let screen = bios::screen_text(self.vm.mem()).join("\n");
             return Err(format!(
-                "limite de temps atteinte\n{}\n{}\n{:?}\nécran :\n{}",
+                "time limit reached\n{}\n{}\n{:?}\nscreen:\n{}",
                 crate::debug::format_regs(&cpu),
                 code.join("\n"),
                 self.stats,
@@ -1321,7 +1321,7 @@ impl<B: Backend> Pc<B> {
             self.present_frame();
         }
         if self.input_finished() {
-            return Err("fin de l'entrée : session arrêtée".into());
+            return Err("end of input: session stopped".into());
         }
         if let Some(t) = &mut self.throttle
             && t.take_overflow()
@@ -1374,7 +1374,7 @@ impl<B: Backend> Pc<B> {
             let sp = cpu.linear(2, cpu.gpr[4] & 0xFFFF) as usize;
             let (ip, cs) = (mem.read_u16(sp), mem.read_u16(sp + 2));
             eprintln!(
-                "[int] {vector:02X}h AX={:04X} BX={:04X} CX={:04X} DX={:04X} ES={:04X} depuis {cs:04X}:{ip:04X}",
+                "[int] {vector:02X}h AX={:04X} BX={:04X} CX={:04X} DX={:04X} ES={:04X} from {cs:04X}:{ip:04X}",
                 cpu.gpr[0] & 0xFFFF,
                 cpu.gpr[3] & 0xFFFF,
                 cpu.gpr[1] & 0xFFFF,
@@ -1394,7 +1394,7 @@ impl<B: Backend> Pc<B> {
                     let tail = (usize::from(mem.read_u16(block + 4)) << 4) + usize::from(mem.read_u16(block + 2));
                     let len = usize::from(mem.read_u8(tail)).min(126);
                     let t: Vec<u8> = (0..len).map(|i| mem.read_u8(tail + 1 + i)).collect();
-                    eprintln!("      ligne « {} »", String::from_utf8_lossy(&t));
+                    eprintln!("      line \"{}\"", String::from_utf8_lossy(&t));
                 }
             }
         }
@@ -1472,7 +1472,7 @@ impl<B: Backend> Pc<B> {
             // Le service a pu poser un code d'erreur (AH, CF) : on le transmet.
             Flow::Unhandled(ah) => {
                 if self.unhandled.insert((vector, ah)) {
-                    eprintln!("[int] INT {vector:02X}h AH={ah:02X}h non géré");
+                    eprintln!("[int] INT {vector:02X}h AH={ah:02X}h not handled");
                 }
             }
             Flow::Continue => {}

@@ -44,7 +44,7 @@ impl IoBus {
 
     fn note_unmapped(&mut self, port: u16, what: &str) {
         if self.trace && self.unmapped.insert(port) {
-            eprintln!("[io] {what} port {port:04X}h sans périphérique");
+            eprintln!("[io] {what} port {port:04X}h with no device");
         }
     }
 

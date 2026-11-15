@@ -72,12 +72,12 @@ impl Disc {
         let file = File::open(path).map_err(err)?;
         let size = file.metadata().map_err(err)?.len();
         if size < 17 * SECTOR as u64 {
-            return Err(format!("{} : image trop petite pour un CD", path.display()));
+            return Err(format!("{}: image too small for a CD", path.display()));
         }
         let mut probe = [0u8; 6];
         file.read_exact_at(&mut probe, 16 * SECTOR as u64).map_err(err)?;
         if &probe[1..6] != b"CD001" {
-            return Err(format!("{} : pas d'ISO 9660 (descripteur de volume absent)", path.display()));
+            return Err(format!("{}: not ISO 9660 (no volume descriptor)", path.display()));
         }
         let sectors = (size / SECTOR as u64) as u32;
         let track = Track { number: 1, start: 0, sectors, audio: false, file: 0, sector_size: SECTOR as u64, data_offset: 0, file_offset: 0 };
@@ -90,7 +90,7 @@ impl Disc {
     /// précédente), PREGAP (silence absent du fichier).
     fn open_cue(path: &Path) -> Result<Self, String> {
         let name = path.display();
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{name} : {e}"))?;
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{name}: {e}"))?;
         let dir = path.parent().unwrap_or(Path::new("."));
         // Pistes lues : (n°, fichier, taille de secteur, décalage, audio,
         // INDEX 01 dans le fichier, prégap hors fichier).
@@ -98,7 +98,7 @@ impl Disc {
         let mut raw: Vec<(u8, usize, u64, u64, bool, Option<u32>, u32)> = Vec::new();
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
-            let bad = || format!("{name}, ligne {} : « {line} »", n + 1);
+            let bad = || format!("{name}, line {}: \"{line}\"", n + 1);
             let (cmd, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
             match cmd.to_ascii_uppercase().as_str() {
                 "FILE" => {
@@ -107,7 +107,7 @@ impl Disc {
                         Some(r) => r.split('"').next().unwrap_or(""),
                         None => rest.split_whitespace().next().unwrap_or(""),
                     };
-                    let p = find_file(dir, fname).ok_or_else(|| format!("{name} : fichier « {fname} » introuvable"))?;
+                    let p = find_file(dir, fname).ok_or_else(|| format!("{name}: file \"{fname}\" not found"))?;
                     let f = File::open(&p).map_err(|e| format!("{} : {e}", p.display()))?;
                     let size = f.metadata().map_err(|e| format!("{} : {e}", p.display()))?.len();
                     files.push((f, size));
@@ -121,10 +121,10 @@ impl Disc {
                         "MODE1/2352" => (2352, 16, false),
                         "MODE2/2336" => (2336, 8, false),
                         "MODE2/2352" => (2352, 24, false),
-                        _ => return Err(format!("{}, type de piste non pris en charge", bad())),
+                        _ => return Err(format!("{}, unsupported track type", bad())),
                     };
                     if files.is_empty() {
-                        return Err(format!("{} : TRACK avant FILE", bad()));
+                        return Err(format!("{}: TRACK before FILE", bad()));
                     }
                     raw.push((num, files.len() - 1, size, offset, audio, None, 0));
                 }
@@ -145,7 +145,7 @@ impl Disc {
             }
         }
         if raw.is_empty() {
-            return Err(format!("{name} : aucune piste"));
+            return Err(format!("{name}: no track"));
         }
         // Positions absolues : chaque fichier suit le précédent, les
         // prégaps hors fichier décalent tout ce qui suit.
@@ -158,7 +158,7 @@ impl Disc {
                 file_base += (files[prev_file].1 / prev_size) as u32;
             }
             gaps += pregap;
-            let index1 = index1.ok_or_else(|| format!("{name} : piste {number} sans INDEX 01"))?;
+            let index1 = index1.ok_or_else(|| format!("{name}: track {number} without INDEX 01"))?;
             let file_sectors = (files[file].1 / size) as u32;
             let end_in_file = raw.get(i + 1).filter(|n| n.1 == file).and_then(|n| n.5).unwrap_or(file_sectors);
             tracks.push(Track {

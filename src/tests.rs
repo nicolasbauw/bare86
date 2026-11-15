@@ -246,7 +246,7 @@ fn bios_keyboard() {
 fn bios_keyboard_without_input_fails_cleanly() {
     let (mut pc, _) = machine(&Config::default(), program!("bios_kbd"));
     let err = pc.run().unwrap_err();
-    assert!(err.0.contains("fin de l'entrée"), "{err}");
+    assert!(err.0.contains("end of input"), "{err}");
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn shell_session() {
     pc.mount(2, dir.clone());
     assert_eq!(pc.shell().unwrap(), 7);
     let text = String::from_utf8_lossy(&out.0.borrow()).into_owned();
-    for want in ["C:\\JEUX>cd\r\nC:\\JEUX\r\n", "bonjour\r\nC:\\>", "enfant : salut", "incorrect"] {
+    for want in ["C:\\JEUX>cd\r\nC:\\JEUX\r\n", "bonjour\r\nC:\\>", "enfant : salut", "Bad command"] {
         assert!(text.contains(want), "{want:?} absent de :\n{text}");
     }
     assert!(!text.contains("cache") && !text.contains("MS-DOS version"), "{text}");

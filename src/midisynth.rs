@@ -68,11 +68,11 @@ impl Synth {
         unsafe {
             let dev = adl_init(c_long::from(rate as i32));
             if dev.is_null() {
-                return Err("libADLMIDI : initialisation impossible".into());
+                return Err("libADLMIDI: initialization failed".into());
             }
             let s = Self { dev, buf: Vec::new(), idle_since: Some(Instant::now()), messages: 0 };
             if adl_setBank(dev, bank as c_int) != 0 {
-                return Err(format!("banque MIDI {bank} inconnue (0 à {})", adl_getBanksCount() - 1));
+                return Err(format!("unknown MIDI bank {bank} (0 to {})", adl_getBanksCount() - 1));
             }
             // Quatre puces : polyphonie de 72 voix à deux opérateurs.
             adl_setNumChips(dev, 4);

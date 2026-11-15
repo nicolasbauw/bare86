@@ -137,12 +137,12 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
             out.push(Text(if c == b'\n' { b'\r' } else { c }));
             continue;
         }
-        let end = rest.iter().position(|&c| c == b'}').ok_or("« { » sans « } »")?;
+        let end = rest.iter().position(|&c| c == b'}').ok_or("\"{\" without \"}\"")?;
         let raw = String::from_utf8_lossy(&rest[..end]).into_owned();
         let name = raw.to_ascii_lowercase();
         rest = &rest[end + 1..];
         if let Some(ms) = name.strip_prefix("wait:") {
-            out.push(crate::host::InputEvent::Wait(ms.parse().map_err(|_| format!("durée invalide : {ms}"))?));
+            out.push(crate::host::InputEvent::Wait(ms.parse().map_err(|_| format!("invalid duration: {ms}"))?));
             continue;
         }
         if name.starts_with("until:") {
@@ -150,8 +150,8 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
             continue;
         }
         if let Some(v) = name.strip_prefix("mouse:") {
-            let n: Vec<i32> = v.split(',').map(|x| x.trim().parse().map_err(|_| format!("souris : {v}"))).collect::<Result<_, _>>()?;
-            let [dx, dy, buttons] = n[..] else { return Err(format!("souris : dx,dy,boutons attendus ({v})")) };
+            let n: Vec<i32> = v.split(',').map(|x| x.trim().parse().map_err(|_| format!("mouse: {v}"))).collect::<Result<_, _>>()?;
+            let [dx, dy, buttons] = n[..] else { return Err(format!("mouse: dx,dy,buttons expected ({v})")) };
             out.push(crate::host::InputEvent::Mouse { dx, dy, buttons: buttons as u8 });
             continue;
         }
@@ -169,7 +169,7 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
             continue;
         }
         if let Some(v) = name.strip_prefix("speed:") {
-            let mips = if v == "max" { None } else { Some(v.parse().map_err(|_| format!("vitesse invalide : {v}"))?) };
+            let mips = if v == "max" { None } else { Some(v.parse().map_err(|_| format!("invalid speed: {v}"))?) };
             out.push(crate::host::InputEvent::Speed(mips));
             continue;
         }
@@ -195,15 +195,15 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
             "del" => 0x53,
             k if k.len() == 1 => {
                 let ch = k.as_bytes()[0];
-                NORMAL.iter().position(|&x| x == ch && ch != 0).ok_or(format!("touche inconnue : {k}"))? as u8
+                NORMAL.iter().position(|&x| x == ch && ch != 0).ok_or(format!("unknown key: {k}"))? as u8
             }
             k if k.starts_with('f') => match k[1..].parse::<u8>() {
                 Ok(n @ 1..=10) => 0x3A + n,
                 Ok(11) => 0x57,
                 Ok(12) => 0x58,
-                _ => return Err(format!("touche inconnue : {k}")),
+                _ => return Err(format!("unknown key: {k}")),
             },
-            k => return Err(format!("touche inconnue : {k}")),
+            k => return Err(format!("unknown key: {k}")),
         };
         let mods: Vec<u8> = mods
             .split('+')
@@ -212,7 +212,7 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
                 "alt" => Ok(0x38),
                 "ctrl" => Ok(0x1D),
                 "shift" => Ok(0x2A),
-                _ => Err(format!("modificateur inconnu : {m}")),
+                _ => Err(format!("unknown modifier: {m}")),
             })
             .collect::<Result<_, _>>()?;
         out.extend(mods.iter().map(|&m| Key(m)));
