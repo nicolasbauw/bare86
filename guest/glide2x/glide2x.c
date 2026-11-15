@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  *
- * glide2x.dll de Bare86 : Glide 2 (3dfx) pour les programmes Win32 lancés
- * par HX DOS Extender. Aucun accès au matériel : chaque appel est rangé dans
+ * glide2x.dll et glide2x.ovl de Bare86 : Glide 2 (3dfx) pour les programmes
+ * Win32 lancés par HX DOS Extender (DLL PE), et pour les jeux DOS sous
+ * DOS/4GW (DLL au format LE, assemblée par mkovl.py). Aucun accès au matériel : chaque appel est rangé dans
  * un tampon de commandes, transmis à l'hôte par `out 0E2h, al` (EBX =
  * tampon, ECX = longueur, EAX en retour), qui le rejoue en OpenGL. Le
  * protocole est décrit dans src/glide/proto.rs (mêmes numéros ici).
@@ -16,7 +17,13 @@ typedef int i32;
 typedef unsigned short u16;
 typedef unsigned char u8;
 
+#ifdef _WIN32
 #define API __declspec(dllexport) __stdcall
+#else
+/* DOS/4GW : convention __stdcall de Watcom (pile, dépilée par l'appelée) ;
+ * mkovl.py exporte ces fonctions sous les noms de la DLL de 3dfx. */
+#define API __attribute__((stdcall))
+#endif
 
 /* --- Protocole (src/glide/proto.rs) ------------------------------------ */
 enum {
@@ -57,7 +64,9 @@ typedef struct { u32 pixelsIn, chromaFail, zFuncFail, aFuncFail, pixelsOut; } Gr
 int _fltused = 0;
 void *memset(void *d, int c, unsigned n) { u8 *p = d; while (n--) *p++ = (u8)c; return d; }
 void *memcpy(void *d, const void *s, unsigned n) { u8 *p = d; const u8 *q = s; while (n--) *p++ = *q++; return d; }
+#ifdef _WIN32
 int __stdcall _DllMainCRTStartup(void *h, u32 reason, void *r) { (void)h; (void)reason; (void)r; return 1; }
+#endif
 
 /* --- Tampon de commandes ----------------------------------------------- */
 #define BUF_WORDS (1u << 19)          /* 2 Mo */
