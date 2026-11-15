@@ -375,7 +375,6 @@ among what does not, yet:
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine
   characters) are not shown yet in text mode.
-- Windows 95/98 is the next big step.
 
 The design journal, with the decisions, measurements and the progress of
 each step, is in [docs/JOURNAL.md](docs/JOURNAL.md) (in French).
