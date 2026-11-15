@@ -70,17 +70,27 @@ def stubs(obj):
     defined = {n.lower() for n, _, info, shndx in elf.symbols() if shndx != 0 and info >> 4 == 1}
     print("/* Généré par mkovl.py : exportations de glide2x.ovl sans équivalent. */")
     print("typedef unsigned int u32;")
-    for _, export in exports():
+    # Premier appel d'une fonction vide : commande MISSING (proto.rs) envoyée
+    # seule par le port E2h, pour que l'hôte nomme la fonction manquante.
+    print("static u32 seen[8], msg[2];")
+    print("static void missing(u32 ordinal) {")
+    print("    if (seen[ordinal >> 5] & 1u << (ordinal & 31)) return;")
+    print("    seen[ordinal >> 5] |= 1u << (ordinal & 31);")
+    print("    msg[0] = 42u << 16 | 1; msg[1] = ordinal;")
+    print('    __asm__ volatile("outb %%al, $0xE2" : : "a"(0), "b"(msg), "c"(8) : "memory");')
+    print("}")
+    for ordinal, export in exports():
         name, n = base_name(export)
         if name in defined:
             continue
+        assert ordinal < 256
         cname = "stub_" + name
         if n is None:
             print(f"u32 {cname}(void) {{ return 0; }}")
         else:
             args = ", ".join(f"u32 a{i}" for i in range(n // 4)) or "void"
             used = "".join(f" (void)a{i};" for i in range(n // 4))
-            print(f"__attribute__((stdcall)) u32 {cname}({args}) {{{used} return 0; }}")
+            print(f"__attribute__((stdcall)) u32 {cname}({args}) {{{used} missing({ordinal}); return 0; }}")
 
 
 def ovl(elf_path, out_path):

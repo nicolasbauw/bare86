@@ -68,7 +68,10 @@ difference is under the hood, and shows with demanding late-90s games.
   file wins), so games find it without copying anything: the Quake II demo
   runs with its 3dfx MiniGL driver
   (`+set vid_ref gl +set gl_driver 3dfxgl`), at about 875 frames/s in its
-  timedemo against 634 with the software renderer.
+  timedemo against 634 with the software renderer. DOS games linked to
+  Glide (DOS/4GW) get the same code as `glide2x.ovl`, provided the same
+  way: the 3dfx demo of Grand Theft Auto runs with it. Glide functions a
+  game calls but Bare86 lacks are named on the terminal.
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
   modes), SVGA through VESA VBE 2.0 with a linear framebuffer (or VBE 1.2 with
   banked windows): 320×200 to 1024×768 in 8, 15, 16, 24 and 32 bits per pixel,

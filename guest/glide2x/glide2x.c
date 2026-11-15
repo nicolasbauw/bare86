@@ -15,6 +15,7 @@
 typedef unsigned int u32;
 typedef int i32;
 typedef unsigned short u16;
+typedef short i16;
 typedef unsigned char u8;
 
 #ifdef _WIN32
@@ -35,7 +36,7 @@ enum {
     OP_TEX_MIPMAP, OP_TEX_SOURCE, OP_TEX_DOWNLOAD, OP_TEX_DOWNLOAD_PARTIAL,
     OP_TEX_TABLE, OP_TRIANGLE, OP_LINE, OP_POINT, OP_SAVE_STATE,
     OP_RESTORE_STATE, OP_LFB_READ, OP_LFB_WRITE, OP_FOG_GENERATE, OP_SHUTDOWN,
-    OP_GAMMA,
+    OP_GAMMA, OP_MISSING, OP_CHROMA_MODE, OP_CHROMA_VALUE,
 };
 #define VERTEX_WORDS 11
 
@@ -242,13 +243,14 @@ API void grFogTable(const u8 *t) {
     memcpy(p, t, 64);
 }
 API void grDitherMode(i32 m) { (void)m; }
-API void grChromakeyMode(i32 m) { (void)m; }
-API void grChromakeyValue(u32 v) { (void)v; }
+API void grChromakeyMode(i32 m) { cmd1(OP_CHROMA_MODE, m); }
+API void grChromakeyValue(u32 v) { cmd1(OP_CHROMA_VALUE, v); }
 API void grGammaCorrectionValue(float g) { cmd1(OP_GAMMA, fbits(g)); }
 API void grDisableAllEffects(void) {
     grAlphaBlendFunction(4, 0, 4, 0);
     grAlphaTestFunction(7);
     grDepthBufferMode(0);
+    grChromakeyMode(0);
     grFogMode(0);
 }
 
@@ -359,8 +361,161 @@ API void guFogGenerateExp(u8 *t, float density) { fog_generate(0, density, 0, t)
 API void guFogGenerateExp2(u8 *t, float density) { fog_generate(1, density, 0, t); }
 API void guFogGenerateLinear(u8 *t, float near, float far) { fog_generate(2, near, far, t); }
 
+/* --- Utilitaires gu* (bibliothèque de 3dfx, au-dessus de l'interface gr*) --
+ * Combinaisons prêtes à l'emploi, et gestion de la mémoire de texture par
+ * identifiants de mipmap (gutex.c de Glide 2.x) : allocation linéaire par
+ * TMU, sans libération autre que guTexMemReset. */
+API void guColorCombineFunction(i32 fnc) {
+    /* fonction, facteur, local, autre, inversion (GR_COMBINE_*) */
+    static const u8 cc[17][5] = {
+        {0, 0, 0, 2, 0},  /* ZERO */
+        {1, 0, 1, 2, 0},  /* CCRGB */
+        {1, 0, 0, 2, 0},  /* ITRGB */
+        {1, 0, 0, 2, 0},  /* ITRGB_DELTA0 */
+        {3, 8, 1, 1, 0},  /* DECAL_TEXTURE */
+        {3, 1, 1, 1, 0},  /* TEXTURE_TIMES_CCRGB */
+        {3, 1, 0, 1, 0},  /* TEXTURE_TIMES_ITRGB */
+        {3, 1, 0, 1, 0},  /* TEXTURE_TIMES_ITRGB_DELTA0 */
+        {5, 1, 0, 1, 0},  /* TEXTURE_TIMES_ITRGB_ADD_ALPHA */
+        {3, 3, 0, 1, 0},  /* TEXTURE_TIMES_ALPHA */
+        {4, 3, 0, 1, 0},  /* TEXTURE_TIMES_ALPHA_ADD_ITRGB */
+        {4, 8, 0, 1, 0},  /* TEXTURE_ADD_ITRGB */
+        {6, 8, 0, 1, 0},  /* TEXTURE_SUB_ITRGB */
+        {7, 4, 0, 2, 0},  /* CCRGB_BLEND_ITRGB_ON_TEXALPHA */
+        {4, 3, 0, 1, 0},  /* DIFF_SPEC_A */
+        {5, 1, 0, 1, 0},  /* DIFF_SPEC_B */
+        {0, 0, 1, 2, 1},  /* ONE */
+    };
+    if (fnc < 0 || fnc > 16) return;
+    grColorCombine(cc[fnc][0], cc[fnc][1], cc[fnc][2], cc[fnc][3], cc[fnc][4]);
+}
+API void guAlphaSource(i32 mode) {
+    switch (mode) {
+    case 0: grAlphaCombine(1, 0, 1, 2, 0); break;   /* CC_ALPHA */
+    case 1: grAlphaCombine(1, 0, 0, 2, 0); break;   /* ITERATED_ALPHA */
+    case 2: grAlphaCombine(3, 8, 1, 1, 0); break;   /* TEXTURE_ALPHA */
+    case 3: grAlphaCombine(3, 1, 0, 1, 0); break;   /* TEXTURE_ALPHA_TIMES_ITERATED_ALPHA */
+    }
+}
+API void guTexCombineFunction(i32 tmu, i32 fnc) { grTexCombineFunction(tmu, fnc); }
+API float guFogTableIndexToW(i32 i) { return (float)(1u << (3 + (i >> 2))) / (float)(8 - (i & 3)); }
+
+typedef struct { u8 yRGB[16]; i16 iRGB[4][3]; i16 qRGB[4][3]; u32 packed_data[12]; } GuNccTable;
+/* GrMipMapInfo de glide.h (rendu tel quel par guTexGetMipMapInfo). */
+typedef struct {
+    i32 sst, valid, width, height, aspect_ratio;
+    void *data;
+    i32 format, mipmap_mode, magfilter_mode, minfilter_mode, s_clamp_mode, t_clamp_mode;
+    u32 tLOD, tTextureMode, lod_bias;
+    i32 lod_min, lod_max, tmu;
+    u32 odd_even_mask, tmu_base_address;
+    i32 trilinear;
+    GuNccTable ncc_table;
+} GrMipMapInfo;
+
+#define MAX_MIPMAPS 1024
+static GrMipMapInfo mipmaps[MAX_MIPMAPS];
+static i32 mipmap_count;
+static u32 tex_next[2];
+static i32 tex_current[2] = {-1, -1};
+
+static GrMipMapInfo *mipmap(i32 id) { return id >= 0 && id < mipmap_count && mipmaps[id].valid ? &mipmaps[id] : 0; }
+static u32 mipmap_bytes(const GrMipMapInfo *m) {
+    return mem_required(m->lod_min, m->lod_max, m->aspect_ratio, m->format, m->odd_even_mask);
+}
+
+API void guTexMemReset(void) {
+    memset(mipmaps, 0, sizeof mipmaps);
+    mipmap_count = 0;
+    tex_next[0] = tex_next[1] = 0;
+    tex_current[0] = tex_current[1] = -1;
+}
+API u32 guTexMemQueryAvail(i32 tmu) { return grTexMaxAddress(tmu) - tex_next[tmu & 1]; }
+API i32 guTexAllocateMemory(i32 tmu, u8 odd_even, i32 width, i32 height, i32 format, i32 mm_mode, i32 smallest,
+                            i32 largest, i32 aspect, i32 s_clamp, i32 t_clamp, i32 min_filter, i32 mag_filter,
+                            float lod_bias, i32 trilinear) {
+    if (mipmap_count >= MAX_MIPMAPS) return -1;
+    if (mm_mode == 0) smallest = largest;   /* GR_MIPMAP_DISABLE : le seul grand niveau */
+    GrMipMapInfo *m = &mipmaps[mipmap_count];
+    memset(m, 0, sizeof *m);
+    m->width = width; m->height = height; m->format = format; m->mipmap_mode = mm_mode;
+    m->lod_min = smallest; m->lod_max = largest; m->aspect_ratio = aspect;
+    m->s_clamp_mode = s_clamp; m->t_clamp_mode = t_clamp;
+    m->minfilter_mode = min_filter; m->magfilter_mode = mag_filter;
+    m->lod_bias = fbits(lod_bias); m->trilinear = trilinear;
+    m->tmu = tmu & 1; m->odd_even_mask = odd_even ? odd_even : 3;
+    u32 need = mipmap_bytes(m), start = tex_next[m->tmu];
+    /* Une texture ne franchit pas la limite des 2 Mo (bancs de la TMU). */
+    if (start < 0x200000 && start + need > 0x200000) start = 0x200000;
+    if (start + need > grTexMaxAddress(tmu)) return -1;
+    m->tmu_base_address = start;
+    tex_next[m->tmu] = start + need;
+    m->valid = 1;
+    return mipmap_count++;
+}
+API i32 guTexChangeAttributes(i32 id, i32 width, i32 height, i32 format, i32 mm_mode, i32 smallest, i32 largest,
+                              i32 aspect, i32 s_clamp, i32 t_clamp, i32 min_filter, i32 mag_filter) {
+    GrMipMapInfo *m = mipmap(id);
+    if (!m) return 0;
+    GrMipMapInfo n = *m;
+    if (width != -1) n.width = width;
+    if (height != -1) n.height = height;
+    if (format != -1) n.format = format;
+    if (mm_mode != -1) n.mipmap_mode = mm_mode;
+    if (smallest != -1) n.lod_min = smallest;
+    if (largest != -1) n.lod_max = largest;
+    if (aspect != -1) n.aspect_ratio = aspect;
+    if (s_clamp != -1) n.s_clamp_mode = s_clamp;
+    if (t_clamp != -1) n.t_clamp_mode = t_clamp;
+    if (min_filter != -1) n.minfilter_mode = min_filter;
+    if (mag_filter != -1) n.magfilter_mode = mag_filter;
+    if (n.mipmap_mode == 0) n.lod_min = n.lod_max;
+    if (mipmap_bytes(&n) > mipmap_bytes(m)) return 0;   /* plus de place que réservé */
+    *m = n;
+    return 1;
+}
+API GrMipMapInfo *guTexGetMipMapInfo(i32 id) { return mipmap(id); }
+API i32 guTexGetCurrentMipMap(i32 tmu) { return tex_current[tmu & 1]; }
+API void guTexDownloadMipMap(i32 id, const void *src, const GuNccTable *ncc) {
+    GrMipMapInfo *m = mipmap(id);
+    if (!m) return;
+    if (ncc) m->ncc_table = *ncc;
+    m->data = (void *)src;
+    GrTexInfo info = {m->lod_min, m->lod_max, m->aspect_ratio, m->format, (void *)src};
+    grTexDownloadMipMap(m->tmu, m->tmu_base_address, m->odd_even_mask, &info);
+}
+API void guTexDownloadMipMapLevel(i32 id, i32 lod, const void **src) {
+    GrMipMapInfo *m = mipmap(id);
+    if (!m) return;
+    u32 w, h;
+    level_size(lod, m->aspect_ratio, &w, &h);
+    grTexDownloadMipMapLevel(m->tmu, m->tmu_base_address, lod, m->lod_max, m->aspect_ratio, m->format,
+                             m->odd_even_mask, (void *)*src);
+    *src = (const u8 *)*src + w * h * bpp(m->format);
+}
+API void guTexSource(i32 id) {
+    GrMipMapInfo *m = mipmap(id);
+    if (!m) return;
+    union { u32 u; float f; } bias = {m->lod_bias};
+    grTexClampMode(m->tmu, m->s_clamp_mode, m->t_clamp_mode);
+    grTexMipMapMode(m->tmu, m->mipmap_mode, m->trilinear);
+    grTexFilterMode(m->tmu, m->minfilter_mode, m->magfilter_mode);
+    grTexLodBiasValue(m->tmu, bias.f);
+    GrTexInfo info = {m->lod_min, m->lod_max, m->aspect_ratio, m->format, m->data};
+    grTexSource(m->tmu, m->tmu_base_address, m->odd_even_mask, &info);
+    tex_current[m->tmu] = id;
+}
+
+/* Le découpage à la fenêtre se fait chez l'hôte (ciseaux). */
+API void guDrawTriangleWithClip(const GrVertex *a, const GrVertex *b, const GrVertex *c) { grDrawTriangle(a, b, c); }
+API void guAADrawTriangleWithClip(const GrVertex *a, const GrVertex *b, const GrVertex *c) { grDrawTriangle(a, b, c); }
+API void guDrawPolygonVertexListWithClip(i32 n, const GrVertex *v) { grDrawPlanarPolygonVertexList(n, v); }
+
 /* --- Tampon d'image linéaire ------------------------------------------- */
-static u8 lfb[1024 * 768 * 4];
+/* Comme sur la Voodoo, une ligne du LFB fait toujours 1024 points, quelle que
+ * soit la résolution : des jeux supposent ce pas (2048 octets) sans le lire. */
+#define LFB_STRIDE 1024
+static u8 lfb[LFB_STRIDE * 768 * 4];
 static i32 lfb_write_mode = -1, lfb_origin, lfb_buffer;
 
 API i32 grLfbLock(i32 type, i32 buffer, i32 write_mode, i32 origin, i32 pipeline, GrLfbInfo_t *info) {
@@ -371,12 +526,15 @@ API i32 grLfbLock(i32 type, i32 buffer, i32 write_mode, i32 origin, i32 pipeline
     u32 bytes = (write_mode == 4 || write_mode == 5) ? 4 : 2;
     /* Image courante (aussi pour une écriture : les points non écrits restent). */
     if (bytes == 2) {
-        cmd4(OP_LFB_READ, buffer, origin, (u32)lfb, width * 2);
+        /* Dans le format d'écriture, pour que les points non écrits reviennent intacts. */
+        u32 *p = cmd(OP_LFB_READ, 5);
+        p[0] = buffer; p[1] = origin; p[2] = (u32)lfb; p[3] = LFB_STRIDE * 2;
+        p[4] = (type & 1) && (write_mode == 1 || write_mode == 2) ? (u32)write_mode : 0;
         flush();
     }
     if (type & 1) { lfb_write_mode = write_mode; lfb_origin = origin; lfb_buffer = buffer; }
     info->lfbPtr = lfb;
-    info->strideInBytes = width * bytes;
+    info->strideInBytes = LFB_STRIDE * bytes;
     info->writeMode = write_mode;
     info->origin = origin;
     return 1;
@@ -385,7 +543,7 @@ API i32 grLfbUnlock(i32 type, i32 buffer) {
     if ((type & 1) && lfb_write_mode >= 0 && buffer == lfb_buffer) {
         u32 bytes = (lfb_write_mode == 4 || lfb_write_mode == 5) ? 4 : 2;
         u32 *p = cmd(OP_LFB_WRITE, 5);
-        p[0] = buffer; p[1] = lfb_write_mode; p[2] = lfb_origin; p[3] = (u32)lfb; p[4] = width * bytes;
+        p[0] = buffer; p[1] = lfb_write_mode; p[2] = lfb_origin; p[3] = (u32)lfb; p[4] = LFB_STRIDE * bytes;
         flush();
         lfb_write_mode = -1;
     }

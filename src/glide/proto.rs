@@ -66,7 +66,8 @@ pub const POINT: u16 = 34;
 pub const SAVE_STATE: u16 = 35;
 /// identifiant (grGlideSetState)
 pub const RESTORE_STATE: u16 = 36;
-/// tampon, origine, adresse, pas en octets : l'hôte y écrit l'image en 565
+/// tampon, origine, adresse, pas en octets, format (mode d'écriture 16 bits :
+/// 0 565, 1 555, 2 1555) : l'hôte y écrit l'image dans ce format
 pub const LFB_READ: u16 = 37;
 /// tampon, mode d'écriture, origine, adresse, pas en octets : l'hôte relit
 pub const LFB_WRITE: u16 = 38;
@@ -76,6 +77,13 @@ pub const FOG_GENERATE: u16 = 39;
 pub const SHUTDOWN: u16 = 40;
 /// correction gamma de la sortie vidéo (flottant) ; 1,7 à l'ouverture
 pub const GAMMA: u16 = 41;
+/// numéro d'ordre d'une exportation de `glide2x.ovl` sans équivalent (ses
+/// fonctions vides le signalent à leur premier appel)
+pub const MISSING: u16 = 42;
+/// chromakey actif (1) ou non
+pub const CHROMA_MODE: u16 = 43;
+/// couleur clé, au format de `WIN_OPEN`
+pub const CHROMA_VALUE: u16 = 44;
 
 /// Sommet transmis : x, y, ooz, oow, r, g, b, a, sow, tow, oow (TMU 0).
 pub const VERTEX_WORDS: usize = 11;

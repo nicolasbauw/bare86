@@ -14,6 +14,15 @@ use glow::HasContext;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+/// Nom de l'exportation de `glide2x.ovl` de ce numéro d'ordre.
+fn export_name(ordinal: u32) -> String {
+    include_str!("../../guest/glide2x/ovl_exports.txt")
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .find(|(n, _)| n.parse() == Ok(ordinal))
+        .map_or_else(|| format!("export #{ordinal}"), |(_, name)| name.to_string())
+}
+
 /// Résolutions de `grSstWinOpen` (GR_RESOLUTION_*).
 fn resolution(code: u32) -> (usize, usize) {
     match code {
@@ -79,6 +88,8 @@ struct State {
     mipmap: u32,
     source: Option<TexKey>,
     render_buffer: u32,
+    chroma_mode: bool,
+    chroma_value: u32,
 }
 
 impl State {
@@ -110,6 +121,8 @@ impl State {
             mipmap: 0,
             source: None,
             render_buffer: 1,
+            chroma_mode: false,
+            chroma_value: 0,
         }
     }
 }
@@ -203,7 +216,7 @@ impl Gpu {
             let mut uni = HashMap::new();
             for name in [
                 "screen", "origin_lower", "tex0", "tex_on", "tex_scale", "tmu_rgb", "tmu_a", "cc", "ac", "inv", "constant", "at_func",
-                "at_ref", "fog_mode", "fog_color", "fog_table", "depth_mode", "depth_bias",
+                "at_ref", "chroma_on", "chroma", "fog_mode", "fog_color", "fog_table", "depth_mode", "depth_bias",
             ] {
                 if let Some(l) = g.get_uniform_location(prog, name) {
                     uni.insert(name, l);
@@ -404,6 +417,8 @@ impl Glide {
             ALPHA_TEST_FUNC => self.st.alpha_test = arg(0),
             ALPHA_TEST_REF => self.st.alpha_ref = arg(0) & 0xFF,
             CONSTANT_COLOR => self.st.constant = arg(0),
+            CHROMA_MODE => self.st.chroma_mode = arg(0) != 0,
+            CHROMA_VALUE => self.st.chroma_value = arg(0),
             CULL => self.st.cull = arg(0),
             DEPTH_BIAS => self.st.depth_bias = arg(0) as i16 as i32,
             DEPTH_FUNC => self.st.depth_func = arg(0),
@@ -481,9 +496,10 @@ impl Glide {
                 }
                 for v in verts {
                     let g = |k: usize| f32::from_bits(v[k]);
-                    // La Voodoo ne garde de x et y que 12 bits entiers (virgule fixe
-                    // 12.4) : les programmes ajoutent 3·2^18 pour forcer l'arrondi.
-                    let snap = |c: f32| c - (c / 4096.0).floor() * 4096.0;
+                    // La Voodoo ne garde de x et y que 12 bits entiers signés (virgule
+                    // fixe 12.4, de −2048 à 2047) : les programmes ajoutent 3·2^18
+                    // pour forcer l'arrondi, et les sommets hors écran restent négatifs.
+                    let snap = |c: f32| c - ((c + 2048.0) / 4096.0).floor() * 4096.0;
                     // x, y, r, g, b, a, s, t, q, ooz, oow
                     self.batch.extend_from_slice(&[snap(g(0)), snap(g(1)), g(4), g(5), g(6), g(7), g(8), g(9), g(10), g(2), g(3)]);
                 }
@@ -503,7 +519,7 @@ impl Glide {
                     }
                 }
             }
-            LFB_READ => self.lfb_read(arg(0), arg(1) == 1, arg(2), arg(3) as usize, write),
+            LFB_READ => self.lfb_read(arg(0), arg(1) == 1, arg(2), arg(3) as usize, arg(4), write),
             LFB_WRITE => self.lfb_write(arg(0), arg(1), arg(2) == 1, arg(3), arg(4) as usize, read),
             GAMMA => {
                 self.gamma = gamma_table(f(0));
@@ -513,6 +529,7 @@ impl Glide {
                 let table = fog_table(arg(0), f(1), f(2));
                 write(arg(3), &table);
             }
+            MISSING => eprintln!("glide2x.ovl: {} is not implemented (ignored)", export_name(arg(0))),
             _ => {}
         }
         0
@@ -666,6 +683,9 @@ impl Glide {
             gl.uniform_4_f32(u("constant"), c[0], c[1], c[2], c[3]);
             gl.uniform_1_i32(u("at_func"), st.alpha_test as i32);
             gl.uniform_1_f32(u("at_ref"), st.alpha_ref as f32);
+            gl.uniform_1_i32(u("chroma_on"), i32::from(st.chroma_mode));
+            let k = color(st.color_format, st.chroma_value);
+            gl.uniform_3_f32(u("chroma"), (k[0] * 255.0).round(), (k[1] * 255.0).round(), (k[2] * 255.0).round());
             gl.uniform_1_i32(u("fog_mode"), st.fog_mode as i32);
             let fc = color(st.color_format, st.fog_color);
             gl.uniform_3_f32(u("fog_color"), fc[0], fc[1], fc[2]);
@@ -792,7 +812,7 @@ impl Glide {
 
     /// `grLfbLock` en lecture : l'image du tampon en RGB 565, ligne par
     /// ligne au pas `stride`, écrite chez l'invité à `addr`.
-    fn lfb_read(&mut self, buffer: u32, lower: bool, addr: u32, stride: usize, write: &mut dyn FnMut(u32, &[u8])) {
+    fn lfb_read(&mut self, buffer: u32, lower: bool, addr: u32, stride: usize, format: u32, write: &mut dyn FnMut(u32, &[u8])) {
         let idx = self.buffer_index(buffer);
         let (w, h) = (self.width, self.height);
         let Some(g) = &mut self.gpu else { return };
@@ -803,7 +823,11 @@ impl Glide {
             let src = if lower { y } else { h - 1 - y };
             for x in 0..w {
                 let p = &rgba[(src * w + x) * 4..];
-                let v = (u16::from(p[0] >> 3) << 11) | (u16::from(p[1] >> 2) << 5) | u16::from(p[2] >> 3);
+                let v = match format {
+                    // 555 et 1555 (alpha à 1) : relus avant une écriture dans ce mode.
+                    1 | 2 => 0x8000 | (u16::from(p[0] >> 3) << 10) | (u16::from(p[1] >> 3) << 5) | u16::from(p[2] >> 3),
+                    _ => (u16::from(p[0] >> 3) << 11) | (u16::from(p[1] >> 2) << 5) | u16::from(p[2] >> 3),
+                };
                 line[x * 2..x * 2 + 2].copy_from_slice(&v.to_le_bytes());
             }
             write(addr + (y * stride) as u32, &line);

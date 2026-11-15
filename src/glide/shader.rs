@@ -42,6 +42,10 @@ uniform ivec2 inv;
 uniform vec4 constant;
 uniform int at_func;
 uniform float at_ref;
+// Chromakey : la couleur « autre » du combineur (le texel le plus souvent)
+// égale à la clé (sur 8 bits) n'est pas écrite.
+uniform int chroma_on;
+uniform vec3 chroma;
 uniform int fog_mode;
 uniform vec3 fog_color;
 uniform float fog_table[64];
@@ -115,6 +119,7 @@ void main() {
     float other_a = ac.w == 0 ? v_col.a : ac.w == 1 ? tex_out.a : constant.a;
     vec4 local = vec4(local_rgb, local_a);
     vec4 other = vec4(other_rgb, other_a);
+    if (chroma_on != 0 && floor(other_rgb * 255.0 + 0.5) == chroma) discard;
     vec3 rgb = combine(cc.x, factor(cc.y, local, other, tex_out, false), local, other).rgb;
     float a = combine(ac.x, factor(ac.y, vec4(local_a), vec4(other_a), tex_out, true), vec4(local_a), vec4(other_a)).a;
     if (inv.x != 0) rgb = vec3(1.0) - rgb;
