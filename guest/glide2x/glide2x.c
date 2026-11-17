@@ -157,7 +157,11 @@ API void grGlideGetVersion(char version[80]) {
 /* Seuls les champs de la première carte sont écrits : la taille de la
  * structure varie selon le SDK (nombre de TMU), celle du programme peut être
  * plus petite que la nôtre. */
+/* Les deux requêtes peuvent précéder grGlideInit (Turok compte les cartes
+ * avec grSstQueryBoards avant toute initialisation) : l'hôte est alors
+ * interrogé d'abord. */
 API i32 grSstQueryHardware(GrHwConfiguration *hw) {
+    if (!present) { cmd0(OP_INIT); present = flush(); }
     if (!present) { hw->num_sst = 0; return 0; }
     hw->num_sst = 1;
     hw->SSTs[0].type = 0; /* Voodoo Graphics */
