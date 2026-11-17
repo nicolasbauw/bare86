@@ -43,7 +43,14 @@ typedef double GLclampd;
 enum {
     OP_MAKE_CURRENT = 0x401, /* actif (0/1) ; rend 1 si l'hôte a un OpenGL */
     OP_SWAP,                 /* intervalle de balayage */
-    OP_MISSING,              /* nom (4 mots) d'une fonction absente */
+    OP_MISSING,              /* nom (8 mots) d'une fonction absente */
+    OP_ACTIVE_TEXTURE,       /* unité (GL_TEXTURE0_ARB + n) */
+    OP_CLIENT_ACTIVE_TEXTURE,/* unité */
+    OP_MULTI_TEXCOORD,       /* unité, s, t, r, q */
+    OP_POINT_PARAMETER,      /* pname, 3 valeurs */
+    OP_LOCK_ARRAYS,          /* premier, nombre : copie des tableaux */
+    OP_UNLOCK_ARRAYS,
+    OP_INLINE,               /* fonction, nombre d'arguments, arguments, pixels */
 };
 
 /* Sans bibliothèque C : ce que le compilateur peut appeler de lui-même. */
@@ -64,11 +71,15 @@ static u32 flush(void) {
     return ret;
 }
 
+/* En-tête : (numéro << 16) | nombre de mots ; à partir de FFFFh mots, le
+ * nombre suit dans le mot d'après. */
 static u32 *cmd(u32 op, u32 n) {
-    if (pos + 1 + n > BUF_WORDS) flush();
-    buf[pos] = op << 16 | n;
-    u32 *a = &buf[pos + 1];
-    pos += 1 + n;
+    u32 ext = n >= 0xFFFF;
+    if (pos + 1 + ext + n > BUF_WORDS) flush();
+    buf[pos] = op << 16 | (ext ? 0xFFFF : n);
+    if (ext) buf[pos + 1] = n;
+    u32 *a = &buf[pos + 1 + ext];
+    pos += 1 + ext + n;
     return a;
 }
 
@@ -83,6 +94,132 @@ static void vcopy(u32 *p, const void *v, u32 n) {
 }
 
 #include "gl_gen.c"
+
+/* --- glArrayElement : synchrone, sauf tableaux verrouillés ------------ */
+static int locked;
+GLAPI void glapi glArrayElement(GLint i) {
+    cmd(OP_glArrayElement, 1)[0] = (u32)i;
+    if (!locked) flush();
+}
+
+/* --- Images copiées dans le tampon -------------------------------------
+ * Les envois d'images (textures surtout : Quake II met à jour ses lightmaps
+ * surface par surface) partent avec leurs pixels, sans attendre l'hôte. La
+ * DLL suit pour cela l'état de déballage (glPixelStore, glPush/PopClient-
+ * Attrib) afin de calculer la taille lue ; l'hôte, dans le même état, lit
+ * les pixels au même endroit. Au-delà de INLINE_MAX, appel synchrone.
+ */
+#define INLINE_MAX (1u << 20)
+#define GL_CLIENT_PIXEL_STORE_BIT 1u
+enum { ROW_LENGTH, SKIP_ROWS, SKIP_PIXELS, ALIGNMENT };
+static GLint unpack[4] = {0, 0, 0, 4};
+static struct { GLbitfield mask; GLint unpack[4]; } client_stack[16];
+static u32 client_depth;
+
+GLAPI void glapi glPixelStorei(GLenum pname, GLint param) {
+    if (pname >= 0x0CF2 && pname <= 0x0CF5) unpack[pname - 0x0CF2] = param;
+    u32 *p = cmd(OP_glPixelStorei, 2);
+    p[0] = pname; p[1] = (u32)param;
+}
+GLAPI void glapi glPixelStoref(GLenum pname, GLfloat param) { glPixelStorei(pname, (GLint)param); }
+GLAPI void glapi glPushClientAttrib(GLbitfield mask) {
+    if (client_depth < 16) {
+        client_stack[client_depth].mask = mask;
+        memcpy(client_stack[client_depth].unpack, unpack, sizeof unpack);
+        client_depth++;
+    }
+    cmd(OP_glPushClientAttrib, 1)[0] = mask;
+}
+GLAPI void glapi glPopClientAttrib(void) {
+    if (client_depth) {
+        client_depth--;
+        if (client_stack[client_depth].mask & GL_CLIENT_PIXEL_STORE_BIT)
+            memcpy(unpack, client_stack[client_depth].unpack, sizeof unpack);
+    }
+    cmd(OP_glPopClientAttrib, 0);
+}
+
+static u32 type_size(GLenum type) {
+    switch (type) {
+    case 0x1400: case 0x1401: return 1;
+    case 0x1402: case 0x1403: return 2;
+    default: return 4;
+    }
+}
+
+/* Octets lus pour une image (même calcul que image_bytes de l'hôte). */
+static u32 image_bytes(GLsizei w, GLsizei h, GLenum format, GLenum type) {
+    if (w <= 0 || h <= 0) return 0;
+    u32 row_len = unpack[ROW_LENGTH] > 0 ? (u32)unpack[ROW_LENGTH] : (u32)w;
+    u32 skip_rows = unpack[SKIP_ROWS] > 0 ? (u32)unpack[SKIP_ROWS] : 0;
+    u32 skip_pixels = unpack[SKIP_PIXELS] > 0 ? (u32)unpack[SKIP_PIXELS] : 0;
+    u32 align = unpack[ALIGNMENT] > 0 ? (u32)unpack[ALIGNMENT] : 1;
+    if (type == 0x1A00) {
+        u32 stride = ((row_len + 7) / 8 + align - 1) / align * align;
+        return (skip_rows + (u32)h - 1) * stride + (skip_pixels + (u32)w + 7) / 8;
+    }
+    u32 comps, size;
+    switch (format) {
+    case 0x1907: case 0x80E0: comps = 3; break;
+    case 0x190A: comps = 2; break;
+    case 0x1900: case 0x1901: case 0x1902: case 0x1903: case 0x1904:
+    case 0x1905: case 0x1906: case 0x1909: comps = 1; break;
+    default: comps = 4;
+    }
+    switch (type) {
+    case 0x8032: case 0x8362: comps = 1; size = 1; break;
+    case 0x8033: case 0x8034: case 0x8363: case 0x8364: case 0x8365: case 0x8366: comps = 1; size = 2; break;
+    case 0x8035: case 0x8036: case 0x8367: case 0x8368: comps = 1; size = 4; break;
+    default: size = type_size(type);
+    }
+    u32 group = comps * size, row = row_len * group;
+    u32 stride = size >= align ? row : (row + align - 1) / align * align;
+    return (skip_rows + (u32)h - 1) * stride + (skip_pixels + (u32)w) * group;
+}
+
+/* Range l'appel `op` (arguments `a`, pixels en dernier) avec ses pixels ;
+ * faux si l'image est trop grande (l'appelant passe alors en synchrone). */
+static int send_image(u32 op, const u32 *a, u32 nargs, const void *pixels, u32 bytes) {
+    if (!pixels) bytes = 0;
+    if (bytes > INLINE_MAX) return 0;
+    u32 *p = cmd(OP_INLINE, 2 + nargs + (bytes + 3) / 4);
+    p[0] = op; p[1] = nargs;
+    for (u32 i = 0; i < nargs; i++) p[2 + i] = a[i];
+    vcopy(p + 2 + nargs, pixels, bytes);
+    return 1;
+}
+static void send_sync(u32 op, const u32 *a, u32 nargs, const void *pixels) {
+    u32 *p = cmd(op, nargs + 1);
+    for (u32 i = 0; i < nargs; i++) p[i] = a[i];
+    p[nargs] = (u32)pixels;
+    flush();
+}
+#define IMAGE(op, n, px, bytes) do { if (!send_image(op, a, n, px, bytes)) send_sync(op, a, n, px); } while (0)
+
+GLAPI void glapi glTexImage1D(GLenum target, GLint level, GLint internal, GLsizei w, GLint border, GLenum format, GLenum type, const GLvoid *pixels) {
+    u32 a[] = {target, (u32)level, (u32)internal, (u32)w, (u32)border, format, type};
+    IMAGE(OP_glTexImage1D, 7, pixels, image_bytes(w, 1, format, type));
+}
+GLAPI void glapi glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum format, GLenum type, const GLvoid *pixels) {
+    u32 a[] = {target, (u32)level, (u32)internal, (u32)w, (u32)h, (u32)border, format, type};
+    IMAGE(OP_glTexImage2D, 8, pixels, image_bytes(w, h, format, type));
+}
+GLAPI void glapi glTexSubImage1D(GLenum target, GLint level, GLint x, GLsizei w, GLenum format, GLenum type, const GLvoid *pixels) {
+    u32 a[] = {target, (u32)level, (u32)x, (u32)w, format, type};
+    IMAGE(OP_glTexSubImage1D, 6, pixels, image_bytes(w, 1, format, type));
+}
+GLAPI void glapi glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type, const GLvoid *pixels) {
+    u32 a[] = {target, (u32)level, (u32)x, (u32)y, (u32)w, (u32)h, format, type};
+    IMAGE(OP_glTexSubImage2D, 8, pixels, image_bytes(w, h, format, type));
+}
+GLAPI void glapi glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const GLvoid *pixels) {
+    u32 a[] = {(u32)w, (u32)h, format, type};
+    IMAGE(OP_glDrawPixels, 4, pixels, image_bytes(w, h, format, type));
+}
+GLAPI void glapi glBitmap(GLsizei w, GLsizei h, GLfloat xo, GLfloat yo, GLfloat xm, GLfloat ym, const GLubyte *bitmap) {
+    u32 a[] = {(u32)w, (u32)h, fbits(xo), fbits(yo), fbits(xm), fbits(ym)};
+    IMAGE(OP_glBitmap, 6, bitmap, image_bytes(w, h, 0x1900, 0x1A00));
+}
 
 /* --- glGetString : l'hôte écrit la chaîne dans un tampon de la DLL ----- */
 static char strings[4][4096];
@@ -193,9 +330,78 @@ static int streq(const char *a, const char *b) {
     return *a == *b;
 }
 
+/* --- GL_ARB_multitexture et GL_SGIS_multitexture --------------------- */
+#define GL_TEXTURE0_ARB 0x84C0u
+#define GL_TEXTURE0_SGIS 0x835Eu
+
+static void glapi glActiveTextureARB(GLenum unit) { cmd(OP_ACTIVE_TEXTURE, 1)[0] = unit; }
+static void glapi glClientActiveTextureARB(GLenum unit) { cmd(OP_CLIENT_ACTIVE_TEXTURE, 1)[0] = unit; }
+static void mtc(GLenum unit, float s, float t, float r, float q) {
+    u32 *p = cmd(OP_MULTI_TEXCOORD, 5);
+    p[0] = unit; p[1] = fbits(s); p[2] = fbits(t); p[3] = fbits(r); p[4] = fbits(q);
+}
+/* Les quatre types (d, f, i, s), en valeurs et en vecteurs, pour 1 à 4
+ * coordonnées ; les absentes valent 0 (t, r) et 1 (q). */
+#define MTC(T, ty) \
+    static void glapi glMultiTexCoord1##T##ARB(GLenum u, ty s) { mtc(u, (float)s, 0, 0, 1); } \
+    static void glapi glMultiTexCoord2##T##ARB(GLenum u, ty s, ty t) { mtc(u, (float)s, (float)t, 0, 1); } \
+    static void glapi glMultiTexCoord3##T##ARB(GLenum u, ty s, ty t, ty r) { mtc(u, (float)s, (float)t, (float)r, 1); } \
+    static void glapi glMultiTexCoord4##T##ARB(GLenum u, ty s, ty t, ty r, ty q) { mtc(u, (float)s, (float)t, (float)r, (float)q); } \
+    static void glapi glMultiTexCoord1##T##vARB(GLenum u, const ty *v) { mtc(u, (float)v[0], 0, 0, 1); } \
+    static void glapi glMultiTexCoord2##T##vARB(GLenum u, const ty *v) { mtc(u, (float)v[0], (float)v[1], 0, 1); } \
+    static void glapi glMultiTexCoord3##T##vARB(GLenum u, const ty *v) { mtc(u, (float)v[0], (float)v[1], (float)v[2], 1); } \
+    static void glapi glMultiTexCoord4##T##vARB(GLenum u, const ty *v) { mtc(u, (float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+MTC(d, GLdouble)
+MTC(f, GLfloat)
+MTC(i, GLint)
+MTC(s, GLshort)
+
+/* SGIS : une seule unité choisie pour les deux usages (état et tableaux). */
+static void glapi glSelectTextureSGIS(GLenum target) {
+    GLenum unit = GL_TEXTURE0_ARB + (target - GL_TEXTURE0_SGIS);
+    glActiveTextureARB(unit);
+    glClientActiveTextureARB(unit);
+}
+static void glapi glMTexCoord2fSGIS(GLenum target, GLfloat s, GLfloat t) {
+    mtc(GL_TEXTURE0_ARB + (target - GL_TEXTURE0_SGIS), s, t, 0, 1);
+}
+static void glapi glMTexCoord2fvSGIS(GLenum target, const GLfloat *v) { glMTexCoord2fSGIS(target, v[0], v[1]); }
+
+/* --- GL_EXT_point_parameters ------------------------------------------- */
+static void glapi glPointParameterfEXT(GLenum pname, GLfloat v) {
+    u32 *p = cmd(OP_POINT_PARAMETER, 4);
+    p[0] = pname; p[1] = fbits(v); p[2] = 0; p[3] = 0;
+}
+static void glapi glPointParameterfvEXT(GLenum pname, const GLfloat *v) {
+    u32 *p = cmd(OP_POINT_PARAMETER, 4);
+    /* GL_DISTANCE_ATTENUATION_EXT (8129h) : trois valeurs ; sinon une. */
+    p[0] = pname; p[1] = fbits(v[0]);
+    p[2] = pname == 0x8129 ? fbits(v[1]) : 0;
+    p[3] = pname == 0x8129 ? fbits(v[2]) : 0;
+}
+
+/* --- GL_EXT_compiled_vertex_array : l'hôte copie une fois les éléments
+ * verrouillés ; tant que le verrou tient, glArrayElement n'attend plus
+ * l'hôte (Quake II dessine ainsi ses modèles, un appel par sommet). */
+static void glapi glLockArraysEXT(GLint first, GLsizei count) {
+    u32 *p = cmd(OP_LOCK_ARRAYS, 2);
+    p[0] = (u32)first; p[1] = (u32)count;
+    flush();
+    locked = 1;
+}
+static void glapi glUnlockArraysEXT(void) { cmd(OP_UNLOCK_ARRAYS, 0); locked = 0; }
+
+#define P(f) {#f, (void *)f}
+#define MTC_P(T) P(glMultiTexCoord1##T##ARB), P(glMultiTexCoord2##T##ARB), P(glMultiTexCoord3##T##ARB), \
+    P(glMultiTexCoord4##T##ARB), P(glMultiTexCoord1##T##vARB), P(glMultiTexCoord2##T##vARB), \
+    P(glMultiTexCoord3##T##vARB), P(glMultiTexCoord4##T##vARB)
 static const struct { const char *name; void *fn; } procs[] = {
-    {"wglSwapIntervalEXT", (void *)wglSwapIntervalEXT},
-    {"wglGetSwapIntervalEXT", (void *)wglGetSwapIntervalEXT},
+    P(wglSwapIntervalEXT), P(wglGetSwapIntervalEXT),
+    P(glActiveTextureARB), P(glClientActiveTextureARB),
+    MTC_P(d), MTC_P(f), MTC_P(i), MTC_P(s),
+    P(glSelectTextureSGIS), P(glMTexCoord2fSGIS), P(glMTexCoord2fvSGIS),
+    P(glPointParameterfEXT), P(glPointParameterfvEXT),
+    P(glLockArraysEXT), P(glUnlockArraysEXT),
 };
 
 GLAPI void *glapi wglGetProcAddress(const char *name) {

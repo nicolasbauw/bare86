@@ -371,8 +371,6 @@ GLAPI void glapi glGetFloatv(GLenum pname, GLfloat *params) { u32 *p = cmd(OP_gl
 GLAPI void glapi glGetIntegerv(GLenum pname, GLint *params) { u32 *p = cmd(OP_glGetIntegerv, 2); p[0] = (u32)pname; p[1] = (u32)params; flush(); }
 GLAPI void glapi glPushAttrib(GLbitfield mask) { u32 *p = cmd(OP_glPushAttrib, 1); p[0] = (u32)mask; }
 GLAPI void glapi glPopAttrib(void) { cmd(OP_glPopAttrib, 0); }
-GLAPI void glapi glPushClientAttrib(GLbitfield mask) { u32 *p = cmd(OP_glPushClientAttrib, 1); p[0] = (u32)mask; }
-GLAPI void glapi glPopClientAttrib(void) { cmd(OP_glPopClientAttrib, 0); }
 GLAPI GLint glapi glRenderMode(GLenum mode) { u32 *p = cmd(OP_glRenderMode, 1); p[0] = (u32)mode; return (GLint)flush(); }
 GLAPI GLenum glapi glGetError(void) { cmd(OP_glGetError, 0); return (GLenum)flush(); }
 GLAPI void glapi glFinish(void) { cmd(OP_glFinish, 0); flush(); }
@@ -558,7 +556,6 @@ GLAPI void glapi glIndexPointer(GLenum type, GLsizei stride, const GLvoid *ptr) 
 GLAPI void glapi glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { u32 *p = cmd(OP_glTexCoordPointer, 4); p[0] = (u32)size; p[1] = (u32)type; p[2] = (u32)stride; p[3] = (u32)ptr; }
 GLAPI void glapi glEdgeFlagPointer(GLsizei stride, const GLvoid *ptr) { u32 *p = cmd(OP_glEdgeFlagPointer, 2); p[0] = (u32)stride; p[1] = (u32)ptr; }
 GLAPI void glapi glGetPointerv(GLenum pname, GLvoid **params) { u32 *p = cmd(OP_glGetPointerv, 2); p[0] = (u32)pname; p[1] = (u32)params; flush(); }
-GLAPI void glapi glArrayElement(GLint i) { u32 *p = cmd(OP_glArrayElement, 1); p[0] = (u32)i; flush(); }
 GLAPI void glapi glDrawArrays(GLenum mode, GLint first, GLsizei count) { u32 *p = cmd(OP_glDrawArrays, 3); p[0] = (u32)mode; p[1] = (u32)first; p[2] = (u32)count; flush(); }
 GLAPI void glapi glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) { u32 *p = cmd(OP_glDrawElements, 4); p[0] = (u32)mode; p[1] = (u32)count; p[2] = (u32)type; p[3] = (u32)indices; flush(); }
 GLAPI void glapi glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer) { u32 *p = cmd(OP_glInterleavedArrays, 3); p[0] = (u32)format; p[1] = (u32)stride; p[2] = (u32)pointer; }
@@ -581,8 +578,6 @@ GLAPI void glapi glGetMaterialfv(GLenum face, GLenum pname, GLfloat *params) { u
 GLAPI void glapi glGetMaterialiv(GLenum face, GLenum pname, GLint *params) { u32 *p = cmd(OP_glGetMaterialiv, 3); p[0] = (u32)face; p[1] = (u32)pname; p[2] = (u32)params; flush(); }
 GLAPI void glapi glColorMaterial(GLenum face, GLenum mode) { u32 *p = cmd(OP_glColorMaterial, 2); p[0] = (u32)face; p[1] = (u32)mode; }
 GLAPI void glapi glPixelZoom(GLfloat xfactor, GLfloat yfactor) { u32 *p = cmd(OP_glPixelZoom, 2); p[0] = fbits(xfactor); p[1] = fbits(yfactor); }
-GLAPI void glapi glPixelStoref(GLenum pname, GLfloat param) { u32 *p = cmd(OP_glPixelStoref, 2); p[0] = (u32)pname; p[1] = fbits(param); }
-GLAPI void glapi glPixelStorei(GLenum pname, GLint param) { u32 *p = cmd(OP_glPixelStorei, 2); p[0] = (u32)pname; p[1] = (u32)param; }
 GLAPI void glapi glPixelTransferf(GLenum pname, GLfloat param) { u32 *p = cmd(OP_glPixelTransferf, 2); p[0] = (u32)pname; p[1] = fbits(param); }
 GLAPI void glapi glPixelTransferi(GLenum pname, GLint param) { u32 *p = cmd(OP_glPixelTransferi, 2); p[0] = (u32)pname; p[1] = (u32)param; }
 GLAPI void glapi glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat *values) { u32 *p = cmd(OP_glPixelMapfv, 3); p[0] = (u32)map; p[1] = (u32)mapsize; p[2] = (u32)values; flush(); }
@@ -591,9 +586,7 @@ GLAPI void glapi glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort *valu
 GLAPI void glapi glGetPixelMapfv(GLenum map, GLfloat *values) { u32 *p = cmd(OP_glGetPixelMapfv, 2); p[0] = (u32)map; p[1] = (u32)values; flush(); }
 GLAPI void glapi glGetPixelMapuiv(GLenum map, GLuint *values) { u32 *p = cmd(OP_glGetPixelMapuiv, 2); p[0] = (u32)map; p[1] = (u32)values; flush(); }
 GLAPI void glapi glGetPixelMapusv(GLenum map, GLushort *values) { u32 *p = cmd(OP_glGetPixelMapusv, 2); p[0] = (u32)map; p[1] = (u32)values; flush(); }
-GLAPI void glapi glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte *bitmap) { u32 *p = cmd(OP_glBitmap, 7); p[0] = (u32)width; p[1] = (u32)height; p[2] = fbits(xorig); p[3] = fbits(yorig); p[4] = fbits(xmove); p[5] = fbits(ymove); p[6] = (u32)bitmap; flush(); }
 GLAPI void glapi glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels) { u32 *p = cmd(OP_glReadPixels, 7); p[0] = (u32)x; p[1] = (u32)y; p[2] = (u32)width; p[3] = (u32)height; p[4] = (u32)format; p[5] = (u32)type; p[6] = (u32)pixels; flush(); }
-GLAPI void glapi glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels) { u32 *p = cmd(OP_glDrawPixels, 5); p[0] = (u32)width; p[1] = (u32)height; p[2] = (u32)format; p[3] = (u32)type; p[4] = (u32)pixels; flush(); }
 GLAPI void glapi glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type) { u32 *p = cmd(OP_glCopyPixels, 5); p[0] = (u32)x; p[1] = (u32)y; p[2] = (u32)width; p[3] = (u32)height; p[4] = (u32)type; }
 GLAPI void glapi glStencilFunc(GLenum func, GLint ref, GLuint mask) { u32 *p = cmd(OP_glStencilFunc, 3); p[0] = (u32)func; p[1] = (u32)ref; p[2] = (u32)mask; }
 GLAPI void glapi glStencilMask(GLuint mask) { u32 *p = cmd(OP_glStencilMask, 1); p[0] = (u32)mask; }
@@ -622,8 +615,6 @@ GLAPI void glapi glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *param
 GLAPI void glapi glGetTexParameteriv(GLenum target, GLenum pname, GLint *params) { u32 *p = cmd(OP_glGetTexParameteriv, 3); p[0] = (u32)target; p[1] = (u32)pname; p[2] = (u32)params; flush(); }
 GLAPI void glapi glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params) { u32 *p = cmd(OP_glGetTexLevelParameterfv, 4); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)pname; p[3] = (u32)params; flush(); }
 GLAPI void glapi glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params) { u32 *p = cmd(OP_glGetTexLevelParameteriv, 4); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)pname; p[3] = (u32)params; flush(); }
-GLAPI void glapi glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid *pixels) { u32 *p = cmd(OP_glTexImage1D, 8); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)internalFormat; p[3] = (u32)width; p[4] = (u32)border; p[5] = (u32)format; p[6] = (u32)type; p[7] = (u32)pixels; flush(); }
-GLAPI void glapi glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels) { u32 *p = cmd(OP_glTexImage2D, 9); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)internalFormat; p[3] = (u32)width; p[4] = (u32)height; p[5] = (u32)border; p[6] = (u32)format; p[7] = (u32)type; p[8] = (u32)pixels; flush(); }
 GLAPI void glapi glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels) { u32 *p = cmd(OP_glGetTexImage, 5); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)format; p[3] = (u32)type; p[4] = (u32)pixels; flush(); }
 GLAPI void glapi glGenTextures(GLsizei n, GLuint *textures) { u32 *p = cmd(OP_glGenTextures, 2); p[0] = (u32)n; p[1] = (u32)textures; flush(); }
 GLAPI void glapi glDeleteTextures(GLsizei n, const GLuint *textures) { u32 *p = cmd(OP_glDeleteTextures, 2); p[0] = (u32)n; p[1] = (u32)textures; flush(); }
@@ -631,8 +622,6 @@ GLAPI void glapi glBindTexture(GLenum target, GLuint texture) { u32 *p = cmd(OP_
 GLAPI void glapi glPrioritizeTextures(GLsizei n, const GLuint *textures, const GLclampf *priorities) { u32 *p = cmd(OP_glPrioritizeTextures, 3); p[0] = (u32)n; p[1] = (u32)textures; p[2] = (u32)priorities; flush(); }
 GLAPI GLboolean glapi glAreTexturesResident(GLsizei n, const GLuint *textures, GLboolean *residences) { u32 *p = cmd(OP_glAreTexturesResident, 3); p[0] = (u32)n; p[1] = (u32)textures; p[2] = (u32)residences; return (GLboolean)flush(); }
 GLAPI GLboolean glapi glIsTexture(GLuint texture) { u32 *p = cmd(OP_glIsTexture, 1); p[0] = (u32)texture; return (GLboolean)flush(); }
-GLAPI void glapi glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const GLvoid *pixels) { u32 *p = cmd(OP_glTexSubImage1D, 7); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)xoffset; p[3] = (u32)width; p[4] = (u32)format; p[5] = (u32)type; p[6] = (u32)pixels; flush(); }
-GLAPI void glapi glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels) { u32 *p = cmd(OP_glTexSubImage2D, 9); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)xoffset; p[3] = (u32)yoffset; p[4] = (u32)width; p[5] = (u32)height; p[6] = (u32)format; p[7] = (u32)type; p[8] = (u32)pixels; flush(); }
 GLAPI void glapi glCopyTexImage1D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLint border) { u32 *p = cmd(OP_glCopyTexImage1D, 7); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)internalformat; p[3] = (u32)x; p[4] = (u32)y; p[5] = (u32)width; p[6] = (u32)border; }
 GLAPI void glapi glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) { u32 *p = cmd(OP_glCopyTexImage2D, 8); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)internalformat; p[3] = (u32)x; p[4] = (u32)y; p[5] = (u32)width; p[6] = (u32)height; p[7] = (u32)border; }
 GLAPI void glapi glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) { u32 *p = cmd(OP_glCopyTexSubImage1D, 6); p[0] = (u32)target; p[1] = (u32)level; p[2] = (u32)xoffset; p[3] = (u32)x; p[4] = (u32)y; p[5] = (u32)width; }

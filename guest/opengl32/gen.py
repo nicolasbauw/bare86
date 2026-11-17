@@ -72,7 +72,9 @@ HOST = {
     'glPopClientAttrib', 'glDrawBuffer', 'glReadBuffer',
 }
 # Écrites à la main dans la DLL invitée.
-GUEST = {'glGetString'}
+GUEST = {'glGetString', 'glArrayElement', 'glPixelStorei', 'glPixelStoref', 'glPushClientAttrib',
+         'glPopClientAttrib', 'glTexImage1D', 'glTexImage2D', 'glTexSubImage1D', 'glTexSubImage2D',
+         'glDrawPixels', 'glBitmap'}
 
 # Vecteurs : nombre de valeurs lues par pointeur.
 PARAM4 = re.compile(r'^gl(Light|LightModel|Material|TexGen|TexEnv|TexParameter|Fog)[dfi]v$')

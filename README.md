@@ -475,9 +475,9 @@ among what does not, yet:
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine
   characters) are not shown yet in text mode.
-- OpenGL is version 1.1 without extensions that add functions (no
-  multitexture yet); `wglUseFontBitmaps` and `wglUseFontOutlines` are
-  missing.
+- OpenGL is version 1.1 with a few extensions (multitexture ARB and SGIS,
+  point parameters, compiled vertex arrays); paletted textures, hardware
+  gamma, `wglUseFontBitmaps` and `wglUseFontOutlines` are missing.
 
 The design journal, with the decisions, measurements and the progress of
 each step, is in [docs/JOURNAL.md](docs/JOURNAL.md) (in French).

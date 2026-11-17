@@ -35,10 +35,37 @@ const MAKE_CURRENT: u16 = 0x401;
 const SWAP: u16 = 0x402;
 /// nom (32 octets) d'une fonction absente de la DLL
 const MISSING: u16 = 0x403;
+/// unité (GL_TEXTURE0_ARB + n) : glActiveTextureARB
+const ACTIVE_TEXTURE: u16 = 0x404;
+/// unité : glClientActiveTextureARB
+const CLIENT_ACTIVE_TEXTURE: u16 = 0x405;
+/// unité, s, t, r, q : glMultiTexCoord*ARB et glMTexCoord*SGIS
+const MULTI_TEXCOORD: u16 = 0x406;
+/// pname, 3 valeurs : glPointParameterf(v)EXT
+const POINT_PARAMETER: u16 = 0x407;
+/// premier, nombre : glLockArraysEXT (copie des éléments verrouillés)
+const LOCK_ARRAYS: u16 = 0x408;
+/// glUnlockArraysEXT
+const UNLOCK_ARRAYS: u16 = 0x409;
+/// fonction, nombre d'arguments, arguments, pixels : image envoyée avec ses
+/// pixels (glTexImage*, glTexSubImage*, glDrawPixels, glBitmap)
+const INLINE: u16 = 0x40A;
 
-/// Extensions annoncées (sans nouveau point d'entrée, sauf
-/// `wglSwapIntervalEXT`, servie par la DLL).
-const EXTENSIONS: &str = "GL_EXT_abgr GL_EXT_bgra GL_EXT_packed_pixels GL_EXT_texture_env_add WGL_EXT_swap_control";
+/// Plafond des éléments copiés pour un dessin : un indice aberrant ne fait
+/// pas tout copier.
+const MAX_ELEMENTS: usize = 1 << 20;
+
+/// Unités de texture offertes (multitexture ARB et SGIS).
+const UNITS: usize = 4;
+const GL_TEXTURE0: u32 = 0x84C0;
+const GL_MAX_TEXTURE_UNITS_ARB: u32 = 0x84E2;
+const GL_MAX_TEXTURES_SGIS: u32 = 0x835D;
+
+/// Extensions annoncées. Les points d'entrée des extensions sont servis par
+/// `wglGetProcAddress` de la DLL. Chaque nom est suivi d'une espace :
+/// GLQuake cherche « GL_SGIS_multitexture » avec l'espace.
+const EXTENSIONS: &str = "GL_ARB_multitexture GL_SGIS_multitexture GL_EXT_abgr GL_EXT_bgra GL_EXT_compiled_vertex_array \
+GL_EXT_packed_pixels GL_EXT_point_parameters GL_EXT_texture_env_add WGL_EXT_swap_control ";
 
 // Énumérations d'OpenGL utilisées ici.
 const GL_FRONT_LEFT: u32 = 0x400;
@@ -106,8 +133,13 @@ impl Array {
 
 #[derive(Clone, Debug, Default)]
 struct Client {
+    /// `TEXCOORD` : tableau de l'unité choisie par glClientActiveTextureARB.
     arrays: [Array; 6],
     enabled: [bool; 6],
+    unit: usize,
+    /// Tableaux de coordonnées de texture des autres unités (celui de
+    /// l'unité choisie est dans `arrays`).
+    tex: [(Array, bool); UNITS],
 }
 
 /// Pixels d'une image : (composantes par pixel, octets par composante),
@@ -175,6 +207,35 @@ fn sentinel_get(es: usize, cap: usize, call: &mut dyn FnMut(*mut c_void)) -> Vec
 struct Gpu {
     off: Offscreen,
     f: Rc<Fns>,
+    ext: Rc<Ext>,
+}
+
+/// Fonctions de l'hôte plus récentes qu'OpenGL 1.1, pour les extensions.
+struct Ext {
+    active_texture: unsafe extern "C" fn(u32),
+    client_active_texture: unsafe extern "C" fn(u32),
+    multi_tex_coord: unsafe extern "C" fn(u32, f32, f32, f32, f32),
+    point_parameter: unsafe extern "C" fn(u32, f32),
+    point_parameter_v: unsafe extern "C" fn(u32, *const f32),
+}
+
+impl Ext {
+    fn load(get: &dyn Fn(&str) -> *const c_void) -> Result<Self, String> {
+        let f = |n: &str| {
+            let p = get(n);
+            if p.is_null() { Err(format!("OpenGL: {n} missing")) } else { Ok(p) }
+        };
+        // SAFETY: pointeurs du chargeur d'OpenGL, signatures de glext.h.
+        unsafe {
+            Ok(Self {
+                active_texture: std::mem::transmute::<*const c_void, _>(f("glActiveTexture")?),
+                client_active_texture: std::mem::transmute::<*const c_void, _>(f("glClientActiveTexture")?),
+                multi_tex_coord: std::mem::transmute::<*const c_void, _>(f("glMultiTexCoord4f")?),
+                point_parameter: std::mem::transmute::<*const c_void, _>(f("glPointParameterf")?),
+                point_parameter_v: std::mem::transmute::<*const c_void, _>(f("glPointParameterfv")?),
+            })
+        }
+    }
 }
 
 pub struct OpenGl {
@@ -198,6 +259,9 @@ pub struct OpenGl {
     select: Option<(u32, Vec<u32>)>,
     /// Copies des tableaux du client pour le dessin en cours.
     scratch: Vec<Vec<u8>>,
+    /// Tableaux verrouillés (GL_EXT_compiled_vertex_array) : éléments
+    /// lo..=hi copiés, pointeurs de l'hôte en place jusqu'au déverrouillage.
+    locked: Option<(usize, usize, Vec<Vec<u8>>)>,
     last_swap: Option<Instant>,
     missing: HashSet<String>,
     pub swaps: u64,
@@ -228,6 +292,7 @@ impl OpenGl {
             feedback: None,
             select: None,
             scratch: Vec::new(),
+            locked: None,
             last_swap: None,
             missing: HashSet::new(),
             swaps: 0,
@@ -316,10 +381,14 @@ impl OpenGl {
         let mut ret = 0;
         while i < words.len() {
             let op = (words[i] >> 16) as u16;
-            let n = (words[i] & 0xFFFF) as usize;
-            let Some(args) = words.get(i + 1..i + 1 + n) else { break };
+            // À partir de FFFFh mots, le nombre suit l'en-tête.
+            let (n, head) = match words[i] & 0xFFFF {
+                0xFFFF => (words.get(i + 1).copied().unwrap_or(0) as usize, 2),
+                n => (n as usize, 1),
+            };
+            let Some(args) = words.get(i + head..i + head + n) else { break };
             ret = self.command(op, args, screen, read, write);
-            i += 1 + n;
+            i += head + n;
         }
         if self.draws_front() {
             self.frame_dirty = true;
@@ -346,10 +415,9 @@ impl OpenGl {
                 let (w, h) = (screen.0.max(1), screen.1.max(1));
                 if self.gpu.is_none() && self.failed.is_none() {
                     match Offscreen::new_compat(w, h).and_then(|off| {
-                        let f = Fns::load(&|name| {
-                            off.proc_address(name)
-                        })?;
-                        Ok(Gpu { off, f: Rc::new(f) })
+                        let f = Fns::load(&|name| off.proc_address(name))?;
+                        let ext = Ext::load(&|name| off.proc_address(name))?;
+                        Ok(Gpu { off, f: Rc::new(f), ext: Rc::new(ext) })
                     }) {
                         Ok(g) => {
                             // SAFETY: chaîne statique du pilote, terminée par NUL.
@@ -388,7 +456,40 @@ impl OpenGl {
             }
             _ => {}
         }
-        let Some(f) = self.gpu.as_ref().map(|g| g.f.clone()) else { return 0 };
+        let Some((f, ext)) = self.gpu.as_ref().map(|g| (g.f.clone(), g.ext.clone())) else { return 0 };
+        let fl = |k: usize| f32::from_bits(arg(k));
+        // SAFETY: contexte courant ; énumérations transmises telles quelles.
+        unsafe {
+            match op {
+                ACTIVE_TEXTURE => {
+                    (ext.active_texture)(arg(0));
+                    return 0;
+                }
+                CLIENT_ACTIVE_TEXTURE => {
+                    let unit = (arg(0).wrapping_sub(GL_TEXTURE0) as usize).min(UNITS - 1);
+                    let c = &mut self.client;
+                    c.tex[c.unit] = (c.arrays[TEXCOORD], c.enabled[TEXCOORD]);
+                    (c.arrays[TEXCOORD], c.enabled[TEXCOORD]) = c.tex[unit];
+                    c.unit = unit;
+                    (ext.client_active_texture)(arg(0));
+                    return 0;
+                }
+                MULTI_TEXCOORD => {
+                    (ext.multi_tex_coord)(arg(0), fl(1), fl(2), fl(3), fl(4));
+                    return 0;
+                }
+                POINT_PARAMETER => {
+                    let v = [fl(1), fl(2), fl(3)];
+                    if arg(0) == 0x8129 {
+                        (ext.point_parameter_v)(arg(0), v.as_ptr());
+                    } else {
+                        (ext.point_parameter)(arg(0), v[0]);
+                    }
+                    return 0;
+                }
+                _ => {}
+            }
+        }
         if op == SWAP {
             let interval = arg(0).min(4);
             if interval > 0
@@ -414,12 +515,12 @@ impl OpenGl {
         }
         // SAFETY: idem ; les pointeurs passés à OpenGL désignent des copies
         // locales de la taille calculée pour l'appel.
-        unsafe { self.special(&f, op, a, read, write) }
+        unsafe { self.special(&f, &ext, op, a, read, write) }
     }
 
     /// Appels qui touchent à la mémoire du programme ou à l'état propre à
     /// Bare86.
-    unsafe fn special(&mut self, f: &Fns, op: u16, a: &[u32], read: &mut dyn FnMut(u32, &mut [u8]), write: &mut dyn FnMut(u32, &[u8])) -> u32 {
+    unsafe fn special(&mut self, f: &Fns, ext: &Ext, op: u16, a: &[u32], read: &mut dyn FnMut(u32, &mut [u8]), write: &mut dyn FnMut(u32, &[u8])) -> u32 {
         let w = |k: usize| a.get(k).copied().unwrap_or(0);
         let i = |k: usize| w(k) as i32;
         let fl = |k: usize| f32::from_bits(w(k));
@@ -510,6 +611,12 @@ impl OpenGl {
                         GL_DRAW_BUFFER => Some(self.draw),
                         GL_READ_BUFFER => Some(self.read),
                         GL_DOUBLEBUFFER => Some(1),
+                        GL_MAX_TEXTURES_SGIS => Some(UNITS as u32),
+                        GL_MAX_TEXTURE_UNITS_ARB => {
+                            let mut n = 1i32;
+                            (f.glGetIntegerv)(pname, (&mut n as *mut i32).cast());
+                            Some(n.clamp(1, UNITS as i32) as u32)
+                        }
                         _ => None,
                     };
                     let bytes = if let Some(v) = patched {
@@ -740,15 +847,40 @@ impl OpenGl {
                     }
                     (f.glPopClientAttrib)();
                 }
+                LOCK_ARRAYS => {
+                    self.locked = None;
+                    if i(1) > 0 {
+                        let lo = i(0).max(0) as usize;
+                        self.lock(f, ext, lo, lo + i(1) as usize - 1, &mut fetch);
+                    }
+                }
+                UNLOCK_ARRAYS => self.locked = None,
+                INLINE => {
+                    let n = w(1) as usize;
+                    let (Some(g), Some(data)) = (a.get(2..2 + n), a.get(2 + n..)) else { return 0 };
+                    let px: *const c_void = if data.is_empty() { std::ptr::null() } else { data.as_ptr().cast() };
+                    let u = |k: usize| g.get(k).copied().unwrap_or(0);
+                    let s = |k: usize| u(k) as i32;
+                    let x = |k: usize| f32::from_bits(u(k));
+                    match w(0) as u16 {
+                        op::glTexImage1D => (f.glTexImage1D)(u(0), s(1), s(2), s(3), s(4), u(5), u(6), px),
+                        op::glTexImage2D => (f.glTexImage2D)(u(0), s(1), s(2), s(3), s(4), s(5), u(6), u(7), px),
+                        op::glTexSubImage1D => (f.glTexSubImage1D)(u(0), s(1), s(2), s(3), u(4), u(5), px),
+                        op::glTexSubImage2D => (f.glTexSubImage2D)(u(0), s(1), s(2), s(3), s(4), s(5), u(6), u(7), px),
+                        op::glDrawPixels => (f.glDrawPixels)(s(0), s(1), u(2), u(3), px),
+                        op::glBitmap => (f.glBitmap)(s(0), s(1), x(2), x(3), x(4), x(5), px),
+                        _ => {}
+                    }
+                }
                 op::glDrawArrays => {
                     if i(2) > 0 {
-                        self.bind_arrays(f, i(1).max(0) as usize, (i(1) + i(2) - 1) as usize, &mut fetch);
+                        self.prepare(f, ext, i(1).max(0) as usize, (i(1) + i(2) - 1) as usize, &mut fetch);
                         (f.glDrawArrays)(w(0), i(1), i(2));
                     }
                 }
                 op::glArrayElement => {
                     let k = i(0).max(0) as usize;
-                    self.bind_arrays(f, k, k, &mut fetch);
+                    self.prepare(f, ext, k, k, &mut fetch);
                     (f.glArrayElement)(i(0));
                 }
                 op::glDrawElements => {
@@ -762,7 +894,7 @@ impl OpenGl {
                     };
                     if n > 0 {
                         let (lo, hi) = (0..n).map(get).fold((usize::MAX, 0), |(l, h), x| (l.min(x), h.max(x)));
-                        self.bind_arrays(f, lo, hi, &mut fetch);
+                        self.prepare(f, ext, lo, hi, &mut fetch);
                         (f.glDrawElements)(w(0), i(1), w(2), idx.as_ptr().cast());
                     }
                 }
@@ -773,15 +905,35 @@ impl OpenGl {
         0
     }
 
+    /// Tableaux prêts pour un dessin des éléments `lo..=hi` : déjà copiés
+    /// s'ils sont verrouillés et couvrent ces éléments ; sinon copiés pour ce
+    /// dessin (ou le verrou étendu à ces éléments).
+    fn prepare(&mut self, f: &Fns, ext: &Ext, lo: usize, hi: usize, fetch: &mut dyn FnMut(u32, usize) -> Vec<u8>) {
+        match self.locked {
+            Some((l, h, _)) if l <= lo && hi <= h => {}
+            Some((l, h, _)) => self.lock(f, ext, l.min(lo), h.max(hi), fetch),
+            None => self.bind_arrays(f, ext, lo, hi, fetch),
+        }
+    }
+
+    fn lock(&mut self, f: &Fns, ext: &Ext, lo: usize, hi: usize, fetch: &mut dyn FnMut(u32, usize) -> Vec<u8>) {
+        let hi = hi.min(lo + MAX_ELEMENTS);
+        self.bind_arrays(f, ext, lo, hi, fetch);
+        self.locked = Some((lo, hi, std::mem::take(&mut self.scratch)));
+    }
+
     /// Copie les éléments `lo..=hi` des tableaux actifs et les donne à
     /// OpenGL (pointeurs décalés : l'élément `k` est lu à l'indice `k`).
-    fn bind_arrays(&mut self, f: &Fns, lo: usize, hi: usize, fetch: &mut dyn FnMut(u32, usize) -> Vec<u8>) {
-        // Plafond de sécurité : un indice aberrant ne fait pas tout copier.
-        let hi = hi.min(lo + (1 << 20));
+    fn bind_arrays(&mut self, f: &Fns, ext: &Ext, lo: usize, hi: usize, fetch: &mut dyn FnMut(u32, usize) -> Vec<u8>) {
+        let hi = hi.min(lo + MAX_ELEMENTS);
         self.scratch.clear();
-        for k in 0..6 {
-            let arr = self.client.arrays[k];
-            if !self.client.enabled[k] || arr.ptr == 0 {
+        // (genre de tableau, unité de texture)
+        let c = &self.client;
+        let mut list: Vec<(usize, usize, Array)> = (0..6).filter(|&k| c.enabled[k]).map(|k| (k, c.unit, c.arrays[k])).collect();
+        list.extend((0..UNITS).filter(|&u| u != c.unit && c.tex[u].1).map(|u| (TEXCOORD, u, c.tex[u].0)));
+        let unit = c.unit;
+        for (k, u, arr) in list {
+            if arr.ptr == 0 {
                 continue;
             }
             let step = arr.step();
@@ -797,6 +949,11 @@ impl OpenGl {
                     NORMAL => (f.glNormalPointer)(arr.ty, stride, p),
                     COLOR => (f.glColorPointer)(arr.size, arr.ty, stride, p),
                     INDEX => (f.glIndexPointer)(arr.ty, stride, p),
+                    TEXCOORD if u != unit => {
+                        (ext.client_active_texture)(GL_TEXTURE0 + u as u32);
+                        (f.glTexCoordPointer)(arr.size, arr.ty, stride, p);
+                        (ext.client_active_texture)(GL_TEXTURE0 + unit as u32);
+                    }
                     TEXCOORD => (f.glTexCoordPointer)(arr.size, arr.ty, stride, p),
                     _ => (f.glEdgeFlagPointer)(stride, p),
                 }
@@ -939,6 +1096,61 @@ mod tests {
         let (_, _, px) = gl.frame().unwrap();
         assert!(px.iter().all(|&p| p == 0x00FF00), "{:06X}", px[0]);
         assert_eq!(run(&mut gl, Cmds(Vec::new()).op(op::glGetError, &[])), 0);
+        // Multitexture : tableau de coordonnées sur l'unité 1, puis retour à
+        // l'unité 0 ; paramètres de points.
+        let mut c = Cmds(Vec::new());
+        c.op(ACTIVE_TEXTURE, &[GL_TEXTURE0 + 1])
+            .op(CLIENT_ACTIVE_TEXTURE, &[GL_TEXTURE0 + 1])
+            .op(op::glEnableClientState, &[0x8078])
+            .op(op::glTexCoordPointer, &[2, 0x1406, 0, 0x100])
+            .op(CLIENT_ACTIVE_TEXTURE, &[GL_TEXTURE0])
+            .op(MULTI_TEXCOORD, &[GL_TEXTURE0 + 1, fb(0.5), fb(0.5), fb(0.0), fb(1.0)])
+            .op(POINT_PARAMETER, &[0x8126, fb(1.0), 0, 0])
+            .op(POINT_PARAMETER, &[0x8129, fb(1.0), fb(0.0), fb(0.01)])
+            .op(op::glDrawArrays, &[4, 0, 3]);
+        run(&mut gl, &c);
+        assert!(gl.client.tex[1].1 && gl.client.tex[1].0.ptr == 0x100 && !gl.client.enabled[TEXCOORD]);
+        assert_eq!(run(&mut gl, Cmds(Vec::new()).op(op::glGetError, &[])), 0);
+        // Tableaux verrouillés : copiés une fois, puis glArrayElement
+        // sans relire la mémoire de l'invité (modifiée ici exprès).
+        let mut c = Cmds(Vec::new());
+        c.op(op::glColor3f, &[fb(1.0), fb(1.0), fb(0.0)]).op(LOCK_ARRAYS, &[0, 3]);
+        run(&mut gl, &c);
+        mem.borrow_mut()[0x100..0x118].fill(0);
+        let mut c = Cmds(Vec::new());
+        c.op(op::glBegin, &[4])
+            .op(op::glArrayElement, &[0])
+            .op(op::glArrayElement, &[1])
+            .op(op::glArrayElement, &[2])
+            .op(op::glEnd, &[])
+            .op(UNLOCK_ARRAYS, &[])
+            .op(SWAP, &[0]);
+        run(&mut gl, &c);
+        assert!(gl.locked.is_none());
+        let (_, _, px) = gl.frame().unwrap();
+        assert!(px.iter().all(|&p| p == 0xFFFF00), "{:06X}", px[0]);
+        // Texture de 256×256 envoyée avec ses pixels (plus de FFFFh mots :
+        // en-tête étendu), plaquée sur tout l'écran.
+        let mut c = Cmds(Vec::new());
+        c.op(op::glDisableClientState, &[0x8074]).op(op::glEnable, &[0x0DE1]).op(op::glTexParameteri, &[0x0DE1, 0x2801, 0x2601]);
+        let mut img = vec![op::glTexImage2D as u32, 8, 0x0DE1, 0, 0x1908, 256, 256, 0, 0x1908, 0x1401];
+        img.extend(std::iter::repeat_n(0xFFFF_00FFu32, 256 * 256)); // octets R=FF G=00 B=FF A=FF
+        c.0.push(u32::from(INLINE) << 16 | 0xFFFF);
+        c.0.push(img.len() as u32);
+        c.0.extend_from_slice(&img);
+        c.op(op::glColor3f, &[fb(1.0), fb(1.0), fb(1.0)])
+            .op(op::glBegin, &[4])
+            .op(op::glTexCoord2f, &[0, 0])
+            .op(op::glVertex2f, &[fb(-1.0), fb(-1.0)])
+            .op(op::glVertex2f, &[fb(3.0), fb(-1.0)])
+            .op(op::glVertex2f, &[fb(-1.0), fb(3.0)])
+            .op(op::glEnd, &[])
+            .op(SWAP, &[0]);
+        run(&mut gl, &c);
+        let (_, _, px) = gl.frame().unwrap();
+        assert!(px.iter().all(|&p| p == 0xFF00FF), "{:06X}", px[0]);
+        run(&mut gl, Cmds(Vec::new()).op(op::glGetIntegerv, &[GL_MAX_TEXTURE_UNITS_ARB, 0x200]));
+        assert_eq!(&mem.borrow()[0x200..0x204], &(UNITS as u32).to_le_bytes());
     }
 
     #[test]
