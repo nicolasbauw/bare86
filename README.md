@@ -206,6 +206,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--fullscreen` | Window, full screen from the start |
 | `--menu-key L` | Letter of the menu shortcut, Ctrl+Alt+L (default M) |
 | `--launcher [DIR]` | List the games of DIR (default: the current directory) and run the chosen one, see [Launcher](#launcher) |
+| `--binfmt` | Print the rules that let Linux run DOS and Win32 programs directly, see [Running programs directly](#running-programs-directly) |
 | `--font F.psf` | PSF font for text mode (default: the built-in Terminus 8×16) |
 | `--term` | Show the text screen live in the terminal |
 | `--screen` | Print the text screen when the program ends |
@@ -284,6 +285,38 @@ program:
   chosen (`--midi-bank`; default: the FM synthesizer of Windows 95/98).
 
 For the original experience, set the game to Sound Blaster and pick the card.
+
+## Running programs directly
+
+Linux can hand DOS and Win32 programs to Bare86 by itself (binfmt_misc), so
+that `./GAME.EXE` runs from a shell like a native program. Bare86 does not
+change the system on its own: `bare86 --binfmt` prints the rules and how to
+install them, as root:
+
+```sh
+bare86 --binfmt | sudo tee /etc/binfmt.d/zz-bare86.conf
+sudo systemctl restart systemd-binfmt
+chmod +x GAME.EXE                      # programs need the execute permission
+```
+
+`.EXE` files are recognized by their `MZ` signature, `.COM` files by their
+extension. The file name sorts after Mono's `mono.conf`, which also claims the
+`MZ` signature, so that Bare86's rules come first; .NET programs are handed
+back to Mono. A program started this way gets:
+
+- its profile: the `bare86.conf` next to it, or that of a parent directory
+  whose `mount` contains it (`./quake2.exe` in `quake2/c/QUAKE2` uses
+  `quake2/bare86.conf`); started without arguments, the profile's own program
+  also gets the profile's `args`;
+- a window when a graphical display is available and its output goes to a
+  terminal; otherwise (`./PKZIP.EXE | less`, or `--term` in the profile) it
+  runs in the terminal, and its DOS output goes to the pipe or file;
+- its exit code, returned to the shell.
+
+Arguments are passed as they are: file names must be DOS names, relative to
+the program's directory (drive C: is that directory, or the profile's
+`mount`). To remove the rules: `sudo rm /etc/binfmt.d/zz-bare86.conf`, then
+`echo -1 | sudo tee /proc/sys/fs/binfmt_misc/bare86-{exe,com,COM}`.
 
 ## Launcher
 

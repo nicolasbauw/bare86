@@ -5,6 +5,7 @@
 mod audio;
 mod backend;
 mod bench;
+mod binfmt;
 mod bios;
 mod cdrom;
 mod config;
@@ -119,6 +120,10 @@ usage: bare86 [options] [program [arguments…]]
   --launcher [DIR]  list the games of DIR (default: current directory),
                  each a subdirectory with a bare86.conf, run the chosen one,
                  create or edit their profiles
+  --binfmt       print the binfmt_misc rules that let Linux run DOS and
+                 Win32 programs directly (./GAME.EXE), and how to install
+                 them; such a program gets its bare86.conf (next to it, or
+                 a parent's profile that mounts it) and a window
   --font F.psf   PSF font for text mode (default: built-in Terminus 8×16)
   --keys SCRIPT  scripted keyboard instead of the terminal, then end of session:
                  text, {enter} {esc} {tab} {f1} {up} {alt+f} {ctrl+c}…
@@ -149,6 +154,31 @@ fn main() -> ExitCode {
     let mut card_opl = opl::OplModel::Opl3;
     let mut opl_choice: Option<opl::OplModel> = None;
     let mut cli: Vec<String> = std::env::args().skip(1).collect();
+    // Lancé par binfmt_misc (`./JEU.EXE`) : profil du programme, fenêtre.
+    if let Some(program) = binfmt::invoked(&cli) {
+        let head = std::fs::read(&program).map(|b| b[..b.len().min(4096)].to_vec()).unwrap_or_default();
+        if binfmt::is_dotnet(&head) {
+            let Some(mono) = binfmt::dotnet_target() else {
+                eprintln!("{}: .NET program, and Mono is not installed", program.display());
+                return ExitCode::from(126);
+            };
+            use std::os::unix::process::CommandExt;
+            let e = std::process::Command::new(mono).args(&cli).exec();
+            eprintln!("mono: {e}");
+            return ExitCode::from(126);
+        }
+        let mut options = Vec::new();
+        if let Some(conf) = binfmt::profile_for(&program) {
+            if cli.len() == 1 {
+                cli.extend(binfmt::profile_args(&conf, &program));
+            }
+            options.extend(["--config".to_string(), conf.to_string_lossy().into_owned()]);
+        }
+        if binfmt::wants_window() && !cli.iter().any(|a| a == "--term") {
+            options.push("--window".into());
+        }
+        cli.splice(0..0, options);
+    }
     // Lanceur, seulement sur demande : le profil choisi devient
     // `--config PROFIL --window`, le reste de la ligne de commande est gardé.
     if let Some(root) = launcher::root_of(&cli) {
@@ -355,6 +385,18 @@ fn main() -> ExitCode {
             },
             "-h" | "--help" => {
                 println!("{USAGE}");
+                return ExitCode::SUCCESS;
+            }
+            "--binfmt" => {
+                let exe = match std::env::current_exe() {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("--binfmt: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                print!("{}", binfmt::rules(&exe));
+                eprintln!("{}", binfmt::HELP);
                 return ExitCode::SUCCESS;
             }
             _ if a.starts_with("--") => {
