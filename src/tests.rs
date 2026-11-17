@@ -129,6 +129,12 @@ fn disassembler() {
 
 #[test]
 fn throttled_run_completes() {
+    // Compteur d'instructions refusé par le noyau (perf_event_paranoid ≥ 2) :
+    // rien à vérifier ici.
+    if let Err(e) = crate::throttle::Throttle::new(50.0) {
+        eprintln!("{}: test skipped", crate::throttle::explain(&e));
+        return;
+    }
     let cfg = Config { mips: Some(50.0), ..Config::default() };
     let (mut pc, _) = machine(&cfg, program!("exit42"));
     assert_eq!(pc.run().unwrap(), 42);

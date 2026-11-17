@@ -504,7 +504,14 @@ impl<B: Backend> Pc<B> {
         dos.sb_pro = cfg.sb_pro || cfg.sb_ess;
         dos.env = cfg.env.clone();
         dos.boot(vm.mem());
-        let throttle = cfg.mips.map(Throttle::new).transpose()?;
+        // Compteur refusé par le noyau : pleine vitesse, avec l'explication.
+        let throttle = match cfg.mips.map(Throttle::new).transpose() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{}", crate::throttle::explain(&e));
+                None
+            }
+        };
         let mut io = IoBus::default();
         io.trace = cfg.trace_io;
         // Port de diagnostic POST, utilisé aussi comme temporisation.
@@ -1030,7 +1037,7 @@ impl<B: Backend> Pc<B> {
                 Some(InputEvent::JoyButton(i, down)) => self.gameport.borrow_mut().set_button(usize::from(i), down),
                 Some(InputEvent::Speed(mips)) => match mips.map(Throttle::new).transpose() {
                     Ok(t) => self.throttle = t,
-                    Err(e) => eprintln!("throttling: {e}"),
+                    Err(e) => eprintln!("{}", crate::throttle::explain(&e)),
                 },
                 Some(InputEvent::NextDisk) => self.bios.disks.next_floppy(),
                 Some(e @ (InputEvent::InsertFloppy(_) | InputEvent::InsertCd(_))) => self.media_event(e),

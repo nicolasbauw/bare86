@@ -139,6 +139,13 @@ sudo pacman -S rust base-devel sdl3 libslirp
 `xorriso` is optional: some tests use it to build CD images, and are skipped
 without it.
 
+- Speed limits (`--mips`, Ctrl+Alt+− and Ctrl+Alt++) count the guest's
+  instructions with a hardware performance counter, which recent kernels
+  restrict (`kernel.perf_event_paranoid` defaults to 2). Allow it once with
+  `sudo sysctl kernel.perf_event_paranoid=1`, or for good with a file
+  `/etc/sysctl.d/99-bare86.conf` holding `kernel.perf_event_paranoid = 1`.
+  Without it, Bare86 says so and runs at full speed.
+
 ## Building
 
 ```sh
@@ -189,7 +196,7 @@ sound need the window (or `--shot` and `--wav`).
 |---|---|
 | `--mem MB` | Total memory in MB (default 16) |
 | `--ems MB` | EMS memory in MB, in addition (default 4, 0 to 32) |
-| `--mips N` | Throttle to N million instructions per second (default: full speed) |
+| `--mips N` | Throttle to N million instructions per second (default: full speed); needs `kernel.perf_event_paranoid` at 1 or less, see [Requirements](#requirements) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
 | `--set NAME=VALUE` | Environment variable for the built-in DOS (repeatable; in a profile, one `set = NAME=VALUE` line each), e.g. `DPMILDR=16` for Heretic II under HX |
 | `--sb 16\|pro2\|pro1\|ess` | Sound card: Sound Blaster 16 (default), Sound Blaster Pro 2 (`pro` too: DSP 3.02, OPL3), Pro 1 (two OPL2 chips), or ESS AudioDrive ES1688 (Sound Blaster Pro compatible, ESS identification, ESFM FM: the aggressive, saturated FM sound of many cheap mid-90s PCs); the Creative Pro models filter their output like the real cards |

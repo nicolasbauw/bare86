@@ -117,6 +117,21 @@ pub struct Throttle {
     credited: u64,
 }
 
+/// Message pour un compteur d'instructions refusé : le bridage compte aussi
+/// l'anneau 0 de l'invité (le code DOS en mode réel est en CPL 0), ce que
+/// `kernel.perf_event_paranoid` ≥ 2 (valeur par défaut des noyaux récents)
+/// interdit à un utilisateur ordinaire.
+pub fn explain(e: &io::Error) -> String {
+    if e.raw_os_error() == Some(libc::EACCES) {
+        "speed limit unavailable: counting guest instructions needs \
+         kernel.perf_event_paranoid at 1 or less (sudo sysctl kernel.perf_event_paranoid=1; \
+         to keep it, a line \"kernel.perf_event_paranoid = 1\" in /etc/sysctl.d/); running at full speed"
+            .to_string()
+    } else {
+        format!("speed limit unavailable ({e}); running at full speed")
+    }
+}
+
 /// Tranche de bridage.
 const SLICE: std::time::Duration = std::time::Duration::from_millis(1);
 
