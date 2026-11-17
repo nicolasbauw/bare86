@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,10 +31,15 @@ struct SharedFrame {
     seq: u64,
 }
 
-struct SharedDisplay(Arc<Mutex<SharedFrame>>);
+/// Images du vCPU ; `graphics` est levé à la première image graphique
+/// (fenêtre cachée de `--window-auto` montrée).
+struct SharedDisplay(Arc<Mutex<SharedFrame>>, Arc<AtomicBool>);
 
 impl Display for SharedDisplay {
     fn present(&mut self, frame: &Frame<'_>) {
+        if frame.graphics {
+            self.1.store(true, Ordering::Relaxed);
+        }
         if let Ok(mut f) = self.0.lock() {
             f.width = frame.width;
             f.height = frame.height;
@@ -45,6 +51,53 @@ impl Display for SharedDisplay {
 }
 
 struct ChannelInput(Receiver<InputEvent>);
+
+/// `--window-auto` : clavier du terminal tant que la fenêtre est cachée,
+/// puis celui de la fenêtre (le terminal est alors rendu à son état normal).
+struct AutoInput {
+    term: Option<crate::host::StdinInput>,
+    window: ChannelInput,
+    shown: Arc<AtomicBool>,
+}
+
+impl AutoInput {
+    fn source(&mut self) -> &mut dyn InputSource {
+        if self.shown.load(Ordering::Relaxed) {
+            self.term = None;
+        }
+        match &mut self.term {
+            Some(t) => t,
+            None => &mut self.window,
+        }
+    }
+}
+
+impl InputSource for AutoInput {
+    fn poll(&mut self) -> Option<InputEvent> {
+        // Fenêtre fermée (ou autre événement de la fenêtre) même cachée.
+        if self.term.is_some()
+            && let Some(ev) = self.window.poll()
+        {
+            return Some(ev);
+        }
+        self.source().poll()
+    }
+    fn wait(&mut self) -> Option<InputEvent> {
+        self.source().wait()
+    }
+}
+
+/// `--window-auto` : sortie DOS vers le terminal tant que la fenêtre est
+/// cachée.
+struct AutoText(Arc<AtomicBool>);
+
+impl crate::host::TextSink for AutoText {
+    fn write(&mut self, bytes: &[u8]) {
+        if !self.0.load(Ordering::Relaxed) {
+            crate::host::Stdout.write(bytes);
+        }
+    }
+}
 
 impl InputSource for ChannelInput {
     fn poll(&mut self) -> Option<InputEvent> {
@@ -176,8 +229,10 @@ fn send_key(tx: &Sender<InputEvent>, scancode: Option<Scancode>, release: bool) 
 
 /// Ouvre la fenêtre et exécute `machine` (qui construit et lance la
 /// machine avec l'hôte fourni) sur le thread du vCPU. Rend son résultat, ou
-/// 0 si la fenêtre est fermée avant la fin du programme.
-pub fn run<F>(title: &str, mut menu_state: crate::menu::State, machine: F) -> Result<u8, String>
+/// 0 si la fenêtre est fermée avant la fin du programme. `auto` : fenêtre
+/// cachée, terminal pour le texte et le clavier, jusqu'à la première image
+/// graphique (un utilitaire en mode texte ne l'ouvre jamais).
+pub fn run<F>(title: &str, mut menu_state: crate::menu::State, auto: bool, machine: F) -> Result<u8, String>
 where
     F: FnOnce(Host) -> Result<u8, String> + Send + 'static,
 {
@@ -189,10 +244,17 @@ where
     // exemple), la fenêtre est dessinée à la résolution réelle et notre mise
     // à l'échelle nette s'applique ; sinon le compositeur agrandissait
     // l'image en la lissant (petits textes du HUD de Doom abîmés).
-    let window = video.window(title, 960, 720).position_centered().resizable().high_pixel_density().build().map_err(|e| e.to_string())?;
+    let mut builder = video.window(title, 960, 720);
+    builder.position_centered().resizable().high_pixel_density();
+    if auto {
+        builder.hidden();
+    }
+    let window = builder.build().map_err(|e| e.to_string())?;
     let mut canvas = window.into_canvas();
     let creator = canvas.texture_creator();
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
+    let graphics_seen = Arc::new(AtomicBool::new(!auto));
+    let mut visible = !auto;
 
     let frame = Arc::new(Mutex::new(SharedFrame::default()));
     // Son : file remplie par le mixeur du vCPU (stéréo, 48 kHz).
@@ -210,7 +272,8 @@ where
     let vcpu_queue = queue.clone();
     let (tx, rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
-    let display = SharedDisplay(frame.clone());
+    let display = SharedDisplay(frame.clone(), graphics_seen.clone());
+    let vcpu_shown = graphics_seen.clone();
     // Joystick : le premier branché, au démarrage ou à son arrivée. Ouvert
     // avant le vCPU : les jeux le détectent dès leur lancement.
     let joysticks = sdl.joystick().ok();
@@ -232,11 +295,17 @@ where
     std::thread::Builder::new()
         .name("vcpu".into())
         .spawn(move || {
+            let (input, text): (Box<dyn InputSource>, Box<dyn crate::host::TextSink>) = if auto {
+                let term = Some(crate::host::StdinInput::new());
+                (Box::new(AutoInput { term, window: ChannelInput(rx), shown: vcpu_shown.clone() }), Box::new(AutoText(vcpu_shown)))
+            } else {
+                (Box::new(ChannelInput(rx)), Box::new(crate::host::Discard))
+            };
             let host = Host {
                 display: Box::new(display),
                 audio: Box::new(crate::audio::QueueSink(vcpu_queue)),
-                input: Box::new(ChannelInput(rx)),
-                text: Box::new(crate::host::Discard),
+                input,
+                text,
                 term: None,
                 quit: false,
                 wants_frames: true,
@@ -453,6 +522,12 @@ where
         if let Ok(result) = done_rx.try_recv() {
             return result;
         }
+        if !visible && graphics_seen.load(Ordering::Relaxed) {
+            visible = true;
+            canvas.window_mut().show();
+            canvas.window_mut().raise();
+            redraw = true;
+        }
         if let Some(s) = &sound {
             feed_audio(s, &queue);
         }
@@ -476,7 +551,7 @@ where
             t.update(None, &bytes, w * 4).map_err(|e| e.to_string())?;
             redraw = true;
         }
-        if redraw && let Some(t) = texture.as_ref() {
+        if visible && redraw && let Some(t) = texture.as_ref() {
             redraw = false;
             let (w, h) = size;
             // Rapport 4:3, centré.

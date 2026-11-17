@@ -813,7 +813,8 @@ impl<B: Backend> Pc<B> {
                 if host.wants_frames
                     && let Some((width, height, pixels)) = frame_of(&vga.borrow(), mem, font.as_ref(), started)
                 {
-                    host.display.present(&crate::host::Frame { width, height, pixels: &pixels });
+                    let graphics = crate::render::is_graphics(&vga.borrow(), mem);
+                    host.display.present(&crate::host::Frame { width, height, pixels: &pixels, graphics });
                 }
             };
             let Some(line) = self.dos.shell_read(mem, &mut self.host, &mut redraw) else { return Ok(code) };
@@ -1731,6 +1732,14 @@ impl<B: Backend> Pc<B> {
         frame_of(&self.vga.borrow(), self.vm.mem(), self.font.as_ref(), self.started)
     }
 
+    /// L'écran montre un mode graphique : VGA ou VESA graphique, ou image
+    /// de Glide ou d'OpenGL.
+    fn graphics_shown(&self) -> bool {
+        self.opengl.borrow().as_ref().is_some_and(|g| g.active)
+            || self.glide.borrow().as_ref().is_some_and(|g| g.active)
+            || crate::render::is_graphics(&self.vga.borrow(), self.vm.mem())
+    }
+
     /// Police du mode texte (rendu en image : fenêtre, captures).
     pub fn set_font(&mut self, font: crate::font::Font) {
         self.font = Some(font);
@@ -1743,7 +1752,8 @@ impl<B: Backend> Pc<B> {
         }
         self.last_frame = Some(Instant::now());
         if let Some((width, height, pixels)) = self.frame() {
-            self.host.display.present(&crate::host::Frame { width, height, pixels: &pixels });
+            let graphics = self.graphics_shown();
+            self.host.display.present(&crate::host::Frame { width, height, pixels: &pixels, graphics });
         }
     }
 

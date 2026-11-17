@@ -56,6 +56,11 @@ fn geometry(vga: &Vga, pixels_per_char: usize) -> Geometry {
     Geometry { width, height, repeat, pitch: usize::from(c[0x13]) * 2, start }
 }
 
+/// Mode graphique (et non texte) : mêmes conditions que `render`.
+pub fn is_graphics(vga: &Vga, mem: &GuestMem) -> bool {
+    vga.vbe.is_some() || matches!(mem.read_u8(0x449), 4..=6) || vga.gc[6] & 1 != 0
+}
+
 /// Rend l'image du mode graphique courant dans `out` ; `None` en mode texte.
 pub fn render(vga: &Vga, mem: &GuestMem, out: &mut Vec<u32>) -> Option<(usize, usize)> {
     if let Some(v) = &vga.vbe {

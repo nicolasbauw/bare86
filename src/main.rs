@@ -105,6 +105,9 @@ usage: bare86 [options] [program [arguments…]]
   --shot F.png   screenshot when the program ends
   --wav F.wav    record the sound to a file (without a window)
   --window       SDL3 window (vCPU on its own thread)
+  --window-auto  window shown at the first graphics mode (VGA, VESA, Glide,
+                 OpenGL); until then, and for text-mode programs, the
+                 terminal
   --fullscreen   window, full screen from the start
   --stats        machine counters at the end (exits, emulated VRAM…)
   --vbe1         VESA 1.2 card: banked windows only, no linear framebuffer
@@ -140,6 +143,8 @@ fn main() -> ExitCode {
     let mut term = false;
     let mut shot: Option<String> = None;
     let mut window = false;
+    // `--window` explicite : fenêtre montrée d'emblée, même avec `--window-auto`.
+    let mut window_now = false;
     let mut wav: Option<String> = None;
     let mut stats = false;
     let mut font: Option<std::path::PathBuf> = None;
@@ -175,7 +180,7 @@ fn main() -> ExitCode {
             options.extend(["--config".to_string(), conf.to_string_lossy().into_owned()]);
         }
         if binfmt::wants_window() && !cli.iter().any(|a| a == "--term") {
-            options.push("--window".into());
+            options.push("--window-auto".into());
         }
         cli.splice(0..0, options);
     }
@@ -358,9 +363,14 @@ fn main() -> ExitCode {
             "--term" => term = true,
             "--shot" => shot = args.next(),
             "--wav" => wav = args.next(),
-            "--window" => window = true,
+            "--window" => {
+                window = true;
+                window_now = true;
+            }
+            "--window-auto" => window = true,
             "--fullscreen" => {
                 window = true;
+                window_now = true;
                 fullscreen = true;
             }
             "--stats" => stats = true,
@@ -436,7 +446,7 @@ fn main() -> ExitCode {
             menu_letter,
             message: None,
         };
-        sdl::run("Bare86", menu, move |mut host| {
+        sdl::run("Bare86", menu, !window_now, move |mut host| {
             if let Some(ev) = host_keys {
                 host.input = Box::new(host::ScriptedInput(ev.into()));
             }

@@ -12,6 +12,9 @@ pub struct Frame<'a> {
     pub width: usize,
     pub height: usize,
     pub pixels: &'a [u32],
+    /// Image d'un mode graphique (VGA, VESA, Glide, OpenGL), et non d'un
+    /// écran texte : `--window-auto` montre alors sa fenêtre.
+    pub graphics: bool,
 }
 
 pub trait Display {

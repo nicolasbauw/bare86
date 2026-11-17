@@ -203,6 +203,7 @@ sound need the window (or `--shot` and `--wav`).
 | Option | Effect |
 |---|---|
 | `--window` | SDL3 window, with sound |
+| `--window-auto` | Window shown at the first graphics mode (VGA, VESA, Glide, OpenGL); until then, and for programs that stay in text mode, the terminal |
 | `--fullscreen` | Window, full screen from the start |
 | `--menu-key L` | Letter of the menu shortcut, Ctrl+Alt+L (default M) |
 | `--launcher [DIR]` | List the games of DIR (default: the current directory) and run the chosen one, see [Launcher](#launcher) |
@@ -308,9 +309,12 @@ back to Mono. A program started this way gets:
   whose `mount` contains it (`./quake2.exe` in `quake2/c/QUAKE2` uses
   `quake2/bare86.conf`); started without arguments, the profile's own program
   also gets the profile's `args`;
-- a window when a graphical display is available and its output goes to a
-  terminal; otherwise (`./PKZIP.EXE | less`, or `--term` in the profile) it
-  runs in the terminal, and its DOS output goes to the pipe or file;
+- when a graphical display is available and its output goes to a terminal,
+  `--window-auto`: the program starts in the terminal, and a window opens at
+  its first graphics mode (VGA, VESA, Glide or OpenGL), taking over the
+  keyboard; a text-mode utility never opens one. Otherwise
+  (`./PKZIP.EXE | less`, or `--term` in the profile) it runs in the
+  terminal, and its DOS output goes to the pipe or file;
 - its exit code, returned to the shell.
 
 Arguments are passed as they are: file names must be DOS names, relative to
