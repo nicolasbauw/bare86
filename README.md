@@ -317,9 +317,15 @@ back to Mono. A program started this way gets:
   terminal, and its DOS output goes to the pipe or file;
 - its exit code, returned to the shell.
 
-Arguments are passed as they are: file names must be DOS names, relative to
-the program's directory (drive C: is that directory, or the profile's
-`mount`). To remove the rules: `sudo rm /etc/binfmt.d/zz-bare86.conf`, then
+Arguments written the Linux way are translated into DOS paths, under a narrow
+rule: an argument that names an existing file or directory (or a file to
+create in an existing directory) and contains a slash other than a leading
+one (`./out.zip`, `"Mes Archives/notes.txt"`, `/home/me/games/doom/x.wad`),
+and only if it lies on drive C: (the program's directory, or the profile's
+`mount`). It becomes `C:\…` with the short names the DOS sees. DOS switches
+(`/W`, `-timedemo`) and plain names are left alone. A path outside drive C:
+is passed unchanged, with a warning: a DOS program gets no access to the rest
+of the machine. To remove the rules: `sudo rm /etc/binfmt.d/zz-bare86.conf`, then
 `echo -1 | sudo tee /proc/sys/fs/binfmt_misc/bare86-{exe,com,COM}`.
 
 ## Launcher

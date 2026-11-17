@@ -127,6 +127,45 @@ pub fn profile_args(conf: &Path, program: &Path) -> Vec<String> {
     }
 }
 
+/// Argument passé à la façon de Linux, traduit en chemin DOS. Règle étroite
+/// (choix du propriétaire du projet) : seulement un fichier ou répertoire
+/// existant (ou à créer dans un répertoire existant : son nom est gardé),
+/// écrit avec une barre oblique ailleurs qu'en tête (`./f.zip`,
+/// `sous/f.txt`, `/home/…/f.zip` ; pas `/W` ni `/bin`, options DOS
+/// possibles), et **seulement sous le lecteur C:** : un programme DOS ne
+/// reçoit ni ne voit rien d'autre de la machine. `dos_path_of` rend le
+/// chemin DOS d'un chemin de l'hôte (liens résolus, noms courts du DOS).
+/// `Err(())` : chemin Linux hors du lecteur C:, laissé tel quel.
+pub fn dos_argument(arg: &str, dos_path_of: &dyn Fn(&Path) -> Option<Vec<u8>>) -> Result<Option<Vec<u8>>, ()> {
+    if !arg.trim_start_matches('/').contains('/') {
+        return Ok(None);
+    }
+    let path = Path::new(arg);
+    let (host, created) = match path.canonicalize() {
+        Ok(h) => (h, None),
+        // Fichier à créer : son répertoire doit exister.
+        Err(_) => match (path.parent().map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p }), path.file_name()) {
+            (Some(dir), Some(name)) if !arg.ends_with('/') => match dir.canonicalize() {
+                Ok(d) => (d, Some(name.to_string_lossy().into_owned())),
+                Err(_) => return Ok(None),
+            },
+            _ => return Ok(None),
+        },
+    };
+    match dos_path_of(&host) {
+        Some(mut dos) if dos.starts_with(b"C:") => {
+            if let Some(name) = created {
+                if !dos.ends_with(b"\\") {
+                    dos.push(b'\\');
+                }
+                dos.extend_from_slice(name.as_bytes());
+            }
+            Ok(Some(dos))
+        }
+        _ => Err(()),
+    }
+}
+
 /// Affichage graphique disponible et sortie vers un terminal : fenêtre.
 pub fn wants_window() -> bool {
     let display = std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
@@ -166,6 +205,36 @@ mod tests {
         let mut dos = vec![0u8; 64];
         dos[0..2].copy_from_slice(b"MZ");
         assert!(!is_dotnet(&dos));
+    }
+
+    #[test]
+    fn arguments_translated_only_under_c() {
+        let base = std::env::temp_dir().join(format!("bare86-args-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("c/sub")).unwrap();
+        std::fs::write(base.join("c/sub/f.txt"), b"x").unwrap();
+        std::fs::write(base.join("outside.txt"), b"x").unwrap();
+        let root = base.join("c").canonicalize().unwrap();
+        let dos = move |p: &Path| {
+            p.strip_prefix(&root).ok().map(|r| {
+                let mut v = b"C:\\".to_vec();
+                v.extend(r.to_string_lossy().to_uppercase().replace('/', "\\").bytes());
+                v
+            })
+        };
+        let inside = base.join("c/sub/f.txt");
+        assert_eq!(dos_argument(inside.to_str().unwrap(), &dos), Ok(Some(b"C:\\SUB\\F.TXT".to_vec())));
+        // Hors du lecteur C: : laissé tel quel, signalé.
+        assert_eq!(dos_argument(base.join("outside.txt").to_str().unwrap(), &dos), Err(()));
+        // Fichier à créer dans un répertoire du lecteur : nom gardé.
+        let new = base.join("c/sub/new.zip");
+        assert_eq!(dos_argument(new.to_str().unwrap(), &dos), Ok(Some(b"C:\\SUB\\new.zip".to_vec())));
+        assert_eq!(dos_argument(base.join("new.zip").to_str().unwrap(), &dos), Err(()));
+        // Options DOS, noms sans barre, répertoires absents : intacts.
+        for a in ["/W", "/h", "/bin", "-timedemo", "f.txt", "./absent/file"] {
+            assert_eq!(dos_argument(a, &dos), Ok(None), "{a}");
+        }
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

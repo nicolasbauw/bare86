@@ -152,6 +152,10 @@ fn main() -> ExitCode {
     let mut program = None;
     let mut mount: Option<std::path::PathBuf> = None;
     let mut tail = Vec::new();
+    // Arguments du programme, un à un (traduction des chemins Linux).
+    let mut program_args: Vec<String> = Vec::new();
+    // Lancé par binfmt_misc : arguments à la façon de Linux.
+    let mut host_paths = false;
     let mut fullscreen = false;
     let mut boot = false;
     let mut menu_letter = 'M';
@@ -161,6 +165,7 @@ fn main() -> ExitCode {
     let mut cli: Vec<String> = std::env::args().skip(1).collect();
     // Lancé par binfmt_misc (`./JEU.EXE`) : profil du programme, fenêtre.
     if let Some(program) = binfmt::invoked(&cli) {
+        host_paths = true;
         let head = std::fs::read(&program).map(|b| b[..b.len().min(4096)].to_vec()).unwrap_or_default();
         if binfmt::is_dotnet(&head) {
             let Some(mono) = binfmt::dotnet_target() else {
@@ -419,6 +424,7 @@ fn main() -> ExitCode {
                 for arg in args.by_ref() {
                     tail.push(b' ');
                     tail.extend_from_slice(arg.as_bytes());
+                    program_args.push(arg);
                 }
             }
         }
@@ -433,7 +439,9 @@ fn main() -> ExitCode {
         }
     }
     cfg.opl = opl_choice.unwrap_or(card_opl);
-    let opts = RunOptions { cfg, program, mount, tail, debug, screen, shot, font, stats, boot };
+    // Arguments à traduire : ceux de la ligne de commande seulement.
+    let program_args = if host_paths { Some(program_args) } else { None };
+    let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, font, stats, boot };
     let result = if window {
         let host_keys = keys;
         let menu = menu::State {
@@ -481,6 +489,9 @@ struct RunOptions {
     program: Option<String>,
     mount: Option<std::path::PathBuf>,
     tail: Vec<u8>,
+    /// Programme lancé depuis Linux (binfmt) : ses arguments, dont les
+    /// chemins sous le lecteur C: sont traduits (`binfmt::dos_argument`).
+    program_args: Option<Vec<String>>,
     debug: bool,
     screen: bool,
     shot: Option<String>,
@@ -519,7 +530,25 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
             if let Some(cut) = dos.iter().rposition(|&c| c == b'\\') {
                 let _ = pc.chdir(&dos[..cut.max(2)]);
             }
-            pc.load_program(&dos, &o.tail)?;
+            let tail = match &o.program_args {
+                Some(args) => {
+                    let mut tail = Vec::new();
+                    for a in args {
+                        tail.push(b' ');
+                        match binfmt::dos_argument(a, &|p| pc.dos_path_of(p)) {
+                            Ok(Some(dos)) => tail.extend_from_slice(&dos),
+                            Ok(None) => tail.extend_from_slice(a.as_bytes()),
+                            Err(()) => {
+                                eprintln!("{a}: outside drive C:, passed unchanged");
+                                tail.extend_from_slice(a.as_bytes());
+                            }
+                        }
+                    }
+                    tail
+                }
+                None => o.tail.clone(),
+            };
+            pc.load_program(&dos, &tail)?;
         }
         None => {
             pc.mount(2, o.mount.clone().unwrap_or_else(|| ".".into()));
