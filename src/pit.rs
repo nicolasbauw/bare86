@@ -55,20 +55,31 @@ impl Channel {
     }
 
     fn elapsed_ticks(&self, now: Instant) -> u64 {
-        let ns = now.saturating_duration_since(self.loaded_at).as_nanos();
+        self.elapsed_ticks_from(self.loaded_at, now)
+    }
+
+    fn elapsed_ticks_from(&self, start: Instant, now: Instant) -> u64 {
+        let ns = now.saturating_duration_since(start).as_nanos();
         (ns * u128::from(PIT_HZ) / 1_000_000_000) as u64
     }
 
-    /// Compte courant.
-    fn count(&self, now: Instant) -> u16 {
+    /// Compte après `t` impulsions depuis le chargement (ou le début de la
+    /// période en cours, voir `Pit::ticks`).
+    fn count(&self, t: u64) -> u16 {
         if !self.armed {
             return self.reload as u16;
         }
         let r = u64::from(self.reload);
-        let t = self.elapsed_ticks(now);
         let v = match self.mode {
-            // Onde carrée : décrément de 2, deux fois par période.
-            3 | 7 => (r - (2 * t) % r) & !1,
+            // Onde carrée : décrément de 2, deux fois par période. Le compte
+            // rechargé (r, 0 pour 65 536) n'est pas montré : la puce le
+            // garde une impulsion, et un compte nul se lit comme une
+            // demi-période de décalage (`GetTickCount` de HX le combine avec
+            // OUT) ; on montre déjà le suivant.
+            3 | 7 => match (2 * t) % r {
+                0 => r.saturating_sub(2),
+                d => (r - d) & !1,
+            },
             2 | 6 => r - t % r,
             // Modes 0, 1, 4, 5 : décompte unique puis repli sur 65 536.
             _ => (r + 0x1_0000 - t % 0x1_0000) % 0x1_0000,
@@ -76,13 +87,12 @@ impl Channel {
         v as u16
     }
 
-    /// Sortie OUT (canal 2 : bit 5 du port 61h).
-    fn output(&self, now: Instant) -> bool {
+    /// Sortie OUT après `t` impulsions (canal 2 : bit 5 du port 61h).
+    fn output(&self, t: u64) -> bool {
         if !self.armed {
             return self.mode != 0;
         }
         let r = u64::from(self.reload);
-        let t = self.elapsed_ticks(now);
         match self.mode {
             3 | 7 => t % r < r.div_ceil(2),
             2 | 6 => t % r != r - 1,
@@ -101,14 +111,18 @@ pub struct Pit {
     port61: u8,
     /// Prochaine IRQ 0 due.
     next_irq0: Option<Instant>,
+    /// Fin de la période du canal 0 que montre son compte : avance à
+    /// l'acquittement de l'IRQ 0 par l'invité (voir `ticks`).
+    shown_end: Option<Instant>,
 }
 
 impl Pit {
     pub fn new() -> Self {
         let now = Instant::now();
-        let mut p = Self { ch: [Channel::new(now); 3], port61: 0, next_irq0: None };
+        let mut p = Self { ch: [Channel::new(now); 3], port61: 0, next_irq0: None, shown_end: None };
         p.ch[2].armed = false;
         p.next_irq0 = Some(now + p.ch[0].period());
+        p.shown_end = p.next_irq0;
         p
     }
 
@@ -123,30 +137,77 @@ impl Pit {
 
     /// Nombre d'IRQ 0 échues depuis le dernier appel (au plus 1 : un invité
     /// en retard ne reçoit pas une rafale, comme un 8259 qui n'a qu'un bit).
-    pub fn take_irq0(&mut self, now: Instant) -> bool {
+    /// `masked` : IRQ 0 masquée au PIC (elle ne sera pas acquittée).
+    pub fn take_irq0(&mut self, now: Instant, masked: bool) -> bool {
         let Some(due) = self.next_irq0 else { return false };
         if now < due {
             return false;
         }
         let c = &self.ch[0];
+        // IRQ 0 masquée, donc jamais acquittée : le compte ne reste pas figé
+        // plus d'une période. Non masquée, elle le sera tôt ou tard (vCPU
+        // retenu dans un long appel à l'hôte, gestionnaire lent) : le compte
+        // reste figé jusque-là, sans quoi la période montrée avancerait plus
+        // vite que le compteur de tics et l'heure lue reculerait.
+        let stale = masked && self.shown_end.is_some_and(|e| e < due);
         self.next_irq0 = match c.mode {
             2 | 3 | 6 | 7 => {
                 let p = c.period().max(Duration::from_micros(10));
                 let mut next = due + p;
                 if next <= now {
-                    // Retard de plusieurs périodes : on rattrape sans rafale.
-                    next = now + p;
+                    // Retard de plusieurs périodes : une seule IRQ, et
+                    // l'échéance suivante reste sur la grille des périodes
+                    // (le compte garde sa phase).
+                    let late = (now - due).as_nanos() / p.as_nanos();
+                    next = due + p * (late as u32 + 1);
                 }
                 Some(next)
             }
             _ => None,
         };
+        if stale {
+            self.shown_end = self.next_irq0;
+        }
         true
+    }
+
+
+    /// L'invité a acquitté l'IRQ 0 (cycle INTA) : le compte du canal 0
+    /// passe à la période en cours.
+    pub fn irq0_acknowledged(&mut self) {
+        if let Some(next) = self.next_irq0 {
+            self.shown_end = Some(next);
+        }
     }
 
     /// Prochaine échéance de l'IRQ 0.
     pub fn next_irq0(&self) -> Option<Instant> {
         self.next_irq0
+    }
+
+    /// Impulsions comptées par le canal `i` à l'instant `now`. Canal 0
+    /// périodique : depuis le début de la période montrée (`shown_end`), et
+    /// figé sur sa fin tant que l'invité n'a pas acquitté l'IRQ 0 échue (au
+    /// plus une période). Le compte ne repart donc qu'avec l'IRQ, comme sur
+    /// la puce où les deux sont simultanés. Sans cela, l'IRQ levée au
+    /// battement suivant, ou retenue par un invité aux interruptions
+    /// masquées, laissait voir un compte reparti avec un compteur de tics
+    /// pas encore avancé, et l'heure lue reculait (`GetTickCount` de HX,
+    /// qui combine les deux : `Sleep` de seize jours dans Turok).
+    fn ticks(&self, i: usize, now: Instant) -> u64 {
+        let c = &self.ch[i];
+        if i == 0
+            && c.armed
+            && matches!(c.mode, 2 | 3 | 6 | 7)
+            && let Some(end) = self.shown_end
+            && let Some(start) = end.checked_sub(c.period())
+        {
+            // Au moins une impulsion : en mode 3, un compte nul (65 536)
+            // avec OUT haut se lit comme une demi-période écoulée.
+            let t = c.elapsed_ticks_from(start, now);
+            return t.clamp(1, u64::from(c.reload) - 1);
+        }
+        c.elapsed_ticks(now)
     }
 
     fn reload(&mut self, i: usize, v: u32, now: Instant) {
@@ -156,6 +217,7 @@ impl Pit {
         c.armed = i != 2 || self.port61 & 1 != 0;
         if i == 0 {
             self.next_irq0 = Some(now + c.period());
+            self.shown_end = self.next_irq0;
         }
     }
 
@@ -165,8 +227,9 @@ impl Pit {
             // Relecture : bits 1–3 = canaux, bit 5 = pas le compte, bit 4 = pas l'état.
             for i in 0..3 {
                 if v & (2 << i) != 0 {
-                    let count = self.ch[i].count(now);
-                    let out = self.ch[i].output(now);
+                    let t = self.ticks(i, now);
+                    let count = self.ch[i].count(t);
+                    let out = self.ch[i].output(t);
                     let c = &mut self.ch[i];
                     if v & 0x20 == 0 && c.latch.is_none() {
                         c.latch = Some(count);
@@ -191,7 +254,7 @@ impl Pit {
             _ => Access::LoHi,
         };
         if access == Access::Latch {
-            let count = self.ch[sel].count(now);
+            let count = self.ch[sel].count(self.ticks(sel, now));
             let c = &mut self.ch[sel];
             if c.latch.is_none() {
                 c.latch = Some(count);
@@ -227,7 +290,7 @@ impl Pit {
     }
 
     fn read_counter(&mut self, i: usize, now: Instant) -> u8 {
-        let count = self.ch[i].count(now);
+        let count = self.ch[i].count(self.ticks(i, now));
         let c = &mut self.ch[i];
         if let Some(s) = c.status.take() {
             return s;
@@ -251,7 +314,7 @@ impl Pit {
     fn read_61(&self, now: Instant) -> u8 {
         // Bascule de rafraîchissement mémoire : toutes les 15,085 µs.
         let refresh = (now.duration_since(self.ch[0].loaded_at).as_nanos() / 15_085) & 1 == 1;
-        let out2 = self.ch[2].output(now);
+        let out2 = self.ch[2].output(self.ticks(2, now));
         (self.port61 & 0x0F) | (u8::from(refresh) << 4) | (u8::from(out2) << 5)
     }
 
@@ -305,6 +368,46 @@ impl IoDevice for PitPorts {
 mod tests {
     use super::*;
 
+    /// Canal 0 : le compte ne repart qu'avec l'IRQ 0, même levée en retard
+    /// ou après un rattrapage.
+    #[test]
+    fn channel0_count_follows_irq0() {
+        let mut p = Pit::new();
+        let due = p.next_irq0().unwrap();
+        let period = p.irq0_period();
+        // Juste avant, puis bien après l'échéance, IRQ pas encore acquittée :
+        // compte au plus bas (mode 3 : 2), sans repartir.
+        let low = p.ch[0].count(p.ticks(0, due - Duration::from_micros(2)));
+        assert!(low <= 6, "{low}");
+        assert_eq!(p.ch[0].count(p.ticks(0, due + Duration::from_millis(3))), 2);
+        // IRQ levée 3 ms en retard : toujours figé jusqu'à l'acquittement.
+        let t3 = due + Duration::from_millis(3);
+        assert!(p.take_irq0(t3, false));
+        assert_eq!(p.next_irq0(), Some(due + period));
+        assert_eq!(p.ch[0].count(p.ticks(0, t3)), 2);
+        // Acquittée : le compte repart du début de la nouvelle période,
+        // alignée sur l'échéance (mode 3 : 2 par impulsion, 3 ms ≈ 3 580).
+        p.irq0_acknowledged();
+        let c = p.ch[0].count(p.ticks(0, t3));
+        assert!((0xE400..=0xE414).contains(&c), "{c:04X}");
+        // Retard de plusieurs périodes : échéance suivante sur la grille.
+        let late = due + period * 5 + Duration::from_millis(7);
+        assert!(p.take_irq0(late, false));
+        assert_eq!(p.next_irq0(), Some(due + period * 6));
+        p.irq0_acknowledged();
+        let c = p.ch[0].count(p.ticks(0, late));
+        assert!((0xBEB0..=0xBED0).contains(&c), "{c:04X}");
+        // Non masquée mais pas encore acquittée après deux périodes : figé.
+        let next = p.next_irq0().unwrap();
+        assert!(p.take_irq0(next, false));
+        assert!(p.take_irq0(next + period, false));
+        assert_eq!(p.ch[0].count(p.ticks(0, next + period + Duration::from_millis(3))), 2);
+        // Masquée, donc jamais acquittée : gel d'une période au plus.
+        assert!(p.take_irq0(next + period * 2, true));
+        let c = p.ch[0].count(p.ticks(0, next + period * 2 + Duration::from_millis(3)));
+        assert!((0xE400..=0xE414).contains(&c), "{c:04X}");
+    }
+
     #[test]
     fn latch_and_reprogram() {
         let mut p = Pit::new();
@@ -321,10 +424,10 @@ mod tests {
         let v = u16::from(lo) | (u16::from(hi) << 8);
         // 500 µs écoulés au verrouillage : environ 597 tics restants.
         assert!((590..=600).contains(&v), "{v}");
-        assert!(!p.take_irq0(t0 + Duration::from_micros(900)));
-        assert!(p.take_irq0(t0 + Duration::from_micros(1001)));
-        assert!(!p.take_irq0(t0 + Duration::from_micros(1500)));
-        assert!(p.take_irq0(t0 + Duration::from_micros(2100)));
+        assert!(!p.take_irq0(t0 + Duration::from_micros(900), false));
+        assert!(p.take_irq0(t0 + Duration::from_micros(1001), false));
+        assert!(!p.take_irq0(t0 + Duration::from_micros(1500), false));
+        assert!(p.take_irq0(t0 + Duration::from_micros(2100), false));
     }
 
     #[test]

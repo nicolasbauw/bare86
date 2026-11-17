@@ -147,6 +147,16 @@ impl Pic {
         Some(self.master.base + irq)
     }
 
+    /// IRQ 0 masquée au 8259 maître.
+    pub fn irq0_masked(&self) -> bool {
+        self.master.imr & 1 != 0
+    }
+
+    /// Vecteur de l'IRQ 0 (base du 8259 maître).
+    pub fn irq0_vector(&self) -> u8 {
+        self.master.base
+    }
+
     pub fn shared(self) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(self))
     }

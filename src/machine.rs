@@ -56,6 +56,15 @@ fn int09_hooked(mem: &crate::mem::GuestMem) -> bool {
     mem.read_u32(0x09 * 4) != (u32::from(ROM_SEG) << 16 | u32::from(bios::INT09))
 }
 
+/// Prochaine interruption d'horloge : IRQ 0 du PIT ou IRQ 8 périodique de
+/// la RTC.
+fn next_timer_irq(pit: &RefCell<crate::pit::Pit>, rtc: &RefCell<crate::rtc::Rtc>) -> Option<Instant> {
+    match (pit.borrow().next_irq0(), rtc.borrow().next_irq()) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Battement : la période de l'IRQ 0, entre 50 µs et 10 ms.
 fn heartbeat_period(irq0: Duration) -> Duration {
     irq0.clamp(Duration::from_micros(50), Duration::from_millis(10))
@@ -312,6 +321,10 @@ pub struct Stats {
     pub spin_sleeps: u64,
     /// Sorties servies par le chemin court (registres de plans).
     pub fast_exits: u64,
+    /// Images échangées par Glide et par OpenGL (`grBufferSwap`,
+    /// `wglSwapBuffers`).
+    pub glide_swaps: u64,
+    pub opengl_swaps: u64,
     /// Sorties d'E/S par port (lectures et écritures).
     pub io_ports: PortCounts,
 }
@@ -350,6 +363,8 @@ impl std::fmt::Debug for Stats {
             .field("vga_yields", &self.vga_yields)
             .field("spin_sleeps", &self.spin_sleeps)
             .field("fast_exits", &self.fast_exits)
+            .field("glide_swaps", &self.glide_swaps)
+            .field("opengl_swaps", &self.opengl_swaps)
             .field("io_ports", &ports)
             .finish()
     }
@@ -390,6 +405,8 @@ pub struct Pc<B: Backend = KvmVm> {
     dma: Rc<RefCell<crate::dma::Dma>>,
     gameport: Rc<RefCell<crate::gameport::Gameport>>,
     sb: Rc<RefCell<crate::sb16::Sb16>>,
+    /// Horloge temps réel : interruption périodique (IRQ 8).
+    rtc: Rc<RefCell<crate::rtc::Rtc>>,
     opl: Rc<RefCell<crate::opl::Opl>>,
     mixer: crate::audio::Mixer,
     ems: crate::ems::Ems,
@@ -521,7 +538,8 @@ impl<B: Backend> Pc<B> {
         io.map(0x40..=0x43, Box::new(PitPorts(pit.clone())));
         io.map(0x61..=0x61, Box::new(PitPorts(pit.clone())));
         let heartbeat = Heartbeat::new(heartbeat_period(pit.borrow().irq0_period()))?;
-        io.map(0x70..=0x71, Box::new(crate::rtc::Rtc::new(cfg.extended_kb)));
+        let rtc = Rc::new(RefCell::new(crate::rtc::Rtc::new(cfg.extended_kb)));
+        io.map(0x70..=0x71, Box::new(crate::rtc::RtcPorts(rtc.clone())));
         io.map(0x3B4..=0x3BA, Box::new(VgaPorts(vga.clone())));
         io.map(0x3C0..=0x3DF, Box::new(VgaPorts(vga.clone())));
         let kbc = Kbc::new().shared();
@@ -609,6 +627,7 @@ impl<B: Backend> Pc<B> {
             dma,
             gameport,
             sb,
+            rtc,
             opl,
             mixer,
             ems: crate::ems::Ems::new(cfg.ems_kb),
@@ -771,6 +790,7 @@ impl<B: Backend> Pc<B> {
         self.ems = crate::ems::Ems::new(self.ems_kb);
         *self.pic.borrow_mut() = Pic::new();
         *self.pit.borrow_mut() = Pit::new();
+        self.rtc.borrow_mut().reset();
         self.ps2 = Default::default();
         self.kbc.borrow_mut().set_a20(false);
         self.sync_a20()?;
@@ -900,10 +920,18 @@ impl<B: Backend> Pc<B> {
     fn service_timers(&mut self) -> Result<()> {
         let now = Instant::now();
         let mut pit = self.pit.borrow_mut();
-        if pit.take_irq0(now) {
+        let masked = self.pic.borrow().irq0_masked();
+        if pit.take_irq0(now, masked) {
             self.pic.borrow_mut().raise(0);
         }
-        self.heartbeat.set_period(heartbeat_period(pit.irq0_period()))?;
+        let mut rtc = self.rtc.borrow_mut();
+        if rtc.take_irq(now) {
+            self.pic.borrow_mut().raise(crate::rtc::IRQ);
+        }
+        // Battement : assez serré pour la plus rapide des deux horloges.
+        let period = rtc.periodic().map_or(pit.irq0_period(), |p| p.min(pit.irq0_period()));
+        drop(rtc);
+        self.heartbeat.set_period(heartbeat_period(period))?;
         let speaker = pit.speaker();
         drop(pit);
         // Transfert court (détection d'IRQ) : achevé après quelques
@@ -1089,7 +1117,11 @@ impl<B: Backend> Pc<B> {
         }
         let pending = self.pic.borrow().pending().is_some();
         if pending && self.vm.can_inject() {
-            if let Some(vector) = self.pic.borrow_mut().acknowledge() {
+            let ack = self.pic.borrow_mut().acknowledge();
+            if let Some(vector) = ack {
+                if vector == self.pic.borrow().irq0_vector() {
+                    self.pit.borrow_mut().irq0_acknowledged();
+                }
                 self.vm.inject(vector)?;
                 self.stats.irqs += 1;
             }
@@ -1098,6 +1130,12 @@ impl<B: Backend> Pc<B> {
             self.vm.request_irq_window(pending);
         }
         Ok(())
+    }
+
+    /// Prochaine interruption d'horloge : IRQ 0 du PIT ou IRQ 8 périodique
+    /// de la RTC.
+    fn next_timer_irq(&self) -> Option<Instant> {
+        next_timer_irq(&self.pit, &self.rtc)
     }
 
     /// HLT : attend la prochaine interruption (IF doit être levé).
@@ -1109,7 +1147,7 @@ impl<B: Backend> Pc<B> {
             return Err("HLT with interrupts disabled (IF = 0)".into());
         }
         let now = Instant::now();
-        let until = self.pit.borrow().next_irq0().unwrap_or(now + HALT_MAX).min(now + HALT_MAX);
+        let until = self.next_timer_irq().unwrap_or(now + HALT_MAX).min(now + HALT_MAX);
         self.wait_until(until);
         Ok(())
     }
@@ -1142,7 +1180,7 @@ impl<B: Backend> Pc<B> {
         self.spin_retries = SPIN_RETRIES;
         self.stats.spin_sleeps += 1;
         let now = Instant::now();
-        let until = self.pit.borrow().next_irq0().unwrap_or(now + SPIN_SLEEP_MAX).min(now + SPIN_SLEEP_MAX);
+        let until = self.next_timer_irq().unwrap_or(now + SPIN_SLEEP_MAX).min(now + SPIN_SLEEP_MAX);
         self.wait_until(until);
         self.heartbeat.probe_in(SPIN_REPROBE)?;
         Ok(())
@@ -1248,7 +1286,7 @@ impl<B: Backend> Pc<B> {
                         self.stats.pit_yields += 1;
                     }
                     if matches!(port, 0x3BA | 0x3DA)
-                        && Self::vga_poll(&mut self.vga_polls, &self.vga.borrow(), &self.pit.borrow(), port)
+                        && Self::vga_poll(&mut self.vga_polls, &self.vga.borrow(), next_timer_irq(&self.pit, &self.rtc), port)
                     {
                         self.stats.vga_yields += 1;
                     }
@@ -1389,10 +1427,16 @@ impl<B: Backend> Pc<B> {
                 // Taille du FBO : celle du mode vidéo choisi par le programme.
                 let screen = self.vga.borrow().vbe.map_or((640, 480), |v| (v.width, v.height));
                 let mut gl = self.opengl.borrow_mut();
-                gl.get_or_insert_with(|| Box::new(crate::opengl::OpenGl::new())).execute(&words, screen, &mut read, &mut write)
+                let gl = gl.get_or_insert_with(|| Box::new(crate::opengl::OpenGl::new()));
+                let ret = gl.execute(&words, screen, &mut read, &mut write);
+                self.stats.opengl_swaps = gl.swaps;
+                ret
             } else {
                 let mut glide = self.glide.borrow_mut();
-                glide.get_or_insert_with(|| Box::new(crate::glide::Glide::new())).execute(&words, &mut read, &mut write)
+                let g = glide.get_or_insert_with(|| Box::new(crate::glide::Glide::new()));
+                let ret = g.execute(&words, &mut read, &mut write);
+                self.stats.glide_swaps = g.swaps;
+                ret
             }
         } else {
             0
@@ -1617,9 +1661,9 @@ impl<B: Backend> Pc<B> {
     /// écriture sur un autre port que le PIC (un effet de raster écrirait la
     /// palette ou un registre entre deux attentes), le vCPU dort jusqu'à
     /// `VBLANK_MARGIN` avant le prochain blanc vertical, sans dépasser la
-    /// prochaine IRQ 0 : le programme voit des échantillons plus espacés
-    /// d'un signal exact.
-    fn vga_poll(polls: &mut Option<(Instant, Instant)>, vga: &Vga, pit: &crate::pit::Pit, port: u16) -> bool {
+    /// prochaine interruption d'horloge (`next_irq`) : le programme voit des
+    /// échantillons plus espacés d'un signal exact.
+    fn vga_poll(polls: &mut Option<(Instant, Instant)>, vga: &Vga, next_irq: Option<Instant>, port: u16) -> bool {
         let now = Instant::now();
         if !vga.is_status_port(port) {
             return false;
@@ -1631,7 +1675,7 @@ impl<B: Backend> Pc<B> {
         let mut slept = false;
         if now - start > PIT_POLL_AFTER {
             let mut d = vga.until_vblank().saturating_sub(VBLANK_MARGIN);
-            if let Some(irq) = pit.next_irq0() {
+            if let Some(irq) = next_irq {
                 d = d.min(irq.saturating_duration_since(now));
             }
             if d >= PIT_POLL_SLEEP {
