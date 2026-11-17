@@ -72,6 +72,17 @@ difference is under the hood, and shows with demanding late-90s games.
   Glide (DOS/4GW) get the same code as `glide2x.ovl`, provided the same
   way: the 3dfx demo of Grand Theft Auto runs with it. Glide functions a
   game calls but Bare86 lacks are named on the terminal.
+- **OpenGL 1.1, drawn by the host's graphics card.** Bare86's own
+  `opengl32.dll` (`guest/opengl32/`, prebuilt, provided like `glide2x.dll`)
+  passes the OpenGL calls of a Win32 game to the host, which replays them
+  in an offscreen OpenGL context (compatibility profile): no translation
+  layer, no Voodoo limits. HX's GDI forwards `ChoosePixelFormat` and
+  `SwapBuffers` to it, as Windows 9x did. The Quake II demo runs with
+  `+set vid_ref gl +set gl_driver opengl32` at about 990 frames/s in its
+  timedemo (`+set gl_swapinterval 0`; otherwise frames are paced at 60 Hz,
+  the DLL's default), and GLQuake runs once the 3dfx MiniGL
+  (`opengl32.dll` in its directory) is removed. The context takes the size
+  of the video mode the game has set.
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
   modes), SVGA through VESA VBE 2.0 with a linear framebuffer (or VBE 1.2 with
   banked windows): 320×200 to 1024×768 in 8, 15, 16, 24 and 32 bits per pixel,
@@ -139,7 +150,8 @@ suite (it needs `/dev/kvm`).
 
 The DLLs that run inside the guest (`guest/`, such as `glide2x.dll`) are
 prebuilt and committed; rebuilding them needs `clang` and `lld`
-(`guest/glide2x/build.sh`).
+(`guest/glide2x/build.sh`, `guest/opengl32/build.sh`, which also needs
+Python).
 
 ## Quick start
 
@@ -402,6 +414,7 @@ software in `src/`:
 | `sb16.rs`, `opl.rs`, `mpu401.rs`, `midisynth.rs`, `audio.rs` | Sound cards, FM, MIDI and mixing |
 | `pic.rs`, `pit.rs`, `dma.rs`, `kbc.rs`, `rtc.rs`, `ide.rs`, `ne2000.rs`, `net/`… | The rest of the PC |
 | `glide/` | Glide replayed with the host's OpenGL; its guest side is `guest/glide2x/` |
+| `opengl/` | OpenGL 1.1 replayed with the host's OpenGL; its guest side is `guest/opengl32/` |
 
 **Tests.** `cargo test --release` (needs `/dev/kvm`; the OpenGL tests are
 skipped without an offscreen context, the CD tests without `xorriso`). The
@@ -435,6 +448,14 @@ in `src/glide/proto.rs` and `guest/glide2x/glide2x.c`, which must agree. A
 DOS game calling a Glide function that Bare86 lacks gets a terminal line
 `glide2x.ovl: _NAME@n is not implemented (ignored)`.
 
+**OpenGL.** `guest/opengl32/build.sh` runs `gen.py`, which reads the 336
+OpenGL 1.1 prototypes of `gl11.txt` and writes the DLL's functions
+(`gl_gen.c`), its export table (`opengl32.def`) and the host's replay table
+(`src/opengl/api.rs`); then clang and lld build `opengl32.dll` (committed).
+Calls that return a value or pass a pointer of variable size (images,
+vertex arrays, `glGet*`) send the buffer at once and the host reads or
+writes the game's memory; `src/opengl/mod.rs` handles them by hand.
+
 **Tools** (`tools/`):
 
 | Tool | Use |
@@ -454,6 +475,9 @@ among what does not, yet:
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine
   characters) are not shown yet in text mode.
+- OpenGL is version 1.1 without extensions that add functions (no
+  multitexture yet); `wglUseFontBitmaps` and `wglUseFontOutlines` are
+  missing.
 
 The design journal, with the decisions, measurements and the progress of
 each step, is in [docs/JOURNAL.md](docs/JOURNAL.md) (in French).

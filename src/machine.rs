@@ -411,6 +411,8 @@ pub struct Pc<B: Backend = KvmVm> {
     font: Option<crate::font::Font>,
     /// Glide (3dfx) servi par l'hôte, créé au premier appel de la DLL.
     glide: std::cell::RefCell<Option<Box<crate::glide::Glide>>>,
+    /// OpenGL 1.1 servi par l'hôte, créé au premier appel de la DLL.
+    opengl: std::cell::RefCell<Option<Box<crate::opengl::OpenGl>>>,
     started: Instant,
     limit: Option<Duration>,
     last_frame: Option<Instant>,
@@ -619,6 +621,7 @@ impl<B: Backend> Pc<B> {
             last_render: None,
             font: None,
             glide: std::cell::RefCell::new(None),
+            opengl: std::cell::RefCell::new(None),
             started: Instant::now(),
             limit: cfg.limit,
             last_frame: None,
@@ -1186,6 +1189,7 @@ impl<B: Backend> Pc<B> {
             self.stats.exits += 1;
             let mut host_call = false;
             let mut glide_call = false;
+            let mut opengl_call = false;
             let mut mmio = false;
             // Sortie sur un port de périphérique très sollicité (carte réseau) :
             // les accès suivants sont servis en rafale par l'interpréteur.
@@ -1196,6 +1200,7 @@ impl<B: Backend> Pc<B> {
             match self.vm.run()? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
                 Exit::IoOut { port: crate::glide::proto::PORT, .. } => glide_call = true,
+                Exit::IoOut { port: crate::opengl::PORT, .. } => opengl_call = true,
                 Exit::IoOut { port: HOST_KBD_PORT, data, .. } => {
                     let code = data[0];
                     self.bios.scancode(self.vm.mem(), code);
@@ -1309,6 +1314,9 @@ impl<B: Backend> Pc<B> {
             if glide_call {
                 self.glide_call()?;
             }
+            if opengl_call {
+                self.opengl_call()?;
+            }
             if host_call && let Some(code) = self.host_call()? {
                 return Ok(Event::Exit(code));
             }
@@ -1352,9 +1360,18 @@ impl<B: Backend> Pc<B> {
 
     /// Sortie sur le port d'appel hôte. Vrai appel seulement depuis un stub
     /// de la ROM ; sinon le programme a simplement écrit sur le port E0h.
-    /// Appel de la `glide2x.dll` de Bare86 (`glide::proto`) : EBX = tampon de
-    /// commandes (dans DS), ECX = sa longueur ; EAX = valeur rendue.
+    /// Appel de la `glide2x.dll` (`glide::proto`) ou de l'`opengl32.dll`
+    /// (`opengl`) de Bare86 : EBX = tampon de commandes (dans DS), ECX = sa
+    /// longueur ; EAX = valeur rendue.
     fn glide_call(&mut self) -> Result<()> {
+        self.gl_call(false)
+    }
+
+    fn opengl_call(&mut self) -> Result<()> {
+        self.gl_call(true)
+    }
+
+    fn gl_call(&mut self, opengl: bool) -> Result<()> {
         let mut cpu = self.vm.state()?;
         let ds = cpu.seg[3].base;
         let len = (cpu.gpr[1] as usize).min(16 << 20) & !3;
@@ -1362,15 +1379,21 @@ impl<B: Backend> Pc<B> {
         let mem = self.vm.mem();
         let ret = if interp::read_linear(&cpu, mem, ds.wrapping_add(cpu.gpr[3]), &mut bytes) {
             let words: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-            let mut glide = self.glide.borrow_mut();
-            let g = glide.get_or_insert_with(|| Box::new(crate::glide::Glide::new()));
             let mut read = |at: u32, buf: &mut [u8]| {
                 interp::read_linear(&cpu, mem, ds.wrapping_add(at), buf);
             };
             let mut write = |at: u32, data: &[u8]| {
                 interp::write_linear(&cpu, mem, ds.wrapping_add(at), data);
             };
-            g.execute(&words, &mut read, &mut write)
+            if opengl {
+                // Taille du FBO : celle du mode vidéo choisi par le programme.
+                let screen = self.vga.borrow().vbe.map_or((640, 480), |v| (v.width, v.height));
+                let mut gl = self.opengl.borrow_mut();
+                gl.get_or_insert_with(|| Box::new(crate::opengl::OpenGl::new())).execute(&words, screen, &mut read, &mut write)
+            } else {
+                let mut glide = self.glide.borrow_mut();
+                glide.get_or_insert_with(|| Box::new(crate::glide::Glide::new())).execute(&words, &mut read, &mut write)
+            }
         } else {
             0
         };
@@ -1649,6 +1672,12 @@ impl<B: Backend> Pc<B> {
 
     /// Image de l'écran : mode graphique, ou texte si une police est chargée.
     pub fn frame(&self) -> Option<(usize, usize, Vec<u32>)> {
+        // Contexte OpenGL courant : son image remplace celle de la VGA.
+        if let Some(g) = self.opengl.borrow_mut().as_mut()
+            && let Some(f) = g.frame()
+        {
+            return Some(f);
+        }
         // Glide ouvert : son image remplace celle de la VGA (relais de la Voodoo).
         if let Some(g) = self.glide.borrow_mut().as_mut()
             && let Some(f) = g.frame()

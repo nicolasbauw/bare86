@@ -60,12 +60,14 @@ fn read_only() -> io::Error {
 /// Fichiers fournis par Bare86 à l'invité : vus dans tout répertoire où
 /// aucun fichier de ce nom n'existe (un vrai fichier reste prioritaire), en
 /// lecture seule, absents des listes de répertoire. La `glide2x.dll` de
-/// Bare86 est ainsi trouvée par le chargeur de HX à côté de chaque jeu, et
-/// sa `glide2x.ovl` par DOS/4GW.
+/// Bare86 est ainsi trouvée par le chargeur de HX à côté de chaque jeu (de
+/// même que son `opengl32.dll`), et sa `glide2x.ovl` par DOS/4GW.
 const BUILTIN: &[(&str, &[u8])] = &[
     ("glide2x.dll", include_bytes!("../../guest/glide2x/glide2x.dll")),
     // Jeux DOS sous DOS/4GW (Carmageddon…) : même Glide, DLL au format LE.
     ("glide2x.ovl", include_bytes!("../../guest/glide2x/glide2x.ovl")),
+    // OpenGL 1.1 servi par l'hôte (Quake II, GLQuake…).
+    ("opengl32.dll", include_bytes!("../../guest/opengl32/opengl32.dll")),
 ];
 
 /// Contenu fourni par Bare86 pour ce chemin (fichier absent de l'hôte, dans

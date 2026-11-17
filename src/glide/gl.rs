@@ -23,12 +23,27 @@ pub struct Offscreen {
     pub target: usize,
     pub width: usize,
     pub height: usize,
+    /// Profil « compatibilité » (OpenGL 1.1 rejoué tel quel) : les deux
+    /// tampons de couleur sont attachés ensemble (COLOR_ATTACHMENT0 et 1),
+    /// la profondeur porte un stencil.
+    compat: bool,
 }
 
 impl Offscreen {
     /// Contexte OpenGL 3.3 « core » et FBO de `width`×`height` (couleur
     /// RGBA8, profondeur 24 bits), rendu courant sur le thread appelant.
     pub fn new(width: usize, height: usize) -> Result<Self, String> {
+        Self::create(width, height, false)
+    }
+
+    /// Contexte OpenGL en profil « compatibilité » (le plus récent que
+    /// donne le pilote), pour rejouer les appels d'OpenGL 1.1 ; FBO à deux
+    /// tampons de couleur attachés ensemble et profondeur avec stencil.
+    pub fn new_compat(width: usize, height: usize) -> Result<Self, String> {
+        Self::create(width, height, true)
+    }
+
+    fn create(width: usize, height: usize, compat: bool) -> Result<Self, String> {
         // SAFETY: chargement de libEGL, appels EGL avec des listes d'attributs
         // terminées par NONE ; le contexte reste courant sur ce thread.
         unsafe {
@@ -42,7 +57,7 @@ impl Offscreen {
                 .choose_first_config(display, &[egl::RENDERABLE_TYPE, egl::OPENGL_BIT, egl::SURFACE_TYPE, egl::PBUFFER_BIT, egl::NONE])
                 .map_err(|e| format!("EGL configuration: {e}"))?
                 .ok_or("EGL: no OpenGL configuration")?;
-            let attrs = [
+            let core = [
                 egl::CONTEXT_MAJOR_VERSION,
                 3,
                 egl::CONTEXT_MINOR_VERSION,
@@ -51,7 +66,9 @@ impl Offscreen {
                 egl::CONTEXT_OPENGL_CORE_PROFILE_BIT,
                 egl::NONE,
             ];
-            let context = egl.create_context(display, config, None, &attrs).map_err(|e| format!("EGL context: {e}"))?;
+            let compatibility = [egl::CONTEXT_OPENGL_PROFILE_MASK, egl::CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT, egl::NONE];
+            let attrs: &[egl::Int] = if compat { &compatibility } else { &core };
+            let context = egl.create_context(display, config, None, attrs).map_err(|e| format!("EGL context: {e}"))?;
             egl.make_current(display, None, None, Some(context)).map_err(|e| format!("EGL make current: {e}"))?;
             let gl = glow::Context::from_loader_function(|name| {
                 egl.get_proc_address(name).map_or(std::ptr::null(), |f| f as *const std::ffi::c_void)
@@ -59,7 +76,7 @@ impl Offscreen {
             let fbo = gl.create_framebuffer()?;
             let colors = [gl.create_renderbuffer()?, gl.create_renderbuffer()?];
             let depth = gl.create_renderbuffer()?;
-            let mut s = Self { egl, display, context, gl, fbo, colors, depth, target: 0, width: 0, height: 0 };
+            let mut s = Self { egl, display, context, gl, fbo, colors, depth, target: 0, width: 0, height: 0, compat };
             s.resize(width, height);
             Ok(s)
         }
@@ -75,14 +92,39 @@ impl Offscreen {
                 gl.renderbuffer_storage(glow::RENDERBUFFER, glow::RGBA8, width as i32, height as i32);
             }
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(self.depth));
-            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT24, width as i32, height as i32);
+            let depth = if self.compat { glow::DEPTH24_STENCIL8 } else { glow::DEPTH_COMPONENT24 };
+            gl.renderbuffer_storage(glow::RENDERBUFFER, depth, width as i32, height as i32);
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+            if self.compat {
+                gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::RENDERBUFFER, Some(self.colors[0]));
+                gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT1, glow::RENDERBUFFER, Some(self.colors[1]));
+                gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_STENCIL_ATTACHMENT, glow::RENDERBUFFER, Some(self.depth));
+                // État initial d'une fenêtre neuve : vue et ciseaux à sa taille.
+                gl.viewport(0, 0, width as i32, height as i32);
+                gl.scissor(0, 0, width as i32, height as i32);
+                self.width = width;
+                self.height = height;
+                return;
+            }
             gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::RENDERBUFFER, Some(self.colors[self.target]));
             gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_ATTACHMENT, glow::RENDERBUFFER, Some(self.depth));
             gl.viewport(0, 0, width as i32, height as i32);
         }
         self.width = width;
         self.height = height;
+    }
+
+    /// Adresse d'une fonction d'OpenGL (nulle si absente).
+    pub fn proc_address(&self, name: &str) -> *const std::ffi::c_void {
+        self.egl.get_proc_address(name).map_or(std::ptr::null(), |f| f as *const std::ffi::c_void)
+    }
+
+    /// Rend ce contexte courant sur le thread appelant s'il ne l'est pas
+    /// (Glide et OpenGL ont chacun le leur).
+    pub fn make_current(&self) {
+        if self.egl.get_current_context() != Some(self.context) {
+            let _ = self.egl.make_current(self.display, None, None, Some(self.context));
+        }
     }
 
     /// Dessin dans le tampon de couleur `i` (0 ou 1).

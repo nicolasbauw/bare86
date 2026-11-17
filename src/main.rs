@@ -32,6 +32,7 @@ mod menu;
 mod mouse;
 mod midisynth;
 mod mpu401;
+mod opengl;
 mod ne2000;
 mod net;
 mod opl;
