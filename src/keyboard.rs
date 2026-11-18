@@ -116,13 +116,21 @@ pub fn text_scancodes(c: u8) -> Vec<u8> {
     v
 }
 
+/// Journal des touches (`BARE86_KEYLOG=1`, diagnostic) : touches de la
+/// fenêtre et octets livrés au contrôleur clavier.
+pub fn keylog() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("BARE86_KEYLOG").is_some())
+}
+
 /// Script de touches pour `--keys` : texte tapé tel quel, touches nommées
 /// entre accolades (`{enter}`, `{esc}`, `{f1}`, `{up}`, `{alt+f}`,
 /// `{ctrl+c}`…), pauses (`{wait:500}`, en ms), vitesse (`{speed:25}` en
 /// MIPS, `{speed:max}`), disquette suivante (`{disk}`), disquette ou CD
 /// choisis (`{fda:IMAGE}`, `{cd:IMAGE}`, `{cd:}` pour éjecter), souris
 /// (`{mouse:dx,dy,boutons}`), attente
-/// d'un texte à l'écran (`{until:Press a key}`), `{{` pour une accolade. Une
+/// d'un texte à l'écran (`{until:Press a key}`), touche maintenue
+/// (`{press:up}` … `{release:up}`), `{{` pour une accolade. Une
 /// fin de session suit le script.
 pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> {
     use crate::host::InputEvent::{Key, Quit, Text};
@@ -173,6 +181,13 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
             out.push(crate::host::InputEvent::Speed(mips));
             continue;
         }
+        // Touche enfoncée (`{press:up}`) ou relâchée (`{release:up}`)
+        // seule : appui maintenu le temps des `{wait:…}` qui suivent.
+        let (only, name) = match (name.strip_prefix("press:"), name.strip_prefix("release:")) {
+            (Some(k), _) => (Some(true), k.to_string()),
+            (_, Some(k)) => (Some(false), k.to_string()),
+            _ => (None, name),
+        };
         let (mods, key) = match name.rsplit_once('+') {
             Some((m, k)) => (m.to_string(), k.to_string()),
             None => (String::new(), name.clone()),
@@ -218,16 +233,20 @@ pub fn parse_script(spec: &str) -> Result<Vec<crate::host::InputEvent>, String> 
         // Flèches et pavé de navigation : touches étendues du clavier MF2
         // (préfixe E0h), distinctes de leurs doubles du pavé numérique.
         let extended = matches!(key.as_str(), "up" | "down" | "left" | "right" | "home" | "end" | "pgup" | "pgdn" | "ins" | "del");
-        out.extend(mods.iter().map(|&m| Key(m)));
-        if extended {
-            out.push(Key(0xE0));
+        if only != Some(false) {
+            out.extend(mods.iter().map(|&m| Key(m)));
+            if extended {
+                out.push(Key(0xE0));
+            }
+            out.push(Key(scan));
         }
-        out.push(Key(scan));
-        if extended {
-            out.push(Key(0xE0));
+        if only != Some(true) {
+            if extended {
+                out.push(Key(0xE0));
+            }
+            out.push(Key(scan | 0x80));
+            out.extend(mods.iter().rev().map(|&m| Key(m | 0x80)));
         }
-        out.push(Key(scan | 0x80));
-        out.extend(mods.iter().rev().map(|&m| Key(m | 0x80)));
     }
     out.push(Quit);
     Ok(out)

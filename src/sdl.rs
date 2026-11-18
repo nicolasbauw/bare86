@@ -220,6 +220,9 @@ fn set1(hid: i32) -> Option<u16> {
 }
 
 fn send_key(tx: &Sender<InputEvent>, scancode: Option<Scancode>, release: bool) {
+    if crate::keyboard::keylog() {
+        eprintln!("[key] window {} {scancode:?}", if release { "up" } else { "down" });
+    }
     let Some(code) = scancode.and_then(|s| set1(s as i32)) else { return };
     if code & 0x100 != 0 {
         let _ = tx.send(InputEvent::Key(0xE0));
