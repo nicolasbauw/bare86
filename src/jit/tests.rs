@@ -425,3 +425,49 @@ fn call_ret_loop_through_dispatch() {
     // Peu de retours à Rust : la plupart des `ret` sont servis par la table.
     assert!(jit.stats.blocks_run > 9000, "{:?}", jit.stats);
 }
+
+/// Divisions : opérandes tirés pour réussir le plus souvent (dividendes à
+/// la `FixedDiv` de Doom, cas limites), comparées à l'interpréteur.
+#[test]
+fn divisions_match_interpreter() {
+    let mut rng = Rng(77);
+    let mem_jit = GuestMem::new(MEM_SIZE).unwrap();
+    let mem_ref = GuestMem::new(MEM_SIZE).unwrap();
+    let mut jit = Jit::new(&mem_jit).unwrap();
+    // div ebx ; hlt | idiv ebx ; hlt | div dword [esi] ; hlt | idiv dword [esi] ; hlt
+    let codes: [&[u8]; 4] = [&[0xF7, 0xF3, 0xF4], &[0xF7, 0xFB, 0xF4], &[0xF7, 0x36, 0xF4], &[0xF7, 0x3E, 0xF4]];
+    let mut native = 0;
+    for case in 0..20_000 {
+        let code = codes[case % 4];
+        let a = interesting(&mut rng) as i32;
+        let b = match rng.below(4) {
+            0 => interesting(&mut rng),
+            1 => 1 + rng.below(0x10000) as u32,
+            2 => (rng.next() as u32) | 1,
+            _ => [0, 1, u32::MAX, 0x8000_0000][rng.below(4) as usize],
+        };
+        let (lo, hi) = match rng.below(3) {
+            // FixedDiv2 : (a << 16) / b
+            0 => ((a as u32) << 16, (a >> 16) as u32),
+            // cdq
+            1 => (a as u32, (a >> 31) as u32),
+            _ => (rng.next() as u32, interesting(&mut rng)),
+        };
+        for m in [&mem_jit, &mem_ref] {
+            m.write(CODE_AT as usize, code);
+            m.write_u32(0x40000, b);
+        }
+        let mut start = random_cpu(&mut rng);
+        (start.gpr[0], start.gpr[2], start.gpr[3], start.gpr[6]) = (lo, hi, b, 0x40000);
+        let mut r = start.clone();
+        while run_burst(&mut r, &mem_ref, &mut NoMmio, u64::MAX, 1).reason != StopReason::Unsupported {}
+        let mut o = start.clone();
+        jit.flush();
+        let before = jit.stats.jit_instructions;
+        jit.run(&mut o, &mem_jit, &mut NoMmio, u64::MAX, u64::MAX);
+        native += jit.stats.jit_instructions - before;
+        assert_eq!((o.gpr, o.ip), (r.gpr, r.ip), "case {case}: {:02X?} eax {lo:08X} edx {hi:08X} divisor {b:08X}", code);
+    }
+    // La plupart des divisions ont été faites par le code traduit.
+    assert!(native > 10_000, "{native}");
+}

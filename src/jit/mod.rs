@@ -102,7 +102,7 @@ const OFF_GEN_HI: i32 = 160;
 const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
 /// budget, inactivité et arrêt).
-const CHAIN_MAX: u64 = 256;
+const CHAIN_MAX: u64 = 4096;
 
 /// Fin de bloc normale (saut, ou instruction laissée à l'interpréteur).
 pub const EXIT_NEXT: u32 = 0;
@@ -763,6 +763,9 @@ enum Op {
     Leave,
     /// `out dx,al` (1) ou `out dx,ax` (2), servi par `out_trampoline`.
     Out(u32),
+    /// `div` / `idiv` 32 bits (vrai : signée), diviseur en registre ou en
+    /// mémoire ; les cas qui fauteraient passent au chemin lent.
+    Div(bool),
     /// `mov r8h,[m]` / `mov [m],r8h` : registre 32 bits complet ; les
     /// registres hauts ne s'encodent pas avec R13/R15.
     HighLoad(Register),
@@ -813,6 +816,9 @@ fn classify(ins: &Instruction, imm: Imm, volatile: &std::collections::HashSet<u3
         Code::Pop_r32 | Code::Pop_rm32 if reg32(0) => return Some(Op::Pop(host_reg(ins.op0_register())?)),
         Code::Pushad => return Some(Op::Pushad),
         Code::Out_DX_AL => return Some(Op::Out(1)),
+        Code::Div_rm32 | Code::Idiv_rm32 if reg32(0) || (ins.op0_kind() == OpKind::Memory && flat_memory(ins)) => {
+            return Some(Op::Div(ins.code() == Code::Idiv_rm32));
+        }
         Code::Out_DX_AX => return Some(Op::Out(2)),
         Code::Popad => return Some(Op::Popad),
         Code::Leaved => return Some(Op::Leave),
@@ -955,6 +961,55 @@ fn r32(r: Register) -> AsmRegister32 {
 
 /// Pile et registres hauts : contrôle de l'accès (drapeaux sauvés autour
 /// s'ils sont vivants), puis l'opération.
+/// `div`/`idiv r/m32` (drapeaux indéfinis après : rien à préserver). Le
+/// diviseur dans R11D ; non signée : chemin lent si nul ou si EDX ≥ diviseur
+/// (quotient trop grand) ; signée : chemin lent si 0 ou −1, sinon division
+/// 64 bits sur l'hôte (sans faute possible) et quotient vérifié sur 32 bits,
+/// registres rétablis s'il déborde.
+fn emit_div(e: &mut Emit, ins: &Instruction, signed: bool, ip: u32, n: u32) -> Result<(), IcedError> {
+    if ins.op0_kind() == OpKind::Memory {
+        e.address(ins)?;
+        e.guard(ip, n, 4, false, false, None)?;
+        e.a.mov(r11d, dword_ptr(r15 + r13))?;
+    } else {
+        let r = host_reg(ins.op0_register()).unwrap();
+        e.a.add_instruction(Instruction::with2(Code::Mov_r32_rm32, Register::R11D, r)?)?;
+    }
+    let slow = e.exit(Some(ip), n, EXIT_SLOW, false);
+    let a = &mut e.a;
+    a.test(r11d, r11d)?;
+    a.jz(slow)?;
+    if !signed {
+        a.cmp(edx, r11d)?;
+        a.jae(slow)?;
+        a.div(r11d)?;
+        return Ok(());
+    }
+    a.cmp(r11d, -1)?;
+    a.je(slow)?;
+    // Dividende EDX:EAX sur 64 bits dans RAX, sauvé dans R13/R14.
+    a.mov(r13d, eax)?;
+    a.mov(r14d, edx)?;
+    a.mov(rax, r14)?;
+    a.shl(rax, 32)?;
+    a.or(rax, r13)?;
+    a.cqo()?;
+    a.movsxd(r11, r11d)?;
+    a.idiv(r11)?;
+    // Le quotient tient-il sur 32 bits signés ?
+    a.movsxd(r9, eax)?;
+    a.cmp(r9, rax)?;
+    let mut fits = a.create_label();
+    a.je(fits)?;
+    a.mov(eax, r13d)?;
+    a.mov(edx, r14d)?;
+    a.jmp(slow)?;
+    a.set_label(&mut fits)?;
+    a.mov(eax, eax)?;
+    a.mov(edx, edx)?;
+    Ok(())
+}
+
 /// `out dx,al|ax` : appel de `out_trampoline` (registres volatils de l'hôte
 /// et drapeaux sauvés, pile alignée) ; port non servi → chemin lent.
 fn emit_out(e: &mut Emit, size: u32, ip: u32, n: u32, live: bool) -> Result<(), IcedError> {
@@ -1208,6 +1263,7 @@ fn emit_block(
                 }
             }
             Op::Out(size) => emit_out(&mut e, *size, ip, n, live_here)?,
+            Op::Div(signed) => emit_div(&mut e, ins, *signed, ip, n)?,
             _ => emit_stackish(&mut e, ins, op, ip, n, live_here)?,
         }
     }
