@@ -39,6 +39,11 @@ fn random_cpu(rng: &mut Rng) -> Cpu {
         // valeurs limites (arithmétique).
         *g = if rng.chance(50) { 0x10000 + rng.below(0x80000) as u32 } else { interesting(rng) };
     }
+    // Pile valide (push, pop, call, ret).
+    gpr[4] = 0x9_0000 + (rng.below(0x1000) as u32 & !3);
+    if rng.chance(50) {
+        gpr[5] = gpr[4] + 4 * rng.below(16) as u32;
+    }
     let data = flat(0x10, 3);
     Cpu {
         gpr,
@@ -71,10 +76,16 @@ fn random_native(rng: &mut Rng) -> Vec<u8> {
             b.push(rng.next() as u8);
         }
         let ins = Decoder::with_ip(32, &b, 0, DecoderOptions::NONE).decode();
-        if ins.is_invalid() || !native_ok(&ins) {
+        if ins.is_invalid() || ins.flow_control() != FlowControl::Next || classify(&ins, None, &Default::default()).is_none() {
             continue;
         }
-        if ins.mnemonic() != Mn::Lea && rewrite(&ins).is_none() {
+        // La pile reste valide : pas d'écriture de ESP autrement que par
+        // push/pop (sauf de temps en temps).
+        let writes_esp = ins.op_count() > 0 && ins.op0_kind() == OpKind::Register && matches!(ins.op0_register(), Register::ESP | Register::SP);
+        if writes_esp && !matches!(ins.mnemonic(), Mn::Push | Mn::Pop) && rng.chance(90) {
+            continue;
+        }
+        if matches!(ins.mnemonic(), Mn::Popad | Mn::Leave) && rng.chance(50) {
             continue;
         }
         return b[..ins.len()].to_vec();
@@ -113,6 +124,36 @@ fn jit_matches_interpreter() {
             if rng.chance(10) {
                 code.extend([0x70 + rng.below(16) as u8, 0x00]); // jcc +0
             }
+            let here = CODE_AT + code.len() as u32;
+            match rng.below(40) {
+                // call +0 ; add esp,4
+                0 => code.extend([0xE8, 0, 0, 0, 0, 0x83, 0xC4, 0x04]),
+                // push suite ; ret
+                1 => {
+                    code.push(0x68);
+                    code.extend((here + 6).to_le_bytes());
+                    code.push(0xC3);
+                }
+                // push suite ; ret 0 (forme imm16, sans rien libérer)
+                2 => {
+                    code.push(0x68);
+                    code.extend((here + 8).to_le_bytes());
+                    code.extend([0xC2, 0x00, 0x00]);
+                }
+                // mov ebx,suite ; jmp ebx  (ebx écrasé)
+                3 => {
+                    code.push(0xBB);
+                    code.extend((here + 7).to_le_bytes());
+                    code.extend([0xFF, 0xE3]);
+                }
+                // mov ebx,suite ; call ebx ; add esp,4
+                4 => {
+                    code.push(0xBB);
+                    code.extend((here + 7).to_le_bytes());
+                    code.extend([0xFF, 0xD3, 0x83, 0xC4, 0x04]);
+                }
+                _ => {}
+            }
         }
         code.push(0xF4);
         mem_jit.write(CODE_AT as usize, &code);
@@ -127,6 +168,9 @@ fn jit_matches_interpreter() {
         let mut steps = 0;
         loop {
             let at = reference.ip as usize;
+            if at + 15 > MEM_SIZE {
+                break;
+            }
             let mut bytes = [0u8; 15];
             mem_ref.read(at, &mut bytes);
             let ins: Instruction = Decoder::with_ip(32, &bytes, at as u64, DecoderOptions::NONE).decode();
@@ -177,7 +221,7 @@ fn jit_matches_interpreter() {
             diffs.push(format!("memory at {i:06X}: ours {:02X} ref {:02X}", a[i], b[i]));
         }
         if !diffs.is_empty() && std::env::var_os("JIT_TRACE").is_some() {
-            bisect(&code, &start, fill);
+            trace(&code, &start, fill);
         }
         if !diffs.is_empty() {
             let listing: Vec<String> = Decoder::with_ip(32, &code, u64::from(CODE_AT), DecoderOptions::NONE)
@@ -185,7 +229,8 @@ fn jit_matches_interpreter() {
                 .map(|i| format!("  {:08X} {i}", i.ip()))
                 .collect();
             failures.push(format!(
-                "case {case}:\n{}\nstart {:08X?} flags {:08X}\n{}",
+                "case {case}: bytes {}\n{}\nstart {:08X?} flags {:08X}\n{}",
+                code.iter().map(|b| format!("{b:02X}")).collect::<String>(),
                 listing.join("\n"),
                 start.gpr,
                 start.flags,
@@ -245,6 +290,9 @@ fn bisect(code: &[u8], start: &Cpu, fill: u64) {
 
 /// Drapeaux écrits avant d'être lus par le code qui suit `eip` (jusqu'à `hlt`).
 fn dead_flags(mem: &GuestMem, eip: u32) -> u32 {
+    if eip as usize + 256 > MEM_SIZE {
+        return 0;
+    }
     let mut bytes = vec![0u8; 256];
     mem.read(eip as usize, &mut bytes);
     let (mut dead, mut read) = (0, 0);
@@ -256,4 +304,62 @@ fn dead_flags(mem: &GuestMem, eip: u32) -> u32 {
         dead |= flags_written(&ins) & !read;
     }
     dead
+}
+
+/// Rejoue `code` pas à pas (blocs d'une instruction) contre l'interpréteur
+/// et affiche le premier pas qui diverge.
+fn trace(code: &[u8], start: &Cpu, fill: u64) {
+    let mem_jit = GuestMem::new(MEM_SIZE).unwrap();
+    let mem_ref = GuestMem::new(MEM_SIZE).unwrap();
+    for m in [&mem_jit, &mem_ref] {
+        fill_memory(m, fill);
+        m.write(CODE_AT as usize, code);
+    }
+    let mut jit = Jit::new(&mem_jit).unwrap();
+    jit.max_block = 1;
+    let (mut o, mut r) = (start.clone(), start.clone());
+    for step in 0..200 {
+        let mut b = [0u8; 15];
+        if r.ip as usize + 15 > MEM_SIZE {
+            return;
+        }
+        mem_ref.read(r.ip as usize, &mut b);
+        let ins = Decoder::with_ip(32, &b, u64::from(r.ip), DecoderOptions::NONE).decode();
+        if ins.mnemonic() == Mn::Hlt {
+            println!("trace: no divergence before hlt");
+            return;
+        }
+        let before = r.clone();
+        if run_burst(&mut r, &mem_ref, &mut NoMmio, u64::MAX, 1).reason == StopReason::Unsupported {
+            println!("trace: reference stops at {:08X} {ins}", r.ip);
+            return;
+        }
+        jit.run(&mut o, &mem_jit, &mut NoMmio, 1);
+        let mask = !(undefined_flags(&ins, &before) | 0x28);
+        let (mut ma, mut mb) = (vec![0u8; MEM_SIZE], vec![0u8; MEM_SIZE]);
+        mem_jit.read(0, &mut ma);
+        mem_ref.read(0, &mut mb);
+        if let Some(i) = (0..MEM_SIZE).find(|&i| ma[i] != mb[i]) {
+            println!("trace: step {step} {:08X} {ins}: memory differs at {i:06X} (ours {:02X} ref {:02X})", before.ip, ma[i], mb[i]);
+            return;
+        }
+        if o.gpr != r.gpr || o.ip != r.ip || o.flags & mask != r.flags & mask {
+            println!("trace: step {step} {:08X} {ins}\n ours {:08X?} {:08X} eip {:08X}\n ref  {:08X?} {:08X} eip {:08X}\n before {:08X?} {:08X}", before.ip, o.gpr, o.flags, o.ip, r.gpr, r.flags, r.ip, before.gpr, before.flags);
+            return;
+        }
+    }
+}
+
+#[test]
+fn volatile_add_ebp() {
+    let bytes = [0x81, 0xC5, 0x78, 0x56, 0x34, 0x12];
+    let mut d = Decoder::with_ip(32, &bytes, 0x173E07, DecoderOptions::NONE);
+    let ins = d.decode();
+    let c = d.get_constant_offsets(&ins);
+    println!("{ins} code {:?} imm {} {}", ins.code(), c.immediate_offset(), c.immediate_size());
+    let h = volatile_form(&ins, c.immediate_offset());
+    println!("{h:?}");
+    let mut v = std::collections::HashSet::new();
+    v.insert(0x173E07);
+    assert!(classify(&ins, Some((c.immediate_offset(), c.immediate_size())), &v).is_some());
 }

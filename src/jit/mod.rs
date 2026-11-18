@@ -52,6 +52,8 @@ pub struct State {
     code_bits: u64,
     /// Plan d'écriture direct de la fenêtre A0000 (0 : chemin lent).
     vram: u64,
+    /// RFLAGS de l'invité sauvés avant un contrôle d'accès.
+    saved_flags: u64,
 }
 
 const OFF_FLAGS: i32 = 32;
@@ -62,6 +64,7 @@ const OFF_EXIT: i32 = 52;
 const OFF_COUNT: i32 = 56;
 const OFF_CODE_BITS: i32 = 64;
 const OFF_VRAM: i32 = 72;
+const OFF_SAVED: i32 = 80;
 
 /// Fin de bloc normale (saut, ou instruction laissée à l'interpréteur).
 pub const EXIT_NEXT: u32 = 0;
@@ -174,6 +177,8 @@ pub struct Jit {
     pub stats: JitStats,
     /// Comptage des replis par mnémonique (diagnostic, coûteux).
     pub count_fallbacks: bool,
+    /// Instructions au plus par bloc (1 : pas à pas, tests).
+    pub max_block: usize,
 }
 
 /// Mode du processeur que le traducteur sait servir.
@@ -200,6 +205,7 @@ impl Jit {
             epoch: 1,
             stats: JitStats::default(),
             count_fallbacks: false,
+            max_block: MAX_BLOCK,
         })
     }
 
@@ -278,7 +284,13 @@ impl Jit {
             if interp_next {
                 if self.count_fallbacks {
                     let what = interp::describe_at(cpu, mem);
-                    let mnemonic = what.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+                    let mut mnemonic = what.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+                    // Immédiats variables : regroupés par adresse.
+                    if let Some(i) = mnemonic.rfind(',')
+                        && mnemonic[i + 1..].ends_with('h')
+                    {
+                        mnemonic = format!("{} {},imm (vol={})", &what[..8], &mnemonic[..i], self.volatile.contains(&cpu.ip));
+                    }
                     *self.stats.fallbacks.entry(mnemonic).or_default() += 1;
                 }
                 let b = interp::run_burst(cpu, mem, mmio, u64::MAX, 1);
@@ -329,7 +341,7 @@ impl Jit {
         for _ in 0..2 {
             // SAFETY: `used` reste dans le tampon.
             let at = unsafe { self.code.ptr.add(self.code.used) };
-            match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile) {
+            match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile, self.max_block) {
                 Ok(Some((code, len, holes))) if self.code.used + code.len() <= CODE_SIZE => {
                     emitted = Some((at, code, len, holes));
                     break;
@@ -346,6 +358,11 @@ impl Jit {
         }
         let entry = match emitted {
             None => {
+                if self.count_fallbacks && self.volatile.contains(&eip) {
+                    let all = decode_block(eip, mem, self.mem_size, 1);
+                    let (ins, imm) = all[0];
+                    eprintln!("[jit] volatile {eip:08X} {ins} {:?} imm {imm:?} native_ok {} form {:?}", ins.code(), native_ok(&ins), imm.and_then(|(o, _)| volatile_form(&ins, o)).is_some());
+                }
                 self.blocks.insert(eip, None);
                 return None;
             }
@@ -395,7 +412,7 @@ impl Jit {
             if addr + size <= start || addr >= start + len {
                 continue;
             }
-            for (ins, imm) in decode_block(start, mem, self.mem_size) {
+            for (ins, imm) in decode_block(start, mem, self.mem_size, MAX_BLOCK) {
                 let ip = ins.ip32();
                 if let Some((off, n)) = imm
                     && addr >= ip + off as u32
@@ -413,7 +430,7 @@ type Imm = Option<(usize, usize)>;
 
 /// Instructions de l'invité à partir de `eip`, jusqu'à la première fin de
 /// bloc incluse, avec la place de leur immédiat.
-fn decode_block(eip: u32, mem: &GuestMem, mem_size: usize) -> Vec<(Instruction, Imm)> {
+fn decode_block(eip: u32, mem: &GuestMem, mem_size: usize, max: usize) -> Vec<(Instruction, Imm)> {
     let start = eip as usize;
     if start >= mem_size {
         return Vec::new();
@@ -423,7 +440,7 @@ fn decode_block(eip: u32, mem: &GuestMem, mem_size: usize) -> Vec<(Instruction, 
     mem.read(start, &mut bytes);
     let mut dec = Decoder::with_ip(32, &bytes, u64::from(eip), DecoderOptions::NONE);
     let mut out = Vec::new();
-    while dec.can_decode() && out.len() < MAX_BLOCK {
+    while dec.can_decode() && out.len() < max {
         let ins = dec.decode();
         if ins.is_invalid() {
             break;
@@ -590,11 +607,287 @@ fn guest_address(ins: &Instruction) -> Option<MemoryOperand> {
 /// Sortie de bloc en attente d'émission.
 struct Exit {
     label: CodeLabel,
-    eip: u32,
+    /// EIP de reprise ; `None` : calculé dans R8D (ret, sauts indirects).
+    eip: Option<u32>,
     count: u32,
     kind: u32,
-    /// Drapeaux de l'invité empilés par un contrôle (à dépiler d'abord).
+    /// Drapeaux de l'invité sauvés par un contrôle (`OFF_SAVED`), à rétablir
+    /// d'abord.
     pushed: bool,
+}
+
+/// Instruction du corps d'un bloc, par genre de traduction.
+enum Op {
+    /// Recopiée (registres et opérande mémoire réécrits).
+    Native(Instruction),
+    /// Immédiat volatil lu dans la mémoire de l'invité.
+    Volatile(Instruction),
+    /// Adresse de l'invité calculée directement dans la destination.
+    Lea,
+    Push(Option<Register>, u32),
+    Pop(Register),
+    Pushad,
+    Popad,
+    Leave,
+    /// `mov r8h,[m]` / `mov [m],r8h` : registre 32 bits complet ; les
+    /// registres hauts ne s'encodent pas avec R13/R15.
+    HighLoad(Register),
+    HighStore(Register),
+}
+
+/// Fin de bloc.
+enum Tail {
+    /// Instruction suivante laissée à l'interpréteur.
+    Fallthrough,
+    Jump(Instruction),
+    Call(Instruction),
+    /// `ret` (octets de pile à libérer en plus).
+    Ret(u32),
+    /// `jmp`/`call` vers une cible en registre ou en mémoire.
+    Indirect(Instruction),
+}
+
+/// Registre 32 bits d'un registre haut (AH → EAX…).
+fn high_full(r: Register) -> Option<Register> {
+    Some(match r {
+        Register::AH => Register::EAX,
+        Register::CH => Register::ECX,
+        Register::DH => Register::EDX,
+        Register::BH => Register::EBX,
+        _ => return None,
+    })
+}
+
+/// Opérande mémoire plat, adressage 32 bits (pas FS/GS).
+fn flat_memory(ins: &Instruction) -> bool {
+    let ok_reg = |r: Register| r == Register::None || r.is_gpr32();
+    ok_reg(ins.memory_base())
+        && ok_reg(ins.memory_index())
+        && matches!(ins.memory_segment(), Register::DS | Register::ES | Register::SS | Register::CS)
+}
+
+/// Genre de traduction d'une instruction non terminale ; `None` : rendue à
+/// l'interpréteur.
+fn classify(ins: &Instruction, imm: Imm, volatile: &std::collections::HashSet<u32>) -> Option<Op> {
+    if ins.has_lock_prefix() || ins.has_rep_prefix() || ins.has_repne_prefix() {
+        return None;
+    }
+    let reg32 = |i: u32| ins.op_kind(i) == OpKind::Register && ins.op_register(i).is_gpr32();
+    match ins.code() {
+        Code::Push_r32 | Code::Push_rm32 if reg32(0) => return Some(Op::Push(host_reg(ins.op0_register()), 0)),
+        Code::Pushd_imm32 | Code::Pushd_imm8 => return Some(Op::Push(None, ins.immediate(0) as u32)),
+        Code::Pop_r32 | Code::Pop_rm32 if reg32(0) => return Some(Op::Pop(host_reg(ins.op0_register())?)),
+        Code::Pushad => return Some(Op::Pushad),
+        Code::Popad => return Some(Op::Popad),
+        Code::Leaved => return Some(Op::Leave),
+        Code::Mov_r8_rm8 if ins.op1_kind() == OpKind::Memory && flat_memory(ins) => {
+            if let Some(full) = high_full(ins.op0_register()) {
+                return Some(Op::HighLoad(full));
+            }
+        }
+        Code::Mov_rm8_r8 if ins.op0_kind() == OpKind::Memory && flat_memory(ins) && ins.memory_segment() != Register::CS => {
+            if let Some(full) = high_full(ins.op1_register()) {
+                return Some(Op::HighStore(full));
+            }
+        }
+        _ => {}
+    }
+    if !native_ok(ins) {
+        return None;
+    }
+    if volatile.contains(&ins.ip32()) {
+        let (off, _) = imm?;
+        return volatile_form(ins, off).map(Op::Volatile);
+    }
+    if ins.mnemonic() == Mn::Lea {
+        let ok = ins.op0_kind() == OpKind::Register && ins.op0_register().is_gpr32() && guest_address(ins).is_some();
+        return ok.then_some(Op::Lea);
+    }
+    rewrite(ins).map(Op::Native)
+}
+
+/// Fin de bloc traduite ; `None` : rendue à l'interpréteur.
+fn classify_tail(ins: &Instruction) -> Option<Tail> {
+    let target_ok = |ins: &Instruction| match ins.op0_kind() {
+        OpKind::Register => ins.op0_register().is_gpr32(),
+        OpKind::Memory => flat_memory(ins) && ins.memory_size().size() == 4,
+        _ => false,
+    };
+    match ins.flow_control() {
+        // jmp et jcc seulement : jecxz et loop* (iced donne e/ne à loope et
+        // loopne) décrémentent ou testent ECX, laissés à l'interpréteur.
+        FlowControl::UnconditionalBranch | FlowControl::ConditionalBranch
+            if (ins.is_jcc_short_or_near() || ins.is_jmp_short_or_near()) && ins.op0_kind() == OpKind::NearBranch32 =>
+        {
+            Some(Tail::Jump(*ins))
+        }
+        FlowControl::Call if ins.code() == Code::Call_rel32_32 => Some(Tail::Call(*ins)),
+        FlowControl::Return if ins.code() == Code::Retnd => Some(Tail::Ret(0)),
+        FlowControl::Return if ins.code() == Code::Retnd_imm16 => Some(Tail::Ret(u32::from(ins.immediate16()))),
+        FlowControl::IndirectBranch if ins.code() == Code::Jmp_rm32 && target_ok(ins) => Some(Tail::Indirect(*ins)),
+        FlowControl::IndirectCall if ins.code() == Code::Call_rm32 && target_ok(ins) => Some(Tail::Indirect(*ins)),
+        _ => None,
+    }
+}
+
+/// Émetteur d'un bloc.
+struct Emit {
+    a: CodeAssembler,
+    exits: Vec<Exit>,
+    mem_limit: i32,
+}
+
+impl Emit {
+    /// Sauve les drapeaux de l'invité avant un contrôle. Toujours avant une
+    /// écriture : elle peut modifier le code qui suit, et donc la vivacité
+    /// calculée ; les sorties qui en partent les rétablissent exactement.
+    fn save(&mut self) -> Result<(), IcedError> {
+        self.a.pushfq()?;
+        self.a.pop(qword_ptr(r10 + OFF_SAVED))
+    }
+
+    fn restore(&mut self) -> Result<(), IcedError> {
+        self.a.push(qword_ptr(r10 + OFF_SAVED))?;
+        self.a.popfq()
+    }
+
+    fn exit(&mut self, eip: Option<u32>, count: u32, kind: u32, pushed: bool) -> CodeLabel {
+        let label = self.a.create_label();
+        self.exits.push(Exit { label, eip, count, kind, pushed });
+        label
+    }
+
+    /// Contrôles d'un accès de `size` octets à l'adresse de l'invité dans
+    /// R13D : fin de la mémoire et zone A0000–FFFFF (chemin lent), octets de
+    /// code traduit pour une écriture. Écrase les drapeaux, R9, R11, R14.
+    /// Sans `vga`, la fenêtre mène au chemin lent ; sinon à `vga`.
+    fn guard(&mut self, ip: u32, count: u32, size: i32, write: bool, pushed: bool, vga: Option<CodeLabel>) -> Result<(), IcedError> {
+        let slow = self.exit(Some(ip), count, EXIT_SLOW, pushed);
+        let a = &mut self.a;
+        a.cmp(r13d, self.mem_limit)?;
+        a.jae(slow)?;
+        // [r13, r13+size) touche-t-il A0000–FFFFF ?
+        a.lea(r14d, ptr(r13 - (0xA0000 - size + 1)))?;
+        a.cmp(r14d, 0x60000 + size - 1)?;
+        a.jb(vga.unwrap_or(slow))?;
+        if write {
+            let smc = self.exit(Some(ip), count, EXIT_SMC, pushed);
+            let a = &mut self.a;
+            // Bits du premier et du dernier octet écrits.
+            a.mov(r9, qword_ptr(r10 + OFF_CODE_BITS))?;
+            a.mov(r14d, r13d)?;
+            a.shr(r14d, 3)?;
+            a.movzx(r14d, word_ptr(r9 + r14))?;
+            a.mov(r11d, r13d)?;
+            a.and(r11d, 7)?;
+            a.bt(r14d, r11d)?;
+            a.jb(smc)?;
+            if size > 1 {
+                a.add(r11d, size - 1)?;
+                a.bt(r14d, r11d)?;
+                a.jb(smc)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adresse de l'opérande mémoire de l'invité dans R13D.
+    fn address(&mut self, ins: &Instruction) -> Result<(), IcedError> {
+        let m = guest_address(ins).unwrap();
+        if m.base == Register::None && m.index == Register::None {
+            self.a.mov(r13d, m.displacement as u32)?;
+        } else {
+            self.a.add_instruction(Instruction::with2(Code::Lea_r32_m, Register::R13D, m)?)?;
+        }
+        Ok(())
+    }
+}
+
+fn r32(r: Register) -> AsmRegister32 {
+    match r {
+        Register::EAX => eax,
+        Register::ECX => ecx,
+        Register::EDX => edx,
+        Register::EBX => ebx,
+        Register::R12D => r12d,
+        Register::EBP => ebp,
+        Register::ESI => esi,
+        Register::EDI => edi,
+        _ => unreachable!("{r:?}"),
+    }
+}
+
+/// Pile et registres hauts : contrôle de l'accès (drapeaux sauvés autour
+/// s'ils sont vivants), puis l'opération.
+fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live: bool) -> Result<(), IcedError> {
+    let pushed = live || matches!(op, Op::Push(..) | Op::Pushad | Op::HighStore(_));
+    if pushed {
+        e.save()?;
+    }
+    match *op {
+        Op::Push(src, imm) => {
+            e.a.lea(r13d, ptr(r12 - 4))?;
+            e.guard(ip, n, 4, true, pushed, None)?;
+            match src {
+                Some(r) => e.a.mov(dword_ptr(r15 + r13), r32(r))?,
+                None => e.a.mov(dword_ptr(r15 + r13), imm)?,
+            }
+            e.a.mov(r12d, r13d)?;
+        }
+        Op::Pop(dst) => {
+            e.a.mov(r13d, r12d)?;
+            e.guard(ip, n, 4, false, pushed, None)?;
+            e.a.mov(r11d, dword_ptr(r15 + r13))?;
+            e.a.lea(r12d, ptr(r12 + 4))?;
+            e.a.mov(r32(dst), r11d)?;
+        }
+        Op::Pushad => {
+            e.a.lea(r13d, ptr(r12 - 32))?;
+            e.guard(ip, n, 32, true, pushed, None)?;
+            for (k, r) in [edi, esi, ebp, r12d, ebx, edx, ecx, eax].into_iter().enumerate() {
+                e.a.mov(dword_ptr(r15 + r13 + 4 * k as i32), r)?;
+            }
+            e.a.mov(r12d, r13d)?;
+        }
+        Op::Popad => {
+            e.a.mov(r13d, r12d)?;
+            e.guard(ip, n, 32, false, pushed, None)?;
+            for (k, r) in [Some(edi), Some(esi), Some(ebp), None, Some(ebx), Some(edx), Some(ecx), Some(eax)].into_iter().enumerate() {
+                if let Some(r) = r {
+                    e.a.mov(r, dword_ptr(r15 + r13 + 4 * k as i32))?;
+                }
+            }
+            e.a.lea(r12d, ptr(r13 + 32))?;
+        }
+        Op::Leave => {
+            e.a.mov(r13d, ebp)?;
+            e.guard(ip, n, 4, false, pushed, None)?;
+            e.a.mov(r11d, dword_ptr(r15 + r13))?;
+            e.a.lea(r12d, ptr(r13 + 4))?;
+            e.a.mov(ebp, r11d)?;
+        }
+        Op::HighLoad(full) => {
+            e.address(ins)?;
+            e.guard(ip, n, 1, false, pushed, None)?;
+            let f = r32(full);
+            e.a.movzx(r11d, byte_ptr(r15 + r13))?;
+            e.a.shl(r11d, 8)?;
+            e.a.and(f, 0xFFFF_00FFu32 as i32)?;
+            e.a.or(f, r11d)?;
+        }
+        Op::HighStore(full) => {
+            e.address(ins)?;
+            e.guard(ip, n, 1, true, pushed, None)?;
+            e.a.mov(r11d, r32(full))?;
+            e.a.shr(r11d, 8)?;
+            e.a.mov(byte_ptr(r15 + r13), r11b)?;
+        }
+        _ => unreachable!(),
+    }
+    if live {
+        e.restore()?;
+    }
+    Ok(())
 }
 
 /// Émet le bloc à `eip`, assemblé pour l'adresse `rip`. `Ok(None)` : la
@@ -603,199 +896,199 @@ struct Exit {
 /// volatils : décalage dans le bloc, taille).
 type Emitted = (Vec<u8>, usize, Vec<(usize, usize)>);
 
-fn emit_block(eip: u32, mem: &GuestMem, mem_size: usize, rip: u64, volatile: &std::collections::HashSet<u32>) -> Result<Option<Emitted>, IcedError> {
-    let all = decode_block(eip, mem, mem_size);
+fn emit_block(
+    eip: u32,
+    mem: &GuestMem,
+    mem_size: usize,
+    rip: u64,
+    volatile: &std::collections::HashSet<u32>,
+    max: usize,
+) -> Result<Option<Emitted>, IcedError> {
+    let all = decode_block(eip, mem, mem_size, max);
     let mut holes = Vec::new();
-    // Instructions traduites : préfixe du bloc, plus le saut final éventuel.
-    let mut body: Vec<(Instruction, Option<Instruction>)> = Vec::new();
-    let mut tail: Option<Instruction> = None;
+    let mut body: Vec<(Instruction, Op)> = Vec::new();
+    let mut tail = Tail::Fallthrough;
+    let mut tail_ins = None;
     for (ins, imm) in &all {
-        match ins.flow_control() {
-            FlowControl::Next => {
-                if !native_ok(ins) {
-                    break;
+        if ins.flow_control() == FlowControl::Next {
+            match classify(ins, *imm, volatile) {
+                Some(op) => {
+                    if let (Op::Volatile(_), Some((off, n))) = (&op, imm) {
+                        holes.push(((ins.ip32() - eip) as usize + off, *n));
+                    }
+                    body.push((*ins, op));
                 }
-                if volatile.contains(&ins.ip32()) {
-                    let (off, n) = imm.unwrap_or((0, 0));
-                    match volatile_form(ins, off) {
-                        Some(h) => {
-                            holes.push(((ins.ip32() - eip) as usize + off, n));
-                            body.push((*ins, Some(h)));
-                        }
-                        None => break,
-                    }
-                } else if ins.mnemonic() == Mn::Lea {
-                    // Adresse de l'invité calculée directement dans la destination.
-                    if !(ins.op0_kind() == OpKind::Register && ins.op0_register().is_gpr32()) || guest_address(ins).is_none() {
-                        break;
-                    }
-                    body.push((*ins, None));
-                } else {
-                    match rewrite(ins) {
-                        Some(h) => body.push((*ins, Some(h))),
-                        None => break,
-                    }
-                }
+                None => break,
             }
-            FlowControl::UnconditionalBranch | FlowControl::ConditionalBranch
-                if matches!(ins.op0_kind(), OpKind::NearBranch32) =>
-            {
-                tail = Some(*ins);
-                break;
+        } else {
+            if let Some(t) = classify_tail(ins) {
+                tail = t;
+                tail_ins = Some(*ins);
             }
-            _ => break,
+            break;
         }
     }
-    if body.is_empty() && tail.is_none() {
+    if body.is_empty() && tail_ins.is_none() {
         return Ok(None);
     }
-    let guest_len = match (&tail, body.last()) {
-        (Some(t), _) => (t.next_ip() as u32 - eip) as usize,
-        (None, Some((l, _))) => (l.next_ip() as u32 - eip) as usize,
-        _ => unreachable!(),
-    };
+    let end = tail_ins.as_ref().or(body.last().map(|(i, _)| i)).unwrap().next_ip32();
+    let guest_len = (end - eip) as usize;
 
     // Vivacité des drapeaux arithmétiques avant chaque instruction (tous
     // vivants à la sortie du bloc).
     let mut live = vec![0u32; body.len() + 1];
     live[body.len()] = ARITH;
-    if let Some(t) = &tail {
-        live[body.len()] |= flags_read(t);
-    }
     for (i, (ins, _)) in body.iter().enumerate().rev() {
         live[i] = (live[i + 1] & !flags_written(ins)) | flags_read(ins);
     }
 
-    let mut a = CodeAssembler::new(64)?;
-    let mut exits: Vec<Exit> = Vec::new();
+    let mut e = Emit { a: CodeAssembler::new(64)?, exits: Vec::new(), mem_limit: (mem_size as u32).saturating_sub(MEM_GUARD) as i32 };
     // Prologue.
     for r in [rbx, rbp, r12, r13, r14, r15] {
-        a.push(r)?;
+        e.a.push(r)?;
     }
-    a.mov(r10, rdi)?;
-    a.mov(r15, qword_ptr(r10 + OFF_MEMBASE))?;
-    a.mov(r11d, dword_ptr(r10 + OFF_FLAGS))?;
-    a.and(r11d, HOST_FLAGS as i32)?;
-    a.push(r11)?;
-    a.popfq()?;
+    e.a.mov(r10, rdi)?;
+    e.a.mov(r15, qword_ptr(r10 + OFF_MEMBASE))?;
+    e.a.mov(r11d, dword_ptr(r10 + OFF_FLAGS))?;
+    e.a.and(r11d, HOST_FLAGS as i32)?;
+    e.a.push(r11)?;
+    e.a.popfq()?;
     for (i, r) in [eax, ecx, edx, ebx, r12d, ebp, esi].into_iter().enumerate() {
-        a.mov(r, dword_ptr(r10 + 4 * i as i32))?;
+        e.a.mov(r, dword_ptr(r10 + 4 * i as i32))?;
     }
-    a.mov(edi, dword_ptr(r10 + 28))?;
+    e.a.mov(edi, dword_ptr(r10 + 28))?;
 
-    let mem_limit = (mem_size as u32).saturating_sub(MEM_GUARD) as i32;
-    for (i, (ins, host)) in body.iter().enumerate() {
-        let Some(host) = host else {
-            // lea : l'adresse de l'invité directement dans la destination.
-            let dst = host_reg(ins.op0_register()).unwrap();
-            a.add_instruction(Instruction::with2(Code::Lea_r32_m, dst, guest_address(ins).unwrap())?)?;
-            continue;
-        };
-        if (0..ins.op_count()).any(|k| ins.op_kind(k) == OpKind::Memory) && !volatile.contains(&ins.ip32()) {
-            let push = live[i] != 0;
-            let slow = a.create_label();
-            if push {
-                a.pushfq()?;
+    for (i, (ins, op)) in body.iter().enumerate() {
+        let (ip, n) = (ins.ip32(), i as u32);
+        let live_here = live[i] != 0;
+        match op {
+            Op::Lea => {
+                let dst = host_reg(ins.op0_register()).unwrap();
+                e.a.add_instruction(Instruction::with2(Code::Lea_r32_m, dst, guest_address(ins).unwrap())?)?;
             }
-            let m = guest_address(ins).unwrap();
-            if m.base == Register::None && m.index == Register::None {
-                a.mov(r13d, m.displacement as u32)?;
-            } else {
-                a.add_instruction(Instruction::with2(Code::Lea_r32_m, Register::R13D, m)?)?;
-            }
-            a.cmp(r13d, mem_limit)?;
-            a.jae(slow)?;
-            a.lea(r14d, ptr(r13 - 0xA0000))?;
-            a.cmp(r14d, 0x60000)?;
-            // Écriture simple (mov) dans la fenêtre : directement dans le plan.
-            let direct = ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory;
-            let mut vga = a.create_label();
-            let mut done = a.create_label();
-            a.jb(if direct { vga } else { slow })?;
-            if writes_memory(ins) {
-                let smc = a.create_label();
-                // Bits du premier et du dernier octet écrits.
+            Op::Volatile(h) => e.a.add_instruction(*h)?,
+            Op::Native(h) if !(0..ins.op_count()).any(|k| ins.op_kind(k) == OpKind::Memory) => e.a.add_instruction(*h)?,
+            Op::Native(h) => {
+                // Écriture simple (mov) dans la fenêtre : directement dans le plan.
+                let direct = ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory;
+                let mut vga = e.a.create_label();
+                let pushed = live_here || writes_memory(ins);
+                if pushed {
+                    e.save()?;
+                }
+                e.address(ins)?;
                 let size = ins.memory_size().size().max(1) as i32;
-                a.mov(r9, qword_ptr(r10 + OFF_CODE_BITS))?;
-                a.mov(r14d, r13d)?;
-                a.shr(r14d, 3)?;
-                a.movzx(r14d, word_ptr(r9 + r14))?;
-                a.mov(r11d, r13d)?;
-                a.and(r11d, 7)?;
-                a.bt(r14d, r11d)?;
-                a.jb(smc)?;
-                if size > 1 {
-                    a.add(r11d, size - 1)?;
-                    a.bt(r14d, r11d)?;
-                    a.jb(smc)?;
+                e.guard(ip, n, size, writes_memory(ins), pushed, direct.then_some(vga))?;
+                if live_here {
+                    e.restore()?;
                 }
-                exits.push(Exit { label: smc, eip: ins.ip32(), count: i as u32, kind: EXIT_SMC, pushed: push });
-            }
-            exits.push(Exit { label: slow, eip: ins.ip32(), count: i as u32, kind: EXIT_SLOW, pushed: push });
-            if push {
-                a.popfq()?;
-            }
-            a.add_instruction(*host)?;
-            if direct {
-                a.jmp(done)?;
-                a.set_label(&mut vga)?;
-                let size = ins.memory_size().size() as i32;
-                a.cmp(r14d, 0x10000 - size + 1)?;
-                a.jae(slow)?;
-                a.mov(r9, qword_ptr(r10 + OFF_VRAM))?;
-                a.test(r9, r9)?;
-                a.jz(slow)?;
-                if push {
-                    a.popfq()?;
+                e.a.add_instruction(*h)?;
+                if direct {
+                    let slow = e.exit(Some(ip), n, EXIT_SLOW, pushed);
+                    let a = &mut e.a;
+                    let mut done = a.create_label();
+                    a.jmp(done)?;
+                    a.set_label(&mut vga)?;
+                    a.lea(r14d, ptr(r13 - 0xA0000))?;
+                    a.cmp(r14d, 0x10000 - size + 1)?;
+                    a.jae(slow)?;
+                    a.mov(r9, qword_ptr(r10 + OFF_VRAM))?;
+                    a.test(r9, r9)?;
+                    a.jz(slow)?;
+                    if live_here {
+                        e.restore()?;
+                    }
+                    let a = &mut e.a;
+                    let mut w = *h;
+                    w.set_memory_base(Register::R9);
+                    w.set_memory_index(Register::R14);
+                    a.add_instruction(w)?;
+                    a.set_label(&mut done)?;
+                    a.nop()?;
                 }
-                let mut w = *host;
-                w.set_memory_base(Register::R9);
-                w.set_memory_index(Register::R14);
-                a.add_instruction(w)?;
             }
-            a.set_label(&mut done)?;
-            continue;
+            _ => emit_stackish(&mut e, ins, op, ip, n, live_here)?,
         }
-        a.add_instruction(*host)?;
     }
 
     let n = body.len() as u32;
     match &tail {
-        None => {
-            // Instruction suivante laissée à l'interpréteur.
-            let next = body.last().unwrap().0.next_ip32();
-            let l = a.create_label();
-            exits.push(Exit { label: l, eip: next, count: n, kind: EXIT_NEXT, pushed: false });
-            a.jmp(l)?;
+        Tail::Fallthrough => {
+            let l = e.exit(Some(end), n, EXIT_NEXT, false);
+            e.a.jmp(l)?;
         }
-        Some(t) => {
-            let target = t.near_branch32();
-            let taken = a.create_label();
-            exits.push(Exit { label: taken, eip: target, count: n + 1, kind: EXIT_NEXT, pushed: false });
+        Tail::Jump(t) => {
+            let taken = e.exit(Some(t.near_branch32()), n + 1, EXIT_NEXT, false);
             if t.flow_control() == FlowControl::ConditionalBranch {
-                jcc(&mut a, t.condition_code(), taken)?;
-                let not = a.create_label();
-                exits.push(Exit { label: not, eip: t.next_ip32(), count: n + 1, kind: EXIT_NEXT, pushed: false });
-                a.jmp(not)?;
+                jcc(&mut e.a, t.condition_code(), taken)?;
+                let not = e.exit(Some(end), n + 1, EXIT_NEXT, false);
+                e.a.jmp(not)?;
             } else {
-                a.jmp(taken)?;
+                e.a.jmp(taken)?;
             }
+        }
+        Tail::Call(t) => {
+            let ip = t.ip32();
+            e.save()?;
+            e.a.lea(r13d, ptr(r12 - 4))?;
+            e.guard(ip, n, 4, true, true, None)?;
+            e.restore()?;
+            e.a.mov(dword_ptr(r15 + r13), end)?;
+            e.a.mov(r12d, r13d)?;
+            let l = e.exit(Some(t.near_branch32()), n + 1, EXIT_NEXT, false);
+            e.a.jmp(l)?;
+        }
+        Tail::Ret(extra) => {
+            let ip = tail_ins.unwrap().ip32();
+            e.save()?;
+            e.a.mov(r13d, r12d)?;
+            e.guard(ip, n, 4, false, true, None)?;
+            e.restore()?;
+            e.a.mov(r8d, dword_ptr(r15 + r13))?;
+            e.a.lea(r12d, ptr(r12 + 4 + *extra as i32))?;
+            let l = e.exit(None, n + 1, EXIT_NEXT, false);
+            e.a.jmp(l)?;
+        }
+        Tail::Indirect(t) => {
+            let ip = t.ip32();
+            e.save()?;
+            if t.op0_kind() == OpKind::Register {
+                e.a.mov(r8d, r32(host_reg(t.op0_register()).unwrap()))?;
+            } else {
+                e.address(t)?;
+                e.guard(ip, n, 4, false, true, None)?;
+                e.a.mov(r8d, dword_ptr(r15 + r13))?;
+            }
+            if t.flow_control() == FlowControl::IndirectCall {
+                e.a.lea(r13d, ptr(r12 - 4))?;
+                e.guard(ip, n, 4, true, true, None)?;
+                e.a.mov(dword_ptr(r15 + r13), end)?;
+                e.a.mov(r12d, r13d)?;
+            }
+            e.restore()?;
+            let l = e.exit(None, n + 1, EXIT_NEXT, false);
+            e.a.jmp(l)?;
         }
     }
 
     // Sorties, puis épilogue commun.
+    let Emit { mut a, mut exits, .. } = e;
     let mut common = a.create_label();
-    for e in &mut exits {
-        a.set_label(&mut e.label)?;
-        if e.pushed {
+    for x in &mut exits {
+        a.set_label(&mut x.label)?;
+        if x.pushed {
+            a.push(qword_ptr(r10 + OFF_SAVED))?;
             a.popfq()?;
         }
-        a.mov(dword_ptr(r10 + OFF_EIP), e.eip)?;
-        a.mov(dword_ptr(r10 + OFF_EXIT), e.kind)?;
-        if e.kind != EXIT_NEXT {
+        match x.eip {
+            Some(v) => a.mov(dword_ptr(r10 + OFF_EIP), v)?,
+            None => a.mov(dword_ptr(r10 + OFF_EIP), r8d)?,
+        }
+        a.mov(dword_ptr(r10 + OFF_EXIT), x.kind)?;
+        if x.kind != EXIT_NEXT {
             a.mov(dword_ptr(r10 + OFF_ADDR), r13d)?;
         }
-        a.mov(dword_ptr(r10 + OFF_COUNT), e.count)?;
+        a.mov(dword_ptr(r10 + OFF_COUNT), x.count)?;
         a.jmp(common)?;
     }
     a.set_label(&mut common)?;
@@ -836,7 +1129,7 @@ fn jcc(a: &mut CodeAssembler, cc: ConditionCode, l: CodeLabel) -> Result<(), Ice
         ConditionCode::ge => a.jge(l),
         ConditionCode::le => a.jle(l),
         ConditionCode::g => a.jg(l),
-        ConditionCode::None => a.jmp(l),
+        ConditionCode::None => unreachable!("jecxz/loop"),
     }
 }
 
@@ -883,7 +1176,8 @@ fn volatile_form(ins: &Instruction, imm_off: usize) -> Option<Instruction> {
         _ => return None,
     };
     let at = ins.ip32() + imm_off as u32;
-    let m = MemoryOperand::new(Register::R15, Register::None, 1, i64::from(at), 4, false, Register::None);
+    // Adressage 64 bits : iced attend une taille de déplacement de 8.
+    let m = MemoryOperand::new(Register::R15, Register::None, 1, i64::from(at), 8, false, Register::None);
     let h = Instruction::with2(code, host_reg(ins.op0_register())?, m).ok()?;
     Encoder::new(64).encode(&h, 0).ok()?;
     Some(h)
