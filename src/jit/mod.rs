@@ -16,6 +16,7 @@
 //! - le reste (pile, chaînes, E/S, fautes possibles…) est rendu à
 //!   l'interpréteur, une instruction à la fois.
 
+pub mod policy;
 #[cfg(test)]
 mod tests;
 
@@ -54,6 +55,8 @@ pub struct State {
     vram: u64,
     /// RFLAGS de l'invité sauvés avant un contrôle d'accès.
     saved_flags: u64,
+    /// Écritures directes dans un plan VGA (activité de la carte).
+    vga_writes: u64,
 }
 
 const OFF_FLAGS: i32 = 32;
@@ -65,6 +68,7 @@ const OFF_COUNT: i32 = 56;
 const OFF_CODE_BITS: i32 = 64;
 const OFF_VRAM: i32 = 72;
 const OFF_SAVED: i32 = 80;
+const OFF_VGA_WRITES: i32 = 88;
 
 /// Fin de bloc normale (saut, ou instruction laissée à l'interpréteur).
 pub const EXIT_NEXT: u32 = 0;
@@ -222,15 +226,24 @@ impl Jit {
     }
 
     /// Exécute à partir de l'état courant, au plus `budget` instructions,
-    /// jusqu'à ce que `mmio.stop()` le demande ou qu'une instruction ne
-    /// puisse être servie ni par le traducteur ni par l'interpréteur.
-    pub fn run<M: Mmio>(&mut self, cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, budget: u64) -> (u64, StopReason) {
+    /// jusqu'à ce que `mmio.stop()` le demande, qu'une instruction ne puisse
+    /// être servie ni par le traducteur ni par l'interpréteur, ou que plus
+    /// de `idle` instructions passent sans activité de la carte
+    /// (`Mmio::activity`) : le code natif fait alors mieux.
+    pub fn run<M: Mmio>(&mut self, cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, budget: u64, idle: u64) -> (u64, StopReason) {
         self.touch();
         let mut st = State { membase: mem.ptr as u64, vram: mmio.direct_write_window(), ..Default::default() };
         let mut done = 0u64;
+        let (mut activity, mut active_at) = (mmio.activity(), 0u64);
         loop {
             if done >= budget {
                 return (done, StopReason::Budget);
+            }
+            let a = mmio.activity() + st.vga_writes;
+            if a != activity {
+                (activity, active_at) = (a, done);
+            } else if done - active_at > idle {
+                return (done, StopReason::Idle);
             }
             if mmio.stop() {
                 return (done, StopReason::Stopped);
@@ -995,6 +1008,7 @@ fn emit_block(
                     a.mov(r9, qword_ptr(r10 + OFF_VRAM))?;
                     a.test(r9, r9)?;
                     a.jz(slow)?;
+                    a.add(qword_ptr(r10 + OFF_VGA_WRITES), 1)?;
                     if live_here {
                         e.restore()?;
                     }
@@ -1140,6 +1154,7 @@ pub fn continue_in_host<B: crate::backend::Backend, M: Mmio>(
     vm: &mut B,
     mmio: &mut M,
     budget: u64,
+    idle: u64,
 ) -> crate::backend::Result<interp::Burst> {
     vm.complete_pending(&mut |addr, data, write| {
         for (i, b) in data.iter_mut().enumerate() {
@@ -1152,7 +1167,7 @@ pub fn continue_in_host<B: crate::backend::Backend, M: Mmio>(
         }
     })?;
     let mut cpu = vm.state()?;
-    let (instructions, reason) = jit.run(&mut cpu, vm.mem(), mmio, budget);
+    let (instructions, reason) = jit.run(&mut cpu, vm.mem(), mmio, budget, idle);
     vm.set_state(&cpu)?;
     Ok(interp::Burst { instructions, mmio_accesses: 0, reason })
 }

@@ -192,7 +192,7 @@ fn jit_matches_interpreter() {
         }
 
         let mut ours = start.clone();
-        let (done, _) = jit.run(&mut ours, &mem_jit, &mut NoMmio, u64::MAX);
+        let (done, _) = jit.run(&mut ours, &mem_jit, &mut NoMmio, u64::MAX, u64::MAX);
         translated_total += jit.stats.jit_instructions;
         jit.stats.jit_instructions = 0;
 
@@ -263,7 +263,7 @@ fn bisect(code: &[u8], start: &Cpu, fill: u64) {
         let mut r = start.clone();
         while run_burst(&mut r, &mem_ref, &mut NoMmio, u64::MAX, 1).reason != StopReason::Unsupported {}
         let mut o = start.clone();
-        jit.run(&mut o, &mem_jit, &mut NoMmio, u64::MAX);
+        jit.run(&mut o, &mem_jit, &mut NoMmio, u64::MAX, u64::MAX);
         let mut before = start.clone();
         let mut stepped = 0;
         // État avant la k-ième instruction (référence), pour ses drapeaux non définis.
@@ -334,7 +334,7 @@ fn trace(code: &[u8], start: &Cpu, fill: u64) {
             println!("trace: reference stops at {:08X} {ins}", r.ip);
             return;
         }
-        jit.run(&mut o, &mem_jit, &mut NoMmio, 1);
+        jit.run(&mut o, &mem_jit, &mut NoMmio, 1, u64::MAX);
         let mask = !(undefined_flags(&ins, &before) | 0x28);
         let (mut ma, mut mb) = (vec![0u8; MEM_SIZE], vec![0u8; MEM_SIZE]);
         mem_jit.read(0, &mut ma);

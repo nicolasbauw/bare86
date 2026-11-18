@@ -119,6 +119,10 @@ const VBLANK_MARGIN: Duration = Duration::from_micros(300);
 
 /// Instructions sans accès VRAM avant que l'interpréteur rende la main.
 const IDLE_LIMIT: u64 = 256;
+/// Instructions sans activité de la carte avant que le traducteur rende la
+/// main : au-delà, une sortie évitée ne paie plus le surcoût du code
+/// traduit sur le natif (≈ 0,5 ns par instruction contre ≈ 4 µs par sortie).
+const JIT_IDLE: u64 = 8192;
 /// Plafond d'instructions par rafale interprétée.
 const BURST_BUDGET: u64 = 100_000;
 
@@ -137,8 +141,9 @@ pub struct Config {
     /// Rafales de l'interpréteur après une sortie MMIO (sinon : une sortie
     /// de VM par accès à la VRAM émulée ; `--no-interp`, pour mesurer).
     pub interp: bool,
-    /// Traducteur dynamique pour le code 32 bits plat (`--jit`).
-    pub jit: bool,
+    /// Traducteur dynamique pour le code 32 bits plat : automatique par
+    /// défaut, forcé (`--jit`) ou coupé (`--no-jit`).
+    pub jit: crate::jit::policy::Mode,
     /// VBE 2.0 avec framebuffer linéaire (sinon VBE 1.2, `--vbe1`).
     pub vbe2: bool,
     /// Durée maximale d'exécution (diagnostic : registres affichés à l'arrêt).
@@ -167,7 +172,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, jit: false, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, jit: crate::jit::policy::Mode::Auto, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -309,6 +314,9 @@ impl Mmio for MmioBus<'_> {
     fn direct_write_window(&mut self) -> u64 {
         self.vga.direct_write_window().map_or(0, |p| p as u64)
     }
+    fn activity(&self) -> u64 {
+        self.accesses + self.port_accesses
+    }
 }
 
 /// Suivi du mappage de la fenêtre A0000 (docs/JOURNAL.md, « décision sur la
@@ -366,6 +374,15 @@ pub struct Stats {
     pub spin_sleeps: u64,
     /// Sorties servies par le chemin court (registres de plans).
     pub fast_exits: u64,
+    /// Sorties sur les registres de plans (3C4h, 3C5h, 3CEh, 3CFh).
+    pub plane_exits: u64,
+    /// Rafales et instructions du traducteur dynamique, et parmi elles
+    /// celles rendues à l'interpréteur ; engagements et retraits.
+    pub jit_bursts: u64,
+    pub jit_instructions: u64,
+    pub jit_fallbacks: u64,
+    pub jit_engagements: u64,
+    pub jit_retreats: u64,
     /// Images échangées par Glide et par OpenGL (`grBufferSwap`,
     /// `wglSwapBuffers`).
     pub glide_swaps: u64,
@@ -408,6 +425,12 @@ impl std::fmt::Debug for Stats {
             .field("vga_yields", &self.vga_yields)
             .field("spin_sleeps", &self.spin_sleeps)
             .field("fast_exits", &self.fast_exits)
+            .field("plane_exits", &self.plane_exits)
+            .field("jit_bursts", &self.jit_bursts)
+            .field("jit_instructions", &self.jit_instructions)
+            .field("jit_fallbacks", &self.jit_fallbacks)
+            .field("jit_engagements", &self.jit_engagements)
+            .field("jit_retreats", &self.jit_retreats)
             .field("glide_swaps", &self.glide_swaps)
             .field("opengl_swaps", &self.opengl_swaps)
             .field("io_ports", &ports)
@@ -489,7 +512,7 @@ pub struct Pc<B: Backend = KvmVm> {
     interp: bool,
     /// Traducteur dynamique (`--jit`), créé au premier usage.
     jit: Option<crate::jit::Jit>,
-    jit_enabled: bool,
+    jit_policy: crate::jit::policy::Policy,
     /// Sorties sur 3C5h à laisser passer sans traducteur, après une rafale
     /// qui n'a rien pu exécuter (mode non éligible : code 16 bits…).
     jit_backoff: u32,
@@ -714,7 +737,11 @@ impl<B: Backend> Pc<B> {
             trace_int: cfg.trace_int,
             interp: cfg.interp,
             jit: None,
-            jit_enabled: cfg.jit || std::env::var_os("BARE86_JIT").is_some(),
+            // BARE86_JIT (diagnostics) force le traducteur.
+            jit_policy: crate::jit::policy::Policy::new(
+                if std::env::var_os("BARE86_JIT").is_some() { crate::jit::policy::Mode::On } else { cfg.jit },
+                Instant::now(),
+            ),
             jit_backoff: 0,
             unhandled: BTreeSet::new(),
             a20: None,
@@ -1363,11 +1390,12 @@ impl<B: Backend> Pc<B> {
                     // Palette : 768 écritures de suite (Quake en charge une à
                     // presque chaque image), servies en rafale.
                     port_burst = data.len() == usize::from(size) && (self.io.starts_burst(port) || vga_dac_port(port));
-                    let jit_now = self.jit_enabled && {
-                        self.jit_backoff = self.jit_backoff.saturating_sub(1);
-                        self.jit_backoff == 0
-                    };
-                    if (jit_now || probe_on()) && port == 0x3C5 && data.len() == usize::from(size) {
+                    if vga_plane_port(port) {
+                        self.stats.plane_exits += 1;
+                    }
+                    // Traducteur engagé : la suite d'un changement de plan
+                    // passe par lui (Doom : un par colonne).
+                    if port == 0x3C5 && data.len() == usize::from(size) && (self.jit_wanted() || probe_on()) {
                         probe_burst = true;
                         port_burst = true;
                     }
@@ -1455,17 +1483,23 @@ impl<B: Backend> Pc<B> {
                 self.stats.mmio_exits += 1;
             }
             if (mmio || port_burst) && self.interp {
+                // Toute rafale passe au traducteur quand il est engagé.
+                let use_jit = self.jit_ready();
                 let mut vga = self.vga.borrow_mut();
                 let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read, probe: probe_burst, plane_outs: 0 };
                 let idle = if probe_burst { 1_000_000 } else { IDLE_LIMIT };
-                let burst = if probe_burst && self.jit_enabled {
+                bus.probe |= use_jit;
+                let burst = if use_jit {
                     if self.jit.is_none() {
                         let mut j = crate::jit::Jit::new(self.vm.mem())?;
                         j.count_fallbacks = std::env::var("BARE86_JIT").is_ok_and(|v| v == "count");
                         self.jit = Some(j);
                     }
                     let jit = self.jit.as_mut().unwrap();
-                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, BURST_BUDGET)?;
+                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, BURST_BUDGET, JIT_IDLE)?;
+                    self.stats.jit_bursts += 1;
+                    self.stats.jit_instructions += b.instructions;
+                    self.stats.jit_fallbacks = jit.stats.interp_steps;
                     if b.instructions == 0 && b.reason == interp::StopReason::Unsupported {
                         self.jit_backoff = 256;
                     }
@@ -1483,7 +1517,7 @@ impl<B: Backend> Pc<B> {
                 } else {
                     interp::continue_in_host(&mut self.vm, &mut bus, idle, BURST_BUDGET)?
                 };
-                if probe_burst && probe_on() && !self.jit_enabled {
+                if probe_burst && probe_on() && !use_jit {
                     let outs = bus.plane_outs;
                     let why = match burst.reason {
                         interp::StopReason::Unsupported => {
@@ -1513,7 +1547,9 @@ impl<B: Backend> Pc<B> {
                 self.window.reads_in_epoch += bus.reads;
                 self.window.writes_since_read += bus.accesses - bus.reads;
                 self.stats.vram_emulated += bus.accesses;
-                self.stats.interpreted += burst.instructions;
+                if !use_jit {
+                    self.stats.interpreted += burst.instructions;
+                }
                 if let Some(t) = &mut self.throttle {
                     t.credit(burst.instructions);
                 }
@@ -1546,6 +1582,21 @@ impl<B: Backend> Pc<B> {
         Ok(())
     }
 
+    /// Le traducteur prend-il la prochaine rafale ? (Engagé, et pas en
+    /// retrait après une rafale qui n'a rien pu exécuter.)
+    fn jit_ready(&mut self) -> bool {
+        if !self.jit_policy.engaged() {
+            return false;
+        }
+        self.jit_backoff = self.jit_backoff.saturating_sub(1);
+        self.jit_backoff == 0
+    }
+
+    /// Même question, sans décompter le retrait.
+    fn jit_wanted(&self) -> bool {
+        self.jit_policy.engaged() && self.jit_backoff <= 1
+    }
+
     /// Tour complet du haut de la boucle : limite de temps, minuteries,
     /// fenêtre, entrées, affichage, bridage, IRQ.
     fn loop_top(&mut self) -> Result<()> {
@@ -1564,6 +1615,18 @@ impl<B: Backend> Pc<B> {
         }
         self.service_timers()?;
         self.update_window()?;
+        self.jit_policy.tick(
+            Instant::now(),
+            crate::jit::policy::Sample {
+                vga_exits: self.stats.plane_exits + self.stats.mmio_exits,
+                interpreted: self.stats.interpreted,
+                jit_instructions: self.stats.jit_instructions,
+                jit_fallbacks: self.stats.jit_fallbacks,
+                jit_bursts: self.stats.jit_bursts,
+            },
+        );
+        self.stats.jit_engagements = self.jit_policy.engagements;
+        self.stats.jit_retreats = self.jit_policy.retreats;
         self.service_input();
         self.render_term(false);
         if self.host.wants_frames {

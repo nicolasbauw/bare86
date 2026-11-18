@@ -54,6 +54,8 @@ pub fn parse(text: &str, dir: &Path) -> Result<Config, String> {
         };
         match key.as_str() {
             "program" => c.program = Some(value),
+            // Le traducteur est actif par défaut : « jit = off » le coupe.
+            "jit" if matches!(value.to_ascii_lowercase().as_str(), "false" | "no" | "off") => c.options.push("--no-jit".into()),
             "args" => c.args = Some(value),
             _ => match value.to_ascii_lowercase().as_str() {
                 "true" | "yes" | "on" => c.options.push(format!("--{key}")),
@@ -143,6 +145,14 @@ mod tests {
         assert_eq!(c.program.as_deref(), Some("/jeux/doom/c/DOOM.EXE"));
         assert_eq!(c.args.as_deref(), Some("-nosound"));
         assert!(parse("mips 50", Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn jit_off_turns_the_translator_off() {
+        let c = parse("jit = off\n", Path::new(".")).unwrap();
+        assert_eq!(c.options, ["--no-jit"]);
+        let c = parse("jit = on\n", Path::new(".")).unwrap();
+        assert_eq!(c.options, ["--jit"]);
     }
 
     #[test]

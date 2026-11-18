@@ -241,7 +241,7 @@ impl Editor {
             return cur;
         }
         if let Some(key) = toggle_key(f) {
-            return if is_true(self.doc.get(key)) { "yes".into() } else { "no".into() };
+            return if self.toggle_on(f, key) { "yes".into() } else { "no".into() };
         }
         if let Some((key, _)) = file_field(f) {
             return self.doc.get(key).unwrap_or_else(|| "(none)".into());
@@ -287,7 +287,7 @@ impl Editor {
             Field::Speed => "Slows the processor down for games that run too fast",
             Field::Memory => "Total memory of the machine",
             Field::Network => "NE2000 network card, Internet access",
-            Field::Jit => "Faster planar VGA rendering in DOS/4GW games (Doom)",
+            Field::Jit => "Speeds up planar VGA games (Doom) when it helps; \"no\" if a game misbehaves",
             Field::Fullscreen => "Starts in full screen (Alt+Enter toggles)",
             Field::Save => "Writes bare86.conf in the game folder",
             Field::SaveAndRun => "Writes bare86.conf and runs the game",
@@ -303,9 +303,20 @@ impl Editor {
             let j = if forward { (i + 1) % n } else { (i + n - 1) % n };
             self.doc.set(key, list[j].0);
         } else if let Some(key) = toggle_key(f) {
-            let on = is_true(self.doc.get(key));
-            self.doc.set(key, (!on).then_some("true"));
+            let on = self.toggle_on(f, key);
+            // Le traducteur est actif par défaut : seul « off » s'écrit.
+            let value = if f == Field::Jit { on.then_some("off") } else { (!on).then_some("true") };
+            self.doc.set(key, value);
         }
+    }
+
+    /// État d'un réglage oui/non (le traducteur : oui sauf « off »).
+    fn toggle_on(&self, f: Field, key: &str) -> bool {
+        let v = self.doc.get(key);
+        if f == Field::Jit {
+            return !v.is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "false" | "no" | "off"));
+        }
+        is_true(v)
     }
 
     fn save(&self) -> Result<(), String> {

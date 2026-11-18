@@ -36,6 +36,11 @@ pub trait Mmio {
         u32::MAX
     }
     fn port_out(&mut self, _port: u16, _size: u8, _v: u32) {}
+    /// Compteur d'activité de la carte (accès émulés, ports servis) : le
+    /// traducteur rend la main quand il cesse d'avancer.
+    fn activity(&self) -> u64 {
+        0
+    }
     /// Adresse hôte où les écritures simples dans la fenêtre A0000 peuvent
     /// se faire directement (traducteur dynamique) ; nulle sinon.
     fn direct_write_window(&mut self) -> u64 {

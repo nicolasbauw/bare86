@@ -112,8 +112,10 @@ usage: bare86 [options] [program [arguments…]]
   --fullscreen   window, full screen from the start
   --stats        machine counters at the end (exits, emulated VRAM…)
   --vbe1         VESA 1.2 card: banked windows only, no linear framebuffer
-  --jit          dynamic translator for flat 32-bit protected-mode code
-                 (DOS/4GW games drawing in planar VGA, such as Doom)
+  --no-jit       no dynamic translator (by default it takes over the flat
+                 32-bit code of games that lose time on planar VGA, such
+                 as Doom, when the statistics show a gain)
+  --jit          dynamic translator always on (measurements)
   --no-interp    no interpreter bursts: one VM exit per emulated VRAM
                  access (to measure what the interpreter brings)
   --limit S      stop after S seconds, with registers and code at CS:IP
@@ -365,7 +367,8 @@ fn main() -> ExitCode {
                 }
             },
             "--no-interp" => cfg.interp = false,
-            "--jit" => cfg.jit = true,
+            "--jit" => cfg.jit = crate::jit::policy::Mode::On,
+            "--no-jit" => cfg.jit = crate::jit::policy::Mode::Off,
             "--vbe1" => cfg.vbe2 = false,
             "--debug" => debug = true,
             "--screen" => screen = true,
