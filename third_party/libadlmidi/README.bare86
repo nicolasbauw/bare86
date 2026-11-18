@@ -1,3 +1,4 @@
 libADLMIDI (https://github.com/Wohlstand/libADLMIDI), commit 7e6e045d4e3f2614963a545e4bdfc95677e32673 (2026-11-09).
 Sous-ensemble vendu : synthèse MIDI temps réel, émulateurs Nuked (OPL3, OPL3 rapide, OPL2, CQM), banques embarquées, et ESFMu (src/chips/esfmu, Kagamiin, LGPL 2.1+) pour la FM d ESS ; sans séquenceur de fichiers ni autres émulateurs.
 Licences : voir LICENSE.txt, LICENSE.LGPL-2.1.txt, src/chips/LICENSE.txt, src/chips/nuked/LICENSE, src/*/LICENSE*. Les banques FM embarquées ont leurs propres conditions (README du projet d origine).
+Modification locale (2026-11-18) : src/chips/esfmu/esfm.c, ESFM_process_feedback_interleaved remplace ESFM_process_feedback dans ESFM_generate (mêmes 29 itérations de rétroaction, menées de front sur toutes les voies actives au lieu d'une voie après l'autre ; sortie identique bit à bit sur la musique d'E1M1 de Doom, coût de la puce ÷ 1,9).

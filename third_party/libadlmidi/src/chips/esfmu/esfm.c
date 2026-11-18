@@ -2006,6 +2006,86 @@ ESFM_process_feedback(esfm_chip *chip)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Bare86 : même calcul qu'ESFM_process_feedback, voies entrelacées. Les 29 */
+/* itérations d'une voie forment une chaîne de dépendances (≈ 20 cycles */
+/* chacune) ; menées de front sur toutes les voies actives, elles occupent */
+/* les unités d'exécution en parallèle. Résultat identique bit à bit. */
+static void
+ESFM_process_feedback_interleaved(esfm_chip *chip)
+{
+	esfm_slot *slots[18];
+	const uint16_t *sinrom[18];
+	uint32_t phase_acc[18], phase_offset[18], eg_shifted[18];
+	int32_t wave_out[18], wave_last[18], phase_feedback[18];
+	uint8_t mod_in_shift[18];
+	int n = 0, i, k, channel_idx;
+
+	for (channel_idx = 0; channel_idx < 18; channel_idx++)
+	{
+		esfm_slot *slot = &chip->channels[channel_idx].slots[0];
+		uint3 waveform;
+		uint32 basefreq, offset;
+		if (!(slot->mod_in_level && (chip->native_mode || (slot->in.mod_input == &slot->in.feedback_buf))))
+		{
+			continue;
+		}
+		if (chip->native_mode)
+		{
+			waveform = slot->waveform;
+		}
+		else
+		{
+			waveform = slot->waveform & (0x03 | (0x02 << (chip->emu_newmode != 0)));
+		}
+		basefreq = (slot->f_num << slot->block) >> 1;
+		offset = (basefreq * mt[slot->mult]) >> 1;
+		slots[n] = slot;
+		sinrom[n] = &logsinrom[(uint16)waveform << 10];
+		phase_offset[n] = offset;
+		phase_acc[n] = (uint32_t)(slot->in.phase_acc - offset * 28);
+		eg_shifted[n] = (uint32_t)slot->in.eg_output << 3;
+		mod_in_shift[n] = 7 - slot->mod_in_level;
+		wave_out[n] = wave_last[n] = 0;
+		n++;
+	}
+	for (i = 0; i < 29; i++)
+	{
+		for (k = 0; k < n; k++)
+		{
+			int32_t fb = (wave_out[k] + wave_last[k]) >> 2;
+			uint32_t phase = (uint32_t)(fb >> mod_in_shift[k]) + (phase_acc[k] >> 9);
+			uint16_t lookup = sinrom[k][phase & 0x3ff];
+			uint32_t level = (lookup & 0x1fff) + eg_shifted[k];
+			int32_t out;
+			if (level > 0x1fff)
+			{
+				level = 0x1fff;
+			}
+			out = exprom[level & 0xff] >> (level >> 8);
+			if (lookup & 0x8000)
+			{
+				out = -out;
+			}
+			phase_feedback[k] = fb;
+			wave_last[k] = wave_out[k];
+			wave_out[k] = out;
+			phase_acc[k] += phase_offset[k];
+		}
+	}
+	for (k = 0; k < n; k++)
+	{
+		if (chip->native_mode)
+		{
+			slots[k]->in.feedback_buf = phase_feedback[k];
+		}
+		else
+		{
+			slots[k]->in.feedback_buf = phase_feedback[k] >> (7 - slots[k]->mod_in_level);
+		}
+	}
+}
+
+/* ------------------------------------------------------------------------- */
 static void
 ESFM_process_channel(esfm_channel *channel)
 {
@@ -2253,7 +2333,7 @@ ESFM_generate(esfm_chip *chip, int16_t *buf)
 			ESFM_process_channel_emu(channel);
 		}
 	}
-	ESFM_process_feedback(chip);
+	ESFM_process_feedback_interleaved(chip); /* Bare86 */
 	for (channel_idx = 0; channel_idx < 18; channel_idx++)
 	{
 		esfm_channel *channel = &chip->channels[channel_idx];
