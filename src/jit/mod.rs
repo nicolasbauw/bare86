@@ -65,6 +65,15 @@ pub struct State {
     /// Case de saut de la sortie prise (0 : sortie sans enchaînement
     /// possible) : Rust y écrit le corps du bloc suivant.
     link: u64,
+    /// `out dx,al|ax` servi sans quitter le code traduit : fonction de
+    /// l'hôte (`out_trampoline`) et son bus.
+    out_fn: u64,
+    out_ctx: u64,
+    /// Plan lu pour les lectures directes de la fenêtre (0 : chemin lent).
+    vram_read: u64,
+    /// Décalage + 1 de la dernière lecture directe (0 : aucune) : transmis
+    /// à la carte pour ses latches.
+    read_at: u64,
 }
 
 const OFF_FLAGS: i32 = 32;
@@ -79,6 +88,10 @@ const OFF_VGA_WRITES: i32 = 88;
 const OFF_TOTAL: i32 = 96;
 const OFF_CHAIN: i32 = 104;
 const OFF_LINK: i32 = 112;
+const OFF_OUT_FN: i32 = 120;
+const OFF_OUT_CTX: i32 = 128;
+const OFF_VRAM_READ: i32 = 136;
+const OFF_READ_AT: i32 = 144;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
 /// budget, inactivité et arrêt).
 const CHAIN_MAX: u64 = 256;
@@ -258,7 +271,14 @@ impl Jit {
     /// (`Mmio::activity`) : le code natif fait alors mieux.
     pub fn run<M: Mmio>(&mut self, cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, budget: u64, idle: u64) -> (u64, StopReason) {
         self.touch();
-        let mut st = State { membase: mem.ptr as u64, vram: mmio.direct_write_window(), ..Default::default() };
+        let mut st = State {
+            membase: mem.ptr as u64,
+            vram: mmio.direct_write_window(),
+            out_fn: out_trampoline::<M> as *const () as u64,
+            out_ctx: mmio as *mut M as u64,
+            vram_read: mmio.direct_read_window(),
+            ..Default::default()
+        };
         let mut done = 0u64;
         let (mut activity, mut active_at) = (mmio.activity(), 0u64);
         loop {
@@ -294,11 +314,20 @@ impl Jit {
                 cpu.gpr = st.gpr;
                 cpu.flags = st.flags;
                 cpu.ip = st.eip;
+                if st.read_at != 0 {
+                    mmio.direct_read_at(st.read_at as u32 - 1);
+                    st.read_at = 0;
+                }
                 done += st.total;
                 self.stats.blocks_run += 1 + CHAIN_MAX - st.chain.min(CHAIN_MAX);
                 self.stats.jit_instructions += st.total;
                 match st.exit {
-                    EXIT_SLOW => self.stats.slow_exits += 1,
+                    EXIT_SLOW => {
+                        self.stats.slow_exits += 1;
+                        if self.count_fallbacks {
+                            *self.stats.fallbacks.entry(format!("slow access in page {:05X}", st.addr >> 12 << 12)).or_default() += 1;
+                        }
+                    }
                     EXIT_SMC => {
                         self.stats.smc_flushes += 1;
                         if self.count_fallbacks {
@@ -363,6 +392,7 @@ impl Jit {
                     self.touch();
                 }
                 st.vram = mmio.direct_write_window();
+                st.vram_read = mmio.direct_read_window();
             }
         }
     }
@@ -711,6 +741,8 @@ enum Op {
     Pushad,
     Popad,
     Leave,
+    /// `out dx,al` (1) ou `out dx,ax` (2), servi par `out_trampoline`.
+    Out(u32),
     /// `mov r8h,[m]` / `mov [m],r8h` : registre 32 bits complet ; les
     /// registres hauts ne s'encodent pas avec R13/R15.
     HighLoad(Register),
@@ -760,6 +792,8 @@ fn classify(ins: &Instruction, imm: Imm, volatile: &std::collections::HashSet<u3
         Code::Pushd_imm32 | Code::Pushd_imm8 => return Some(Op::Push(None, ins.immediate(0) as u32)),
         Code::Pop_r32 | Code::Pop_rm32 if reg32(0) => return Some(Op::Pop(host_reg(ins.op0_register())?)),
         Code::Pushad => return Some(Op::Pushad),
+        Code::Out_DX_AL => return Some(Op::Out(1)),
+        Code::Out_DX_AX => return Some(Op::Out(2)),
         Code::Popad => return Some(Op::Popad),
         Code::Leaved => return Some(Op::Leave),
         Code::Mov_r8_rm8 if ins.op1_kind() == OpKind::Memory && flat_memory(ins) => {
@@ -901,6 +935,58 @@ fn r32(r: Register) -> AsmRegister32 {
 
 /// Pile et registres hauts : contrôle de l'accès (drapeaux sauvés autour
 /// s'ils sont vivants), puis l'opération.
+/// `out dx,al|ax` : appel de `out_trampoline` (registres volatils de l'hôte
+/// et drapeaux sauvés, pile alignée) ; port non servi → chemin lent.
+fn emit_out(e: &mut Emit, size: u32, ip: u32, n: u32, live: bool) -> Result<(), IcedError> {
+    e.save()?;
+    let slow = e.exit(Some(ip), n, EXIT_SLOW, true);
+    let a = &mut e.a;
+    for r in [rax, rcx, rdx, rsi, rdi, r10] {
+        a.push(r)?;
+    }
+    // Pile alignée sur 16 au moment de l'appel (entrée du bloc : 8 ;
+    // prologue et sauvegardes : 12 mots).
+    a.sub(rsp, 8)?;
+    a.movzx(esi, dx)?;
+    a.mov(ecx, eax)?;
+    a.mov(edx, size)?;
+    a.mov(r8, r10)?;
+    a.mov(rdi, qword_ptr(r10 + OFF_OUT_CTX))?;
+    a.call(qword_ptr(r10 + OFF_OUT_FN))?;
+    a.mov(r11, rax)?;
+    a.add(rsp, 8)?;
+    for r in [r10, rdi, rsi, rdx, rcx, rax] {
+        a.pop(r)?;
+    }
+    a.test(r11, r11)?;
+    a.jz(slow)?;
+    if live {
+        e.restore()?;
+    }
+    Ok(())
+}
+
+/// Appelée par le code traduit pour `out dx,al|ax` : sert le port s'il l'est
+/// pendant les rafales et remet à jour les plans directs dans `State` ;
+/// rend 0 si le port est laissé à l'interpréteur (puis au processeur).
+extern "sysv64" fn out_trampoline<M: Mmio>(ctx: *mut M, port: u32, size: u32, value: u32, st: *mut State) -> u64 {
+    // SAFETY: bus et état passés par `Jit::run`, vivants pendant toute la
+    // rafale ; le code traduit ne l'appelle que depuis cette rafale.
+    let (m, st) = unsafe { (&mut *ctx, &mut *st) };
+    let port = port as u16;
+    if !m.port_claims(port) {
+        return 0;
+    }
+    if st.read_at != 0 {
+        m.direct_read_at(st.read_at as u32 - 1);
+        st.read_at = 0;
+    }
+    m.port_out(port, size as u8, if size == 1 { value & 0xFF } else { value & 0xFFFF });
+    st.vram = m.direct_write_window();
+    st.vram_read = m.direct_read_window();
+    1
+}
+
 fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live: bool) -> Result<(), IcedError> {
     let pushed = live || matches!(op, Op::Push(..) | Op::Pushad | Op::HighStore(_));
     if pushed {
@@ -1054,8 +1140,11 @@ fn emit_block(
             Op::Volatile(h) => e.a.add_instruction(*h)?,
             Op::Native(h) if !(0..ins.op_count()).any(|k| ins.op_kind(k) == OpKind::Memory) => e.a.add_instruction(*h)?,
             Op::Native(h) => {
-                // Écriture simple (mov) dans la fenêtre : directement dans le plan.
-                let direct = ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory;
+                // Écriture simple (mov) dans la fenêtre : directement dans le
+                // plan écrit ; lecture sans écriture : dans le plan lu.
+                let direct_write = ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory;
+                let direct_read = !writes_memory(ins) && !matches!(ins.mnemonic(), Mn::Xchg);
+                let direct = direct_write || direct_read;
                 let mut vga = e.a.create_label();
                 let pushed = live_here || writes_memory(ins);
                 if pushed {
@@ -1077,10 +1166,15 @@ fn emit_block(
                     a.lea(r14d, ptr(r13 - 0xA0000))?;
                     a.cmp(r14d, 0x10000 - size + 1)?;
                     a.jae(slow)?;
-                    a.mov(r9, qword_ptr(r10 + OFF_VRAM))?;
+                    a.mov(r9, qword_ptr(r10 + if direct_write { OFF_VRAM } else { OFF_VRAM_READ }))?;
                     a.test(r9, r9)?;
                     a.jz(slow)?;
                     a.add(qword_ptr(r10 + OFF_VGA_WRITES), 1)?;
+                    if direct_read {
+                        // Latches : chargés par la carte depuis cette lecture.
+                        a.lea(r11d, ptr(r14 + 1))?;
+                        a.mov(qword_ptr(r10 + OFF_READ_AT), r11)?;
+                    }
                     if live_here {
                         e.restore()?;
                     }
@@ -1093,6 +1187,7 @@ fn emit_block(
                     a.nop()?;
                 }
             }
+            Op::Out(size) => emit_out(&mut e, *size, ip, n, live_here)?,
             _ => emit_stackish(&mut e, ins, op, ip, n, live_here)?,
         }
     }

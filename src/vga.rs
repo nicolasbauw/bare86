@@ -186,6 +186,9 @@ pub struct Vga {
     pub start_writes: u64,
     vram: Vram,
     latch: [u8; 4],
+    /// Décalage + 1 de la dernière lecture faite directement dans un plan
+    /// (traducteur dynamique) : les latches en seront rechargés avant usage.
+    pending_latch: usize,
     pub misc: u8,
     seq_index: u8,
     pub seq: [u8; 8],
@@ -222,6 +225,7 @@ impl Vga {
             start_writes: 0,
             vram: Vram::new()?,
             latch: [0; 4],
+            pending_latch: 0,
             misc: 0x67,
             seq_index: 0,
             seq: [0x03, 0x00, 0x03, 0x00, 0x02, 0, 0, 0],
@@ -348,6 +352,38 @@ impl Vga {
         Some(unsafe { self.vram.all.add(region * PLANE) })
     }
 
+    /// Adresse hôte du plan lu, quand une lecture de la fenêtre peut s'y
+    /// faire directement (configuration simple comme pour l'écriture
+    /// directe, mode de lecture 0). Les latches suivent par `direct_read_at`.
+    pub fn direct_read_window(&self) -> Option<*mut u8> {
+        if self.vbe.is_some() || self.chain4() {
+            return None;
+        }
+        let simple = self.gc[5] & 0x1B == 0 && self.gc[3] == 0 && self.gc[1] & 0x0F == 0 && self.gc[8] == 0xFF && self.seq[4] & 0x04 != 0;
+        if !simple {
+            return None;
+        }
+        let region = self.vram.locate(usize::from(self.gc[4] & 3));
+        // SAFETY: région du mappage complet.
+        Some(unsafe { self.vram.all.add(region * PLANE) })
+    }
+
+    /// Lecture directe faite à `off` par le traducteur : les latches en
+    /// seront chargés avant le prochain usage (comme le ferait la carte).
+    pub fn direct_read_at(&mut self, off: usize) {
+        self.pending_latch = off + 1;
+    }
+
+    fn load_pending_latch(&mut self) {
+        if self.pending_latch != 0 {
+            let off = self.pending_latch - 1;
+            self.pending_latch = 0;
+            for p in 0..4 {
+                self.latch[p] = self.vram.get(p, off);
+            }
+        }
+    }
+
     /// Oriente la vue de la fenêtre pour `access` (sans effet si Emulated).
     pub fn point_window(&mut self, access: Access) -> std::io::Result<()> {
         match access {
@@ -381,6 +417,7 @@ impl Vga {
         if self.chain4() {
             return self.vram.get(LINEAR, off);
         }
+        self.pending_latch = 0;
         for p in 0..4 {
             self.latch[p] = self.vram.get(p, off);
         }
@@ -399,6 +436,7 @@ impl Vga {
     }
 
     pub fn write(&mut self, off: usize, v: u8) {
+        self.load_pending_latch();
         if self.chain4() {
             if self.seq[2] >> (off & 3) & 1 != 0 {
                 self.vram.set(LINEAR, off, v);
@@ -798,6 +836,28 @@ mod tests {
     fn set(v: &mut Vga, port: u16, idx: u8, val: u8) {
         v.port_write(port, idx);
         v.port_write(port + 1, val);
+    }
+
+    #[test]
+    fn direct_read_loads_latches_lazily() {
+        let mut v = Vga::new().unwrap();
+        v.set_mode(0x12, true);
+        // Octet 10 : plans 0 et 2 à FFh (set/reset, comme plus haut).
+        set(&mut v, 0x3CE, 0, 0x05);
+        set(&mut v, 0x3CE, 1, 0x0F);
+        v.write(10, 0);
+        set(&mut v, 0x3CE, 1, 0x00);
+        // Configuration simple : lecture directe du plan 0 possible.
+        let p = v.direct_read_window().expect("simple read");
+        // SAFETY: plan de 64 Ko.
+        assert_eq!(unsafe { p.add(10).read() }, 0xFF);
+        v.read(30); // latches de l'octet 30 (vide)
+        v.direct_read_at(10);
+        // Mode 1 : les latches viennent de la lecture directe de l'octet 10.
+        set(&mut v, 0x3CE, 5, 0x01);
+        assert!(v.direct_read_window().is_none());
+        v.write(20, 0);
+        assert_eq!([0, 1, 2, 3].map(|p| v.plane_byte(p, 20)), [0xFF, 0x00, 0xFF, 0x00]);
     }
 
     #[test]

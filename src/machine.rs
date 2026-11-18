@@ -314,6 +314,12 @@ impl Mmio for MmioBus<'_> {
     fn direct_write_window(&mut self) -> u64 {
         self.vga.direct_write_window().map_or(0, |p| p as u64)
     }
+    fn direct_read_window(&mut self) -> u64 {
+        self.vga.direct_read_window().map_or(0, |p| p as u64)
+    }
+    fn direct_read_at(&mut self, off: u32) {
+        self.vga.direct_read_at(off as usize);
+    }
     fn activity(&self) -> u64 {
         self.accesses + self.port_accesses
     }
