@@ -115,6 +115,9 @@ pub struct Dos {
     pub env: Vec<(String, String)>,
     /// Changements de disque demandés pendant que le shell attendait une ligne.
     pub pending_media: Vec<crate::host::InputEvent>,
+    /// Un programme Win32 a été lancé par HX (pour le reste de la session) :
+    /// pas de répétition automatique des touches (voir `Machine::key_in`).
+    pub win32_started: bool,
     sft: Sft,
     /// Pile des processus ; le premier est le shell racine.
     procs: Vec<Process>,
@@ -170,6 +173,7 @@ impl Dos {
             sb_pro: false,
             env: Vec::new(),
             pending_media: Vec::new(),
+            win32_started: false,
         }
     }
 
@@ -379,6 +383,7 @@ impl Dos {
         if win32.is_none() && win32::is_win32(image) {
             eprintln!("[win32] {}: Windows program; HX DOS Extender not found", String::from_utf8_lossy(path));
         }
+        self.win32_started |= win32.is_some();
         let (image, path, tail) = match &win32 {
             Some(l) => (&l.image[..], &l.path[..], &l.tail[..]),
             None => (image, path, tail),

@@ -147,6 +147,13 @@ impl Pic {
         Some(self.master.base + irq)
     }
 
+    /// IRQ 0–7 du maître encore à traiter : demandée et non masquée, ou en
+    /// service (pas encore de fin d'interruption).
+    pub fn busy(&self, irq: u8) -> bool {
+        let bit = 1 << irq;
+        self.master.isr & bit != 0 || self.master.irr & !self.master.imr & bit != 0
+    }
+
     /// IRQ 0 masquée au 8259 maître.
     pub fn irq0_masked(&self) -> bool {
         self.master.imr & 1 != 0

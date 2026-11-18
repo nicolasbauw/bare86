@@ -84,6 +84,8 @@ const HOST_KBD_PORT: u16 = 0xE1;
 const KEY_SPACING: Duration = Duration::from_millis(2);
 /// Durée d'appui d'une touche avant son relâchement.
 const KEY_HOLD: Duration = Duration::from_millis(40);
+/// Attente maximale de la fin de l'IRQ 1 avant l'octet suivant.
+const KEY_IRQ_WAIT: Duration = Duration::from_millis(50);
 /// Délai laissé à un programme qui scrute le clavier après la fin de l'entrée.
 const QUIT_GRACE: Duration = Duration::from_millis(300);
 /// Période des images envoyées à l'affichage (70 Hz, comme la VGA).
@@ -415,6 +417,10 @@ pub struct Pc<B: Backend = KvmVm> {
     last_scancode: Option<Instant>,
     /// Dernier appui livré (son relâchement attend KEY_HOLD).
     last_made: Option<u8>,
+    /// Touches enfoncées (scancode, 100h pour E0h), pour écarter la
+    /// répétition automatique sous HX ; préfixe E0h reçu en attente.
+    keys_down: Vec<u16>,
+    key_e0: bool,
     /// Le programme attend une touche (appel repris après HLT).
     waiting_key: bool,
     /// Fin de l'entrée constatée, tout étant lu : début du délai de grâce.
@@ -641,6 +647,8 @@ impl<B: Backend> Pc<B> {
             keys: VecDeque::new(),
             last_scancode: None,
             last_made: None,
+            keys_down: Vec::new(),
+            key_e0: false,
             waiting_key: false,
             drained_at: None,
             polled_after_drain: false,
@@ -1045,7 +1053,7 @@ impl<B: Backend> Pc<B> {
                     self.until_text = Some((text, Instant::now() - Duration::from_secs(1)));
                     break;
                 }
-                Some(InputEvent::Key(code)) => self.keys.push_back(code),
+                Some(InputEvent::Key(code)) => self.key_in(code),
                 Some(InputEvent::Text(c)) => self.keys.extend(keyboard::text_scancodes(c)),
                 Some(InputEvent::Mouse { dx, dy, buttons }) if !self.dos_hle => self.ps2.event(dx, dy, buttons),
                 Some(InputEvent::Mouse { dx, dy, buttons }) => self.bios.mouse.event(self.vm.mem(), dx, dy, buttons),
@@ -1070,13 +1078,24 @@ impl<B: Backend> Pc<B> {
             _ => KEY_SPACING,
         };
         let spaced = self.last_scancode.is_none_or(|t| now.duration_since(t) >= gap);
+        // Octet suivant seulement après la fin de l'IRQ 1 précédente (EOI) :
+        // un gestionnaire qui lit le port 60h puis enchaîne sur l'INT 09h du
+        // BIOS (HX) le relit, et lirait sinon l'octet suivant s'il était déjà
+        // livré (IRQ 12 de la souris intercalée : préfixes E0h et
+        // relâchements perdus, touches collées dans Kingpin). Au-delà de
+        // KEY_IRQ_WAIT, livré quand même (gestionnaire sans EOI).
+        let irq_done = !self.pic.borrow().busy(1) || self.last_scancode.is_none_or(|t| now.duration_since(t) >= KEY_IRQ_WAIT);
         if let Some(&b) = self.keys.front()
             && spaced
+            && irq_done
             && self.kbc.borrow().is_empty()
         {
             let mem = self.vm.mem();
             let key_press = b & 0x80 == 0 && b != 0xE0 && keyboard::modifier(b).is_none();
             if !key_press || int09_hooked(mem) || bios::peek_key(mem).is_none() {
+                if keyboard::keylog() {
+                    eprintln!("[key] 8042 {b:02X} (queue {})", self.keys.len() - 1);
+                }
                 self.kbc.borrow_mut().feed(b);
                 self.keys.pop_front();
                 self.last_scancode = Some(now);
@@ -1086,6 +1105,36 @@ impl<B: Backend> Pc<B> {
         if self.kbc.borrow_mut().take_irq() {
             self.pic.borrow_mut().raise(1);
         }
+    }
+
+    /// Scancode venu de l'hôte, mis en file pour le 8042. Sous HX (programme
+    /// Win32 lancé), les appuis répétés d'une touche déjà enfoncée (répétition
+    /// automatique) sont écartés : la file clavier de DKRNL32 (32 événements,
+    /// sans contrôle de débordement) déborde quand USER32 tarde à la vider
+    /// (messages de la souris), et des relâchements se perdent (touches
+    /// collées dans Kingpin après un appui de quelques secondes). Les jeux
+    /// Win32 suivent l'état des touches ; les programmes DOS gardent la
+    /// répétition.
+    fn key_in(&mut self, code: u8) {
+        if code == 0xE0 {
+            self.key_e0 = true;
+            return;
+        }
+        let e0 = std::mem::take(&mut self.key_e0);
+        let key = u16::from(code & 0x7F) | if e0 { 0x100 } else { 0 };
+        if code & 0x80 != 0 {
+            self.keys_down.retain(|&k| k != key);
+        } else if self.keys_down.contains(&key) {
+            if self.dos.win32_started {
+                return;
+            }
+        } else {
+            self.keys_down.push(key);
+        }
+        if e0 {
+            self.keys.push_back(0xE0);
+        }
+        self.keys.push_back(code);
     }
 
     /// Écran du terminal (`--term`), une trentaine de fois par seconde.
