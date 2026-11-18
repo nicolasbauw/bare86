@@ -1062,7 +1062,12 @@ impl Dos {
                 Out::Keep
             }
             0x38 => {
-                mem.write(lin(ds, dx), &country_info());
+                // 24 octets seulement, comme MS-DOS (OLD_COUNTRY_SIZE : les
+                // 10 octets réservés ne sont pas écrits). DKRNL32 de HX passe
+                // un bloc DOS de 32 octets : écrire 34 octets écrasait le MCB
+                // suivant (erreur 7 pour toute allocation ensuite, d'où
+                // LoadLibrary refusé pour dsound.dll et vesa32.dll).
+                mem.write(lin(ds, dx), &country_info()[..24]);
                 cpu.set_w(BX, 1);
                 Out::Ok
             }
