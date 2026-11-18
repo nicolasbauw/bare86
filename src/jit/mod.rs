@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use iced_x86::code_asm::*;
 use iced_x86::{
-    Code, ConditionCode, Decoder, DecoderOptions, Encoder, FlowControl, Instruction, MemoryOperand, Mnemonic as Mn, OpKind,
+    BlockEncoderOptions, Code, ConditionCode, Decoder, DecoderOptions, Encoder, FlowControl, Instruction, MemoryOperand, Mnemonic as Mn, OpKind,
     Register,
 };
 
@@ -57,6 +57,14 @@ pub struct State {
     saved_flags: u64,
     /// Écritures directes dans un plan VGA (activité de la carte).
     vga_writes: u64,
+    /// Instructions de l'invité exécutées depuis l'appel (blocs enchaînés
+    /// compris).
+    total: u64,
+    /// Enchaînements de blocs encore permis avant de rendre la main.
+    chain: u64,
+    /// Case de saut de la sortie prise (0 : sortie sans enchaînement
+    /// possible) : Rust y écrit le corps du bloc suivant.
+    link: u64,
 }
 
 const OFF_FLAGS: i32 = 32;
@@ -64,11 +72,16 @@ const OFF_EIP: i32 = 36;
 const OFF_MEMBASE: i32 = 40;
 const OFF_ADDR: i32 = 48;
 const OFF_EXIT: i32 = 52;
-const OFF_COUNT: i32 = 56;
 const OFF_CODE_BITS: i32 = 64;
 const OFF_VRAM: i32 = 72;
 const OFF_SAVED: i32 = 80;
 const OFF_VGA_WRITES: i32 = 88;
+const OFF_TOTAL: i32 = 96;
+const OFF_CHAIN: i32 = 104;
+const OFF_LINK: i32 = 112;
+/// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
+/// budget, inactivité et arrêt).
+const CHAIN_MAX: u64 = 256;
 
 /// Fin de bloc normale (saut, ou instruction laissée à l'interpréteur).
 pub const EXIT_NEXT: u32 = 0;
@@ -126,6 +139,9 @@ impl Drop for CodeBuf {
 /// Bloc traduit : point d'entrée et octets de l'invité dont il provient.
 struct Block {
     entry: *const u8,
+    /// Corps du bloc, après le prologue : cible des enchaînements (registres
+    /// et drapeaux de l'invité déjà dans ceux de l'hôte).
+    body: *const u8,
     bytes: Vec<u8>,
     /// Octets comparés à la vérification (0 : immédiat volatil).
     mask: Vec<u8>,
@@ -169,6 +185,8 @@ pub struct Jit {
     code: CodeBuf,
     /// Blocs par EIP ; `None` : la première instruction n'est pas traduite.
     blocks: Map<Option<Block>>,
+    /// Cases de saut redirigées vers un bloc, et leur valeur d'origine.
+    links: Vec<(*mut u64, u64)>,
     code_bits: Vec<u64>,
     /// Instructions dont le programme réécrit l'immédiat (Doom : pas de
     /// texture des colonnes et des sols) : traduites avec l'immédiat lu en
@@ -203,6 +221,7 @@ impl Jit {
         Ok(Self {
             code: CodeBuf::new()?,
             blocks: Map::default(),
+            links: Vec::new(),
             code_bits: vec![0; mem.size().div_ceil(64) + 1],
             volatile: Default::default(),
             mem_size: mem.size(),
@@ -216,6 +235,7 @@ impl Jit {
     /// Vide le cache (code automodifiant, tampon plein).
     pub fn flush(&mut self) {
         self.blocks.clear();
+        self.links.clear();
         self.code.used = 0;
         self.code_bits.fill(0);
     }
@@ -223,6 +243,12 @@ impl Jit {
     /// La mémoire a pu changer hors du code traduit.
     pub fn touch(&mut self) {
         self.epoch += 1;
+        // Les enchaînements sautent la vérification : défaits, ils se
+        // refont après revérification de leurs cibles.
+        for (slot, orig) in self.links.drain(..) {
+            // SAFETY: case du tampon de code, écrite à l'émission.
+            unsafe { slot.write_unaligned(orig) };
+        }
     }
 
     /// Exécute à partir de l'état courant, au plus `budget` instructions,
@@ -256,6 +282,9 @@ impl Jit {
                 st.gpr = cpu.gpr;
                 st.flags = cpu.flags;
                 st.code_bits = self.code_bits.as_ptr() as u64;
+                st.total = 0;
+                st.chain = CHAIN_MAX;
+                st.link = 0;
                 // SAFETY: code émis par `translate` pour cet état ; R15 et
                 // les contrôles bornent les accès à la mémoire de l'invité.
                 unsafe {
@@ -265,9 +294,9 @@ impl Jit {
                 cpu.gpr = st.gpr;
                 cpu.flags = st.flags;
                 cpu.ip = st.eip;
-                done += u64::from(st.count);
-                self.stats.blocks_run += 1;
-                self.stats.jit_instructions += u64::from(st.count);
+                done += st.total;
+                self.stats.blocks_run += 1 + CHAIN_MAX - st.chain.min(CHAIN_MAX);
+                self.stats.jit_instructions += st.total;
                 match st.exit {
                     EXIT_SLOW => self.stats.slow_exits += 1,
                     EXIT_SMC => {
@@ -289,8 +318,21 @@ impl Jit {
                         self.patched(cpu, mem, st.addr);
                         self.flush();
                     }
-                    // Fin par un saut : on enchaîne sur le bloc suivant.
-                    _ if st.count > 0 && self.blocks.get(&cpu.ip).is_none_or(|b| b.is_some()) => interp_next = false,
+                    // Fin par un saut : on enchaîne sur le bloc suivant, et
+                    // la sortie prise saute désormais directement vers lui.
+                    _ if self.blocks.get(&cpu.ip).is_none_or(|b| b.is_some()) => {
+                        interp_next = false;
+                        if st.link != 0
+                            && let Some(body) = self.block(cpu.ip, mem).and_then(|_| self.blocks.get(&cpu.ip)?.as_ref().map(|b| b.body))
+                        {
+                            let slot = st.link as *mut u64;
+                            // SAFETY: case de la sortie, dans le tampon de code.
+                            unsafe {
+                                self.links.push((slot, slot.read_unaligned()));
+                                slot.write_unaligned(body as u64);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -306,6 +348,7 @@ impl Jit {
                     }
                     *self.stats.fallbacks.entry(mnemonic).or_default() += 1;
                 }
+                let writes = interp_may_write(cpu, mem);
                 let b = interp::run_burst(cpu, mem, mmio, u64::MAX, 1);
                 self.stats.interp_steps += 1;
                 if b.reason == StopReason::Unsupported {
@@ -313,9 +356,12 @@ impl Jit {
                     return (done + b.instructions.saturating_sub(1), StopReason::Unsupported);
                 }
                 done += b.instructions;
-                // Le pas a pu écrire dans du code traduit, ou changer la
+                // Le pas a pu écrire dans du code traduit (sinon, comme pour
+                // un `out`, les blocs restent vérifiés), ou changer la
                 // configuration de la carte (registres de plans).
-                self.touch();
+                if writes {
+                    self.touch();
+                }
                 st.vram = mmio.direct_write_window();
             }
         }
@@ -329,8 +375,9 @@ impl Jit {
                 None => return None,
                 Some(b) if b.verified == self.epoch => return Some(b.entry),
                 Some(b) => {
-                    let mut now = vec![0u8; b.bytes.len()];
-                    mem.read(eip as usize, &mut now);
+                    // SAFETY: le bloc a été lu dans la mémoire de l'invité à
+                    // cette adresse (dans ses bornes) ; le vCPU est arrêté.
+                    let now = unsafe { std::slice::from_raw_parts(mem.ptr.add(eip as usize), b.bytes.len()) };
                     if now.iter().zip(&b.mask).map(|(x, m)| x & m).eq(b.bytes.iter().copied()) {
                         b.verified = self.epoch;
                         return Some(b.entry);
@@ -355,8 +402,8 @@ impl Jit {
             // SAFETY: `used` reste dans le tampon.
             let at = unsafe { self.code.ptr.add(self.code.used) };
             match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile, self.max_block) {
-                Ok(Some((code, len, holes))) if self.code.used + code.len() <= CODE_SIZE => {
-                    emitted = Some((at, code, len, holes));
+                Ok(Some((code, len, holes, body))) if self.code.used + code.len() <= CODE_SIZE => {
+                    emitted = Some((at, code, len, holes, body));
                     break;
                 }
                 Ok(Some(_)) => self.flush(),
@@ -379,7 +426,7 @@ impl Jit {
                 self.blocks.insert(eip, None);
                 return None;
             }
-            Some((at, code, len, holes)) => {
+            Some((at, code, len, holes, body)) => {
                 // SAFETY: place vérifiée ; le tampon est RWX.
                 unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), at, code.len()) };
                 self.code.used += code.len().next_multiple_of(16);
@@ -396,7 +443,9 @@ impl Jit {
                         self.code_bits[a / 64] |= 1 << (a % 64);
                     }
                 }
-                self.blocks.insert(eip, Some(Block { entry: at, bytes, mask, verified: self.epoch }));
+                // SAFETY: décalage dans le code émis.
+                let body = unsafe { at.add(body) };
+                self.blocks.insert(eip, Some(Block { entry: at, body, bytes, mask, verified: self.epoch }));
                 self.stats.translated += 1;
                 at as *const u8
             }
@@ -436,6 +485,26 @@ impl Jit {
             }
         }
     }
+}
+
+/// L'instruction à CS:EIP peut-elle écrire en mémoire ? (Opérande mémoire,
+/// pile, chaînes, interruptions ; prudent : vrai si elle ne se décode pas.)
+fn interp_may_write(cpu: &Cpu, mem: &GuestMem) -> bool {
+    let at = cpu.ip as usize;
+    if at + 15 > mem.size() {
+        return true;
+    }
+    // SAFETY: dans les bornes ; le vCPU est arrêté.
+    let bytes = unsafe { std::slice::from_raw_parts(mem.ptr.add(at), 15) };
+    let ins = Decoder::with_ip(32, bytes, u64::from(cpu.ip), DecoderOptions::NONE).decode();
+    if ins.is_invalid() {
+        return true;
+    }
+    let reads_only = matches!(ins.mnemonic(), Mn::Cmp | Mn::Test | Mn::Bt | Mn::Lea | Mn::Nop);
+    let memory = (0..ins.op_count()).any(|i| ins.op_kind(i) == OpKind::Memory) && !reads_only;
+    let implicit = ins.is_string_instruction() || ins.is_stack_instruction() || matches!(ins.flow_control(), FlowControl::Interrupt | FlowControl::Call | FlowControl::IndirectCall)
+        || matches!(ins.mnemonic(), Mn::Pushf | Mn::Pushfd | Mn::Enter | Mn::Leave);
+    memory || implicit
 }
 
 /// Immédiat d'une instruction : décalage et taille dans ses octets.
@@ -907,7 +976,8 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
 /// première instruction n'est pas traduite.
 /// Résultat : code, longueur en octets de l'invité, trous (immédiats
 /// volatils : décalage dans le bloc, taille).
-type Emitted = (Vec<u8>, usize, Vec<(usize, usize)>);
+/// Le dernier élément est le décalage du corps (cible des enchaînements).
+type Emitted = (Vec<u8>, usize, Vec<(usize, usize)>, usize);
 
 fn emit_block(
     eip: u32,
@@ -970,6 +1040,8 @@ fn emit_block(
         e.a.mov(r, dword_ptr(r10 + 4 * i as i32))?;
     }
     e.a.mov(edi, dword_ptr(r10 + 28))?;
+    let mut body_label = e.a.create_label();
+    e.a.set_label(&mut body_label)?;
 
     for (i, (ins, op)) in body.iter().enumerate() {
         let (ip, n) = (ins.ip32(), i as u32);
@@ -1088,11 +1160,41 @@ fn emit_block(
     // Sorties, puis épilogue commun.
     let Emit { mut a, mut exits, .. } = e;
     let mut common = a.create_label();
+    // Cases de saut des sorties enchaînables : (case, sortie normale).
+    let mut slots = Vec::new();
     for x in &mut exits {
         a.set_label(&mut x.label)?;
         if x.pushed {
             a.push(qword_ptr(r10 + OFF_SAVED))?;
             a.popfq()?;
+        }
+        // Instructions exécutées, sans toucher aux drapeaux.
+        a.mov(r9, qword_ptr(r10 + OFF_TOTAL))?;
+        a.lea(r9, ptr(r9 + x.count as i32))?;
+        a.mov(qword_ptr(r10 + OFF_TOTAL), r9)?;
+        if x.kind == EXIT_NEXT && x.eip.is_some() {
+            // Enchaînement : compteur décrémenté par RCX et `jrcxz` (les
+            // drapeaux de l'invité sont vivants), puis saut par la case.
+            let mut slot = a.create_label();
+            let mut out = a.create_label();
+            let mut unlinked = a.create_label();
+            a.mov(r11, rcx)?;
+            a.mov(rcx, qword_ptr(r10 + OFF_CHAIN))?;
+            a.lea(rcx, ptr(rcx - 1))?;
+            a.mov(qword_ptr(r10 + OFF_CHAIN), rcx)?;
+            a.jrcxz(out)?;
+            a.mov(rcx, r11)?;
+            a.jmp(qword_ptr(slot))?;
+            a.set_label(&mut slot)?;
+            a.dq(&[0])?;
+            a.set_label(&mut out)?;
+            a.mov(rcx, r11)?;
+            a.set_label(&mut unlinked)?;
+            a.lea(r9, ptr(slot))?;
+            a.mov(qword_ptr(r10 + OFF_LINK), r9)?;
+            slots.push((slot, unlinked));
+        } else {
+            a.mov(qword_ptr(r10 + OFF_LINK), 0)?;
         }
         match x.eip {
             Some(v) => a.mov(dword_ptr(r10 + OFF_EIP), v)?,
@@ -1102,7 +1204,6 @@ fn emit_block(
         if x.kind != EXIT_NEXT {
             a.mov(dword_ptr(r10 + OFF_ADDR), r13d)?;
         }
-        a.mov(dword_ptr(r10 + OFF_COUNT), x.count)?;
         a.jmp(common)?;
     }
     a.set_label(&mut common)?;
@@ -1121,8 +1222,16 @@ fn emit_block(
         a.pop(r)?;
     }
     a.ret()?;
-    let code = a.assemble(rip)?;
-    Ok(Some((code, guest_len, holes)))
+    let r = a.assemble_options(rip, BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)?;
+    let body_off = (r.label_ip(&body_label)? - rip) as usize;
+    // Chaque case vise d'abord sa sortie normale.
+    let patches: Vec<(usize, u64)> =
+        slots.iter().map(|(slot, unlinked)| Ok(((r.label_ip(slot)? - rip) as usize, r.label_ip(unlinked)?))).collect::<Result<_, IcedError>>()?;
+    let mut code = r.inner.code_buffer;
+    for (at, target) in patches {
+        code[at..at + 8].copy_from_slice(&target.to_le_bytes());
+    }
+    Ok(Some((code, guest_len, holes, body_off)))
 }
 
 fn jcc(a: &mut CodeAssembler, cc: ConditionCode, l: CodeLabel) -> Result<(), IcedError> {

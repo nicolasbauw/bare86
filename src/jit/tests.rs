@@ -177,6 +177,11 @@ fn jit_matches_interpreter() {
             if ins.mnemonic() == Mn::Hlt {
                 break;
             }
+            // Boucle sans fin (code automodifiant) : cas écarté.
+            if steps > 10_000 {
+                skipped += 1;
+                continue 'cases;
+            }
             // Lecture d'un drapeau non défini : cas sans référence fiable.
             if flags_read(&ins) & undefined != 0 {
                 skipped += 1;
@@ -192,7 +197,7 @@ fn jit_matches_interpreter() {
         }
 
         let mut ours = start.clone();
-        let (done, _) = jit.run(&mut ours, &mem_jit, &mut NoMmio, u64::MAX, u64::MAX);
+        let (done, _) = jit.run(&mut ours, &mem_jit, &mut NoMmio, 20_000, u64::MAX);
         translated_total += jit.stats.jit_instructions;
         jit.stats.jit_instructions = 0;
 
@@ -362,4 +367,28 @@ fn volatile_add_ebp() {
     let mut v = std::collections::HashSet::new();
     v.insert(0x173E07);
     assert!(classify(&ins, Some((c.immediate_offset(), c.immediate_size())), &v).is_some());
+}
+
+/// Boucle (saut arrière) : enchaînements répétés au-delà de `CHAIN_MAX`,
+/// avec une écriture en mémoire et la pile à chaque tour.
+#[test]
+fn chained_loop() {
+    let mem = GuestMem::new(MEM_SIZE).unwrap();
+    // mov ecx,3000 ; l: add eax,ecx ; mov [ebx],eax ; push ecx ; pop edx ;
+    // dec ecx ; jnz l ; hlt
+    let code = [0xB9, 0xB8, 0x0B, 0, 0, 0x01, 0xC8, 0x89, 0x03, 0x51, 0x5A, 0x49, 0x75, 0xF7, 0xF4];
+    mem.write(CODE_AT as usize, &code);
+    let mut rng = Rng(5);
+    let mut cpu = random_cpu(&mut rng);
+    cpu.gpr[0] = 0;
+    cpu.gpr[3] = 0x50000;
+    let mut jit = Jit::new(&mem).unwrap();
+    let (done, reason) = jit.run(&mut cpu, &mem, &mut NoMmio, u64::MAX, u64::MAX);
+    assert_eq!(reason, StopReason::Unsupported);
+    assert_eq!(done, 1 + 3000 * 6);
+    assert_eq!(cpu.gpr[0], 3000 * 3001 / 2);
+    assert_eq!(mem.read_u32(0x50000), 3000 * 3001 / 2);
+    assert_eq!((cpu.gpr[1], cpu.gpr[2]), (0, 1));
+    assert_eq!(cpu.ip, CODE_AT + code.len() as u32 - 1);
+    assert!(jit.stats.blocks_run > 3000, "{:?}", jit.stats);
 }
