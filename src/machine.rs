@@ -1540,9 +1540,12 @@ impl<B: Backend> Pc<B> {
             );
             // Nom de fichier en DS:DX des fonctions DOS qui en prennent un.
             let ah = (cpu.gpr[0] >> 8) as u8;
-            if vector == 0x21 && matches!(ah, 0x39..=0x3D | 0x41 | 0x43 | 0x4B | 0x4E | 0x56 | 0x5A | 0x5B | 0x6C) {
+            // Noms longs (71xxh) : mêmes registres, DS:SI pour 716Ch.
+            let lfn = ah == 0x71 && matches!(cpu.gpr[0] as u8, 0x39..=0x3B | 0x41 | 0x43 | 0x4E | 0x56 | 0x6C);
+            let al = if lfn { cpu.gpr[0] as u8 } else { ah };
+            if vector == 0x21 && (lfn || matches!(ah, 0x39..=0x3D | 0x41 | 0x43 | 0x4B | 0x4E | 0x56 | 0x5A | 0x5B | 0x6C)) {
                 let mem = self.vm.mem();
-                let at = cpu.linear(3, if ah == 0x6C { cpu.gpr[6] } else { cpu.gpr[2] } & 0xFFFF) as usize;
+                let at = cpu.linear(3, if al == 0x6C { cpu.gpr[6] } else { cpu.gpr[2] } & 0xFFFF) as usize;
                 let name: Vec<u8> = (0..128).map(|i| mem.read_u8(at + i)).take_while(|&b| b != 0).collect();
                 eprintln!("      « {} »", String::from_utf8_lossy(&name));
                 if ah == 0x4B {
