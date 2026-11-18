@@ -435,6 +435,7 @@ The `--keys` script types its text as is, and understands:
 | Item | Meaning |
 |---|---|
 | `{enter}`, `{esc}`, `{tab}`, `{f1}`, `{up}`, `{alt+f}`, `{ctrl+c}`… | Named keys and combinations |
+| `{press:KEY}`, `{release:KEY}` | Hold a key down (through the `{wait:…}` that follow), then release it |
 | `{wait:MS}` | Pause for MS milliseconds |
 | `{until:TEXT}` | Wait until TEXT appears on the text screen |
 | `{speed:MIPS}`, `{speed:max}` | Change the speed |
@@ -484,6 +485,8 @@ names) that HX makes for the program. `BARE86_HWBP=ADDR[,ADDR…]` sets up to
 four hardware execution breakpoints (linear addresses in hexadecimal, e.g.
 in the game's EXE, loaded at its base address): at each hit, the registers
 and the top of the stack go to the terminal, and the program goes on.
+`BARE86_KEYLOG=1` traces the keys received by the window and the bytes
+handed to the keyboard controller.
 
 **Measuring.** Pin the process to the same cores (`taskset -c 0-3`): on hybrid
 processors, the small cores make random runs slower. Game benchmarks are
