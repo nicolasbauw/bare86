@@ -31,9 +31,36 @@ pub fn hx_dir() -> Option<PathBuf> {
     dir.join("BIN").join("DPMILD32.EXE").is_file().then_some(dir)
 }
 
+/// Corrections ponctuelles des binaires de HX 2.23 : fichier, décalage,
+/// octets d'origine, octets corrigés. Appliquées seulement si les octets
+/// d'origine sont trouvés à leur place (idempotent ; sans effet sur une
+/// autre version).
+const HX_PATCHES: [(&str, usize, &[u8], &[u8]); 1] = [
+    // GetDeviceCaps(RASTERCAPS) de DGDI32 (DEVCAPS.ASM) : `mov eax, 0C2B9h`
+    // ne déclare ni RC_STRETCHBLT (800h) ni RC_STRETCHDIB (2000h), alors
+    // que StretchBlt et StretchDIBits sont implémentés (STRETCH.ASM). Le
+    // lanceur de Half-Life exige les deux (« Your graphics card does not
+    // support a necessary raster operation ») : 0C2B9h → 0EAB9h.
+    ("BIN/DGDI32.DLL", 0x3648, &[0xB8, 0xB9, 0xC2, 0x00, 0x00], &[0xB8, 0xB9, 0xEA, 0x00, 0x00]),
+];
+
+/// Applique `HX_PATCHES` à l'installation de HX `dir`.
+fn patch_hx(dir: &Path) -> Result<(), String> {
+    for (file, at, old, new) in HX_PATCHES {
+        let path = dir.join(file);
+        let Ok(mut data) = std::fs::read(&path) else { continue };
+        if data.get(at..at + old.len()) == Some(old) {
+            data[at..at + new.len()].copy_from_slice(new);
+            std::fs::write(&path, &data).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Répertoire de HX, téléchargé et installé s'il manque.
 pub fn hx_dir_or_install() -> Result<PathBuf, String> {
     if let Some(d) = hx_dir() {
+        patch_hx(&d)?;
         return Ok(d);
     }
     let base = data_dir().ok_or("no home directory")?;
@@ -76,6 +103,7 @@ fn install_hx(base: &Path) -> Result<(), String> {
             }
             let _ = std::fs::remove_file(&zip);
         }
+        patch_hx(&tmp.join("HX"))?;
         let dest = base.join("HX");
         let _ = std::fs::remove_dir_all(&dest);
         std::fs::rename(tmp.join("HX"), &dest).map_err(|e| format!("{}: {e}", dest.display()))
