@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Backend KVM : une VM à un vCPU, mémoire découpée en slots.
 
-use kvm_bindings::{KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, KVM_MEM_READONLY, kvm_guest_debug, kvm_userspace_memory_region};
+use kvm_bindings::{KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, KVM_GUESTDBG_USE_HW_BP, KVM_MEM_READONLY, kvm_guest_debug, kvm_userspace_memory_region};
 use std::os::fd::AsRawFd;
 
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
@@ -39,6 +39,13 @@ pub struct KvmVm {
     pub mem: GuestMem,
     vga_mapped: std::cell::Cell<bool>,
     single_step: bool,
+    /// Points d'arrêt matériels d'exécution (adresses linéaires, au plus
+    /// quatre), d'après `BARE86_HWBP=adr[,adr…]` en hexadécimal : outil de
+    /// diagnostic (registres et pile affichés à chaque passage).
+    hw_bp: Vec<u64>,
+    /// Arrêt sur un point d'arrêt : RF à poser avant de reprendre, pour ne
+    /// pas s'y arrêter de nouveau.
+    resume_rf: bool,
     /// Interruption confiée à KVM (KVM_INTERRUPT) que l'invité n'a pas encore
     /// prise : KVM_RUN doit être exécuté avant toute autre injection.
     injected: bool,
@@ -91,7 +98,12 @@ impl KvmVm {
         .map_err(|e| format!("PAT MSR: {e:?}"))?;
         vcpu.set_msrs(&pat)?;
         let reset_sregs = vcpu.get_sregs()?;
-        Ok(Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false, injected: false, reset_sregs })
+        let hw_bp = hw_breakpoints()?;
+        let vm = Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false, hw_bp, resume_rf: false, injected: false, reset_sregs };
+        if !vm.hw_bp.is_empty() {
+            vm.arm_single_step()?;
+        }
+        Ok(vm)
     }
 
     /// Mappe `plane` (64 Ko) sur la fenêtre VGA, ou la démappe (`None`).
@@ -155,11 +167,39 @@ impl KvmVm {
         Ok(())
     }
 
+    /// Arme le pas à pas et les points d'arrêt matériels.
     fn arm_single_step(&self) -> Result<()> {
-        let control = if self.single_step { KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP } else { 0 };
-        self.vcpu.set_guest_debug(&kvm_guest_debug { control, ..Default::default() })?;
+        let mut dbg = kvm_guest_debug::default();
+        if self.single_step {
+            dbg.control |= KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP;
+        }
+        if !self.hw_bp.is_empty() {
+            dbg.control |= KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
+            for (i, &a) in self.hw_bp.iter().enumerate() {
+                dbg.arch.debugreg[i] = a;
+                // DR7 : Li posé, R/W = 00 (exécution), LEN = 00.
+                dbg.arch.debugreg[7] |= 1 << (2 * i);
+            }
+        }
+        self.vcpu.set_guest_debug(&dbg)?;
         Ok(())
     }
+}
+
+/// Points d'arrêt de `BARE86_HWBP` (adresses linéaires en hexadécimal,
+/// séparées par des virgules ; quatre au plus).
+fn hw_breakpoints() -> Result<Vec<u64>> {
+    let Some(v) = std::env::var_os("BARE86_HWBP") else { return Ok(Vec::new()) };
+    let v = v.to_string_lossy();
+    let bps = v
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| u64::from_str_radix(s.trim().trim_start_matches("0x"), 16).map_err(|e| format!("BARE86_HWBP: {s}: {e}")))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if bps.len() > 4 {
+        return Err("BARE86_HWBP: four breakpoints at most".into());
+    }
+    Ok(bps)
 }
 
 /// Taille d'un accès de la sortie d'E/S en cours.
@@ -190,6 +230,11 @@ impl Backend for KvmVm {
         if !self.injected && crate::timer::take_kick() {
             return Ok(Exit::Interrupted);
         }
+        if std::mem::take(&mut self.resume_rf) {
+            let mut regs = self.vcpu.get_regs()?;
+            regs.rflags |= 1 << 16;
+            self.vcpu.set_regs(&regs)?;
+        }
         // Le mappage de kvm_run est fixe pour toute la vie du vCPU.
         let kvm_run: *const kvm_bindings::kvm_run = self.vcpu.get_kvm_run();
         let r = self.vcpu.run();
@@ -209,6 +254,10 @@ impl Backend for KvmVm {
             Ok(VcpuExit::MmioWrite(addr, data)) => Exit::MmioWrite { addr, data },
             Ok(VcpuExit::Hlt) => Exit::Hlt,
             Ok(VcpuExit::IrqWindowOpen) => Exit::IrqWindow,
+            Ok(VcpuExit::Debug(_)) if !self.single_step && !self.hw_bp.is_empty() => {
+                self.resume_rf = true;
+                Exit::Breakpoint
+            }
             Ok(VcpuExit::Debug(_)) => Exit::Step,
             Ok(VcpuExit::Shutdown) => Exit::Shutdown,
             Ok(other) => Exit::Other(format!("{other:?}")),

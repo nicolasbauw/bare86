@@ -22,6 +22,9 @@ pub enum Exit<'a> {
     Interrupted,
     /// Fin d'un pas en mode pas à pas.
     Step,
+    /// Point d'arrêt matériel atteint (`BARE86_HWBP`, diagnostic) ;
+    /// l'exécution reprend à l'instruction arrêtée.
+    Breakpoint,
     /// Triple faute ou arrêt du processeur.
     Shutdown,
     Other(String),

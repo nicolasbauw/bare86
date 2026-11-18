@@ -1332,6 +1332,7 @@ impl<B: Backend> Pc<B> {
                 Exit::Interrupted => self.spin_check()?,
                 Exit::IrqWindow => {}
                 Exit::Step => return Ok(Event::Step),
+                Exit::Breakpoint => self.report_breakpoint()?,
                 Exit::Hlt => self.halt()?,
                 Exit::Shutdown if !self.dos_hle => {
                     self.vm.reset_cpu()?;
@@ -1367,6 +1368,22 @@ impl<B: Backend> Pc<B> {
                 return Ok(Event::Exit(code));
             }
         }
+    }
+
+    /// Point d'arrêt de `BARE86_HWBP` : registres et haut de la pile sur la
+    /// sortie d'erreur, puis l'exécution continue (diagnostic).
+    fn report_breakpoint(&mut self) -> Result<()> {
+        let cpu = self.vm.state()?;
+        let eip = cpu.seg[1].base.wrapping_add(cpu.ip);
+        let esp = cpu.seg[2].base.wrapping_add(if cpu.stack32 { cpu.gpr[4] } else { cpu.gpr[4] & 0xFFFF });
+        let mut stack = [0u8; 256];
+        let words = if crate::interp::read_linear(&cpu, self.vm.mem(), esp, &mut stack) {
+            stack.as_chunks::<4>().0.iter().map(|w| format!("{:08X}", u32::from_le_bytes(*w))).collect::<Vec<_>>().join(" ")
+        } else {
+            "(not mapped)".into()
+        };
+        eprintln!("[hwbp] {eip:08X}\n{}\nstack {esp:08X}: {words}", crate::debug::format_regs(&cpu));
+        Ok(())
     }
 
     /// Tour complet du haut de la boucle : limite de temps, minuteries,
