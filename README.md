@@ -82,7 +82,8 @@ difference is under the hood, and shows with demanding late-90s games.
   timedemo (`+set gl_swapinterval 0`; otherwise frames are paced at 60 Hz,
   the DLL's default), and GLQuake runs once the 3dfx MiniGL
   (`opengl32.dll` in its directory) is removed. The context takes the size
-  of the video mode the game has set.
+  of the video mode the game has set. The Kingpin demo (OpenGL only) runs
+  with `+set gl_driver opengl32`, in full screen up to 1024×768, with sound.
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
   modes), SVGA through VESA VBE 2.0 with a linear framebuffer (or VBE 1.2 with
   banked windows): 320×200 to 1024×768 in 8, 15, 16, 24 and 32 bits per pixel,
@@ -477,6 +478,12 @@ DIFFTEST_CASES=100000 DIFFTEST_SEED=7 cargo test --release interpreter_matches_c
 ```
 
 `DIFFTEST_TRACE=1` prints every instruction compared.
+
+**Debugging a Win32 program.** `--trace-int` logs the DOS calls (with file
+names) that HX makes for the program. `BARE86_HWBP=ADDR[,ADDR…]` sets up to
+four hardware execution breakpoints (linear addresses in hexadecimal, e.g.
+in the game's EXE, loaded at its base address): at each hit, the registers
+and the top of the stack go to the terminal, and the program goes on.
 
 **Measuring.** Pin the process to the same cores (`taskset -c 0-3`): on hybrid
 processors, the small cores make random runs slower. Game benchmarks are
