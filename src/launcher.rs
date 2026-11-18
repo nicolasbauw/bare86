@@ -111,12 +111,13 @@ enum Field {
     Speed,
     Memory,
     Network,
+    Jit,
     Fullscreen,
     Save,
     SaveAndRun,
 }
 
-const FIELDS: [Field; 15] = [
+const FIELDS: [Field; 16] = [
     Field::Program,
     Field::Boot,
     Field::HardDisk,
@@ -129,6 +130,7 @@ const FIELDS: [Field; 15] = [
     Field::Speed,
     Field::Memory,
     Field::Network,
+    Field::Jit,
     Field::Fullscreen,
     Field::Save,
     Field::SaveAndRun,
@@ -165,6 +167,7 @@ fn toggle_key(f: Field) -> Option<&'static str> {
     Some(match f {
         Field::Boot => "boot",
         Field::Network => "net",
+        Field::Jit => "jit",
         Field::Fullscreen => "fullscreen",
         _ => return None,
     })
@@ -262,6 +265,7 @@ impl Editor {
             Field::Speed => "Speed",
             Field::Memory => "Memory",
             Field::Network => "Network",
+            Field::Jit => "Dynamic translator",
             Field::Fullscreen => "Full screen",
             Field::Save => "[ Save ]",
             Field::SaveAndRun => "[ Save and run ]",
@@ -283,6 +287,7 @@ impl Editor {
             Field::Speed => "Slows the processor down for games that run too fast",
             Field::Memory => "Total memory of the machine",
             Field::Network => "NE2000 network card, Internet access",
+            Field::Jit => "Faster planar VGA rendering in DOS/4GW games (Doom)",
             Field::Fullscreen => "Starts in full screen (Alt+Enter toggles)",
             Field::Save => "Writes bare86.conf in the game folder",
             Field::SaveAndRun => "Writes bare86.conf and runs the game",

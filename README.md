@@ -35,6 +35,12 @@ difference is under the hood, and shows with demanding late-90s games.
   interpreter only takes over for bursts of accesses that no hardware mapping
   can serve: planar VGA writes (latches, bit mask, several planes at once) and
   dense port I/O (palette loads, sound and network chips).
+- **Dynamic translator (`--jit`, experimental).** Games that draw in planar
+  VGA switch planes column by column, one VM exit each: about 64 % of Doom's
+  time. With `--jit`, the flat 32-bit protected-mode code of such games
+  (DOS/4GW without paging) runs translated on the host after each plane
+  switch, writing straight into the video planes: Doom's `timedemo demo1`
+  goes from about 104 to about 270 frames per second.
 - **Idle when the game waits.** A game that busy-waits for its next frame
   (polling the timer, the VGA status register, or a tick counter in memory)
   no longer keeps a host core at 100 %: Bare86 recognizes the wait and sleeps
@@ -232,6 +238,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--debug` | Debugger: registers, memory, single step |
 | `--trace-int` | Log the interrupts serviced by the host |
 | `--trace-io` | Report I/O ports with no device |
+| `--jit` | Dynamic translator for flat 32-bit protected-mode code drawing in planar VGA (DOS/4GW games such as Doom); experimental |
 | `--no-interp` | No interpreter bursts: one VM exit per emulated video memory access (to measure what the interpreter brings) |
 | `-h`, `--help` | Print the options |
 
@@ -460,6 +467,7 @@ software in `src/`:
 |---|---|
 | `kvm.rs`, `backend.rs`, `mem.rs`, `machine.rs` | Virtual machine, guest memory, main loop and VM exits |
 | `interp/` | Host x86 interpreter (iced-x86) that runs bursts of emulated video memory and port accesses without leaving the host |
+| `jit/` | Dynamic translator (`--jit`): flat 32-bit guest blocks re-encoded for x86-64, run on the host |
 | `bios.rs`, `asm/bios.S`, `hle.rs` | BIOS ROM (GNU `as`, Intel syntax) and the common helpers of the services run by the host (BIOS, DOS) |
 | `dos/` | Built-in DOS: files, processes, long names, MSCDEX, shell, Win32 loading through HX |
 | `vga.rs`, `render.rs`, `sdl.rs`, `menu.rs`, `launcher.rs` | Video card, picture, window, in-game menu and launcher |
@@ -479,6 +487,15 @@ DIFFTEST_CASES=100000 DIFFTEST_SEED=7 cargo test --release interpreter_matches_c
 ```
 
 `DIFFTEST_TRACE=1` prints every instruction compared.
+
+The dynamic translator is checked the same way against the interpreter, on
+random instruction sequences (`JIT_TRACE=1` replays a failing case one
+instruction at a time); `BARE86_JIT=count` prints at the end what it left
+to the interpreter:
+
+```sh
+JIT_CASES=100000 JIT_SEED=7 cargo test --release jit_matches_interpreter -- --nocapture
+```
 
 **Debugging a Win32 program.** `--trace-int` logs the DOS calls (with file
 names) that HX makes for the program. `BARE86_HWBP=ADDR[,ADDR…]` sets up to
@@ -535,6 +552,8 @@ among what does not, yet:
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine
   characters) are not shown yet in text mode.
+- The dynamic translator (`--jit`) is experimental and only serves flat
+  32-bit code after planar plane switches; it has been tried on Doom only.
 - OpenGL is version 1.1 with a few extensions (multitexture ARB and SGIS,
   point parameters, compiled vertex arrays); paletted textures, hardware
   gamma, `wglUseFontBitmaps` and `wglUseFontOutlines` are missing.

@@ -137,6 +137,8 @@ pub struct Config {
     /// Rafales de l'interpréteur après une sortie MMIO (sinon : une sortie
     /// de VM par accès à la VRAM émulée ; `--no-interp`, pour mesurer).
     pub interp: bool,
+    /// Traducteur dynamique pour le code 32 bits plat (`--jit`).
+    pub jit: bool,
     /// VBE 2.0 avec framebuffer linéaire (sinon VBE 1.2, `--vbe1`).
     pub vbe2: bool,
     /// Durée maximale d'exécution (diagnostic : registres affichés à l'arrêt).
@@ -165,7 +167,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
+        Self { extended_kb: 15 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, jit: false, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -201,11 +203,7 @@ struct ProbeStats {
 static PROBE: std::sync::Mutex<Option<ProbeStats>> = std::sync::Mutex::new(None);
 fn probe_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("BARE86_JITPROBE").is_some() || jit_on())
-}
-fn jit_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("BARE86_JIT").is_some())
+    *ON.get_or_init(|| std::env::var_os("BARE86_JITPROBE").is_some())
 }
 static JIT_REPORT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 pub fn probe_report() {
@@ -489,8 +487,12 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
     interp: bool,
-    /// Traducteur dynamique (BARE86_JIT, branche dyntrans), créé au premier usage.
+    /// Traducteur dynamique (`--jit`), créé au premier usage.
     jit: Option<crate::jit::Jit>,
+    jit_enabled: bool,
+    /// Sorties sur 3C5h à laisser passer sans traducteur, après une rafale
+    /// qui n'a rien pu exécuter (mode non éligible : code 16 bits…).
+    jit_backoff: u32,
     trace_int: bool,
     /// Services non gérés déjà signalés (vecteur, AH).
     unhandled: BTreeSet<(u8, u8)>,
@@ -712,6 +714,8 @@ impl<B: Backend> Pc<B> {
             trace_int: cfg.trace_int,
             interp: cfg.interp,
             jit: None,
+            jit_enabled: cfg.jit || std::env::var_os("BARE86_JIT").is_some(),
+            jit_backoff: 0,
             unhandled: BTreeSet::new(),
             a20: None,
             idle_polls: None,
@@ -1359,7 +1363,11 @@ impl<B: Backend> Pc<B> {
                     // Palette : 768 écritures de suite (Quake en charge une à
                     // presque chaque image), servies en rafale.
                     port_burst = data.len() == usize::from(size) && (self.io.starts_burst(port) || vga_dac_port(port));
-                    if probe_on() && port == 0x3C5 && data.len() == usize::from(size) {
+                    let jit_now = self.jit_enabled && {
+                        self.jit_backoff = self.jit_backoff.saturating_sub(1);
+                        self.jit_backoff == 0
+                    };
+                    if (jit_now || probe_on()) && port == 0x3C5 && data.len() == usize::from(size) {
                         probe_burst = true;
                         port_burst = true;
                     }
@@ -1450,7 +1458,7 @@ impl<B: Backend> Pc<B> {
                 let mut vga = self.vga.borrow_mut();
                 let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read, probe: probe_burst, plane_outs: 0 };
                 let idle = if probe_burst { 1_000_000 } else { IDLE_LIMIT };
-                let burst = if probe_burst && jit_on() {
+                let burst = if probe_burst && self.jit_enabled {
                     if self.jit.is_none() {
                         let mut j = crate::jit::Jit::new(self.vm.mem())?;
                         j.count_fallbacks = std::env::var("BARE86_JIT").is_ok_and(|v| v == "count");
@@ -1458,19 +1466,24 @@ impl<B: Backend> Pc<B> {
                     }
                     let jit = self.jit.as_mut().unwrap();
                     let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, BURST_BUDGET)?;
-                    *JIT_REPORT.lock().unwrap() = Some({
-                        let mut v: Vec<_> = jit.stats.fallbacks.iter().collect();
-                        v.sort_by(|a, b| b.1.cmp(a.1));
-                        let top: Vec<String> = v.iter().take(40).map(|(k, n)| format!("\n[jit]   {n:>9} {k}")).collect();
-                        let mut st = jit.stats.clone();
-                        st.fallbacks.clear();
-                        format!("{st:?}{}", top.concat())
-                    });
+                    if b.instructions == 0 && b.reason == interp::StopReason::Unsupported {
+                        self.jit_backoff = 256;
+                    }
+                    if jit.count_fallbacks {
+                        *JIT_REPORT.lock().unwrap() = Some({
+                            let mut v: Vec<_> = jit.stats.fallbacks.iter().collect();
+                            v.sort_by(|a, b| b.1.cmp(a.1));
+                            let top: Vec<String> = v.iter().take(40).map(|(k, n)| format!("\n[jit]   {n:>9} {k}")).collect();
+                            let mut st = jit.stats.clone();
+                            st.fallbacks.clear();
+                            format!("{st:?}{}", top.concat())
+                        });
+                    }
                     b
                 } else {
                     interp::continue_in_host(&mut self.vm, &mut bus, idle, BURST_BUDGET)?
                 };
-                if probe_burst {
+                if probe_burst && probe_on() && !self.jit_enabled {
                     let outs = bus.plane_outs;
                     let why = match burst.reason {
                         interp::StopReason::Unsupported => {
