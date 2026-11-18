@@ -201,9 +201,17 @@ struct ProbeStats {
 static PROBE: std::sync::Mutex<Option<ProbeStats>> = std::sync::Mutex::new(None);
 fn probe_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("BARE86_JITPROBE").is_some())
+    *ON.get_or_init(|| std::env::var_os("BARE86_JITPROBE").is_some() || jit_on())
 }
+fn jit_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("BARE86_JIT").is_some())
+}
+static JIT_REPORT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 pub fn probe_report() {
+    if let Some(r) = JIT_REPORT.lock().unwrap().as_ref() {
+        eprintln!("[jit] {r}");
+    }
     if let Some(p) = PROBE.lock().unwrap().as_ref() {
         eprintln!("[jitprobe] bursts {} instructions {} (avg {:.0}) outs3C5 {} (instr/out {:.1}) by_outs {:?}", p.bursts, p.instructions, p.instructions as f64 / p.bursts.max(1) as f64, p.outs, p.instructions as f64 / p.outs.max(1) as f64, p.by_outs);
         let mut v: Vec<_> = p.reasons.iter().collect();
@@ -299,6 +307,9 @@ impl Mmio for MmioBus<'_> {
     }
     fn stop(&self) -> bool {
         self.plane_read && !matches!(self.vga.access(), Access::PlaneRead(_))
+    }
+    fn direct_write_window(&mut self) -> u64 {
+        self.vga.direct_write_window().map_or(0, |p| p as u64)
     }
 }
 
@@ -478,6 +489,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
     interp: bool,
+    /// Traducteur dynamique (BARE86_JIT, branche dyntrans), créé au premier usage.
+    jit: Option<crate::jit::Jit>,
     trace_int: bool,
     /// Services non gérés déjà signalés (vecteur, AH).
     unhandled: BTreeSet<(u8, u8)>,
@@ -698,6 +711,7 @@ impl<B: Backend> Pc<B> {
             stepping: false,
             trace_int: cfg.trace_int,
             interp: cfg.interp,
+            jit: None,
             unhandled: BTreeSet::new(),
             a20: None,
             idle_polls: None,
@@ -1436,7 +1450,26 @@ impl<B: Backend> Pc<B> {
                 let mut vga = self.vga.borrow_mut();
                 let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read, probe: probe_burst, plane_outs: 0 };
                 let idle = if probe_burst { 1_000_000 } else { IDLE_LIMIT };
-                let burst = interp::continue_in_host(&mut self.vm, &mut bus, idle, BURST_BUDGET)?;
+                let burst = if probe_burst && jit_on() {
+                    if self.jit.is_none() {
+                        let mut j = crate::jit::Jit::new(self.vm.mem())?;
+                        j.count_fallbacks = std::env::var("BARE86_JIT").is_ok_and(|v| v == "count");
+                        self.jit = Some(j);
+                    }
+                    let jit = self.jit.as_mut().unwrap();
+                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, BURST_BUDGET)?;
+                    *JIT_REPORT.lock().unwrap() = Some({
+                        let mut v: Vec<_> = jit.stats.fallbacks.iter().collect();
+                        v.sort_by(|a, b| b.1.cmp(a.1));
+                        let top: Vec<String> = v.iter().take(40).map(|(k, n)| format!("\n[jit]   {n:>9} {k}")).collect();
+                        let mut st = jit.stats.clone();
+                        st.fallbacks.clear();
+                        format!("{st:?}{}", top.concat())
+                    });
+                    b
+                } else {
+                    interp::continue_in_host(&mut self.vm, &mut bus, idle, BURST_BUDGET)?
+                };
                 if probe_burst {
                     let outs = bus.plane_outs;
                     let why = match burst.reason {

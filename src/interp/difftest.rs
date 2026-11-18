@@ -36,25 +36,25 @@ impl Mmio for NoMmio {
     }
 }
 
-struct Rng(u64);
+pub(crate) struct Rng(pub u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         self.0
     }
-    fn below(&mut self, n: u64) -> u64 {
+    pub fn below(&mut self, n: u64) -> u64 {
         self.next() % n
     }
-    fn chance(&mut self, pct: u64) -> bool {
+    pub fn chance(&mut self, pct: u64) -> bool {
         self.below(100) < pct
     }
 }
 
 /// Valeurs de registre favorisant les cas limites.
-fn interesting(rng: &mut Rng) -> u32 {
+pub(crate) fn interesting(rng: &mut Rng) -> u32 {
     const EDGES: [u32; 9] = [0x7F, 0x80, 0xFF, 0x7FFF, 0x8000, 0xFFFF, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFF];
     match rng.below(10) {
         0 => 0,
@@ -101,7 +101,7 @@ fn op_size(ins: &Instruction) -> u32 {
 }
 
 /// Drapeaux non définis par l'architecture pour cette instruction.
-fn undefined_flags(ins: &Instruction, before: &Cpu) -> u32 {
+pub(crate) fn undefined_flags(ins: &Instruction, before: &Cpu) -> u32 {
     let shift_count = |n: u32| -> u32 {
         let c = match ins.op_kind(n) {
             OpKind::Register => before.gpr[1] & 0xFF,

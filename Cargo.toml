@@ -7,7 +7,7 @@ license = "GPL-3.0-or-later"
 [dependencies]
 flate2 = "1.1.11"
 glow = "0.17.0"
-iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder", "instr_info", "intel"] }
+iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder", "instr_info", "intel", "encoder", "block_encoder", "code_asm"] }
 kvm-bindings = "0.14.2"
 khronos-egl = { version = "6.0.0", features = ["dynamic"] }
 kvm-ioctls = "0.25.1"

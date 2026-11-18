@@ -21,6 +21,7 @@ mod hle;
 mod host;
 mod ide;
 mod iso9660;
+mod jit;
 mod interp;
 mod io;
 mod kbc;

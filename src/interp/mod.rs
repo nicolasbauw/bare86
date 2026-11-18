@@ -10,7 +10,7 @@
 
 mod alu;
 #[cfg(test)]
-mod difftest;
+pub(crate) mod difftest;
 mod exec;
 
 use iced_x86::{Decoder, DecoderOptions, Instruction};
@@ -36,6 +36,11 @@ pub trait Mmio {
         u32::MAX
     }
     fn port_out(&mut self, _port: u16, _size: u8, _v: u32) {}
+    /// Adresse hôte où les écritures simples dans la fenêtre A0000 peuvent
+    /// se faire directement (traducteur dynamique) ; nulle sinon.
+    fn direct_write_window(&mut self) -> u64 {
+        0
+    }
     /// Vrai si la rafale doit s'arrêter après l'instruction courante.
     fn stop(&self) -> bool {
         false

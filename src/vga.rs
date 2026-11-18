@@ -330,6 +330,24 @@ impl Vga {
         }
     }
 
+    /// Adresse hôte où une écriture simple dans la fenêtre A0000 peut se
+    /// faire directement (mode d'écriture 0 sans logique, un seul plan
+    /// écrit) : le plan écrit, là où il se trouve (scène comprise). Pour le
+    /// traducteur dynamique.
+    pub fn direct_write_window(&self) -> Option<*mut u8> {
+        if self.vbe.is_some() || self.chain4() {
+            return None;
+        }
+        let mask = self.seq[2] & 0x0F;
+        let simple = self.gc[5] & 0x13 == 0 && self.gc[3] == 0 && self.gc[1] & 0x0F == 0 && self.gc[8] == 0xFF && self.seq[4] & 0x04 != 0;
+        if !simple || mask.count_ones() != 1 {
+            return None;
+        }
+        let region = self.vram.locate(mask.trailing_zeros() as usize);
+        // SAFETY: région du mappage complet.
+        Some(unsafe { self.vram.all.add(region * PLANE) })
+    }
+
     /// Oriente la vue de la fenêtre pour `access` (sans effet si Emulated).
     pub fn point_window(&mut self, access: Access) -> std::io::Result<()> {
         match access {
