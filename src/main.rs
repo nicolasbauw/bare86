@@ -569,6 +569,7 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
     if o.stats {
         eprintln!("{:#?}", pc.stats);
     }
+    machine::probe_report(); // sonde BARE86_JITPROBE
     if let Some(path) = &o.shot {
         match pc.frame() {
             Some((w, h, px)) => {

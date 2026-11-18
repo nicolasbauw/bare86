@@ -300,6 +300,14 @@ pub(crate) fn step_once<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M) ->
     Some(Stepped { ins, flags_push: ex.flags_push })
 }
 
+/// Instruction à CS:EIP (sonde BARE86_JITPROBE).
+pub fn describe_at(cpu: &Cpu, mem: &GuestMem) -> String {
+    match fetch(cpu, mem) {
+        Some((ins, _)) => format!("{:08X} {ins}", cpu.seg[1].base.wrapping_add(cpu.ip)),
+        None => format!("{:08X} (fetch failed, mode?)", cpu.seg[1].base.wrapping_add(cpu.ip)),
+    }
+}
+
 /// Exécute une rafale à partir de l'état courant.
 /// `idle_limit` : instructions de suite sans MMIO avant de rendre la main ;
 /// `budget` : plafond d'instructions (et d'itérations de REP) de la rafale.

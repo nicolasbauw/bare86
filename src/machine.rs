@@ -181,6 +181,37 @@ struct MmioBus<'a> {
     /// Traversée d'un choix de plan de lecture (`Access::PlaneRead`) :
     /// registres VGA servis ici, arrêt dès que la configuration en sort.
     plane_read: bool,
+    // Sonde BARE86_JITPROBE : registres de plans servis pendant la rafale.
+    probe: bool,
+    plane_outs: u64,
+}
+
+// Sonde du traducteur dynamique (BARE86_JITPROBE, branche dyntrans) :
+// après un `out 3C5h`, l'interpréteur continue en servant les registres
+// de plans ; statistiques des rafales.
+#[derive(Default)]
+struct ProbeStats {
+    bursts: u64,
+    instructions: u64,
+    outs: u64,
+    /// Rafales par nombre de sorties 3C5h absorbées (0, 1, 2–9, 10–99, 100+).
+    by_outs: [u64; 5],
+    reasons: std::collections::BTreeMap<String, u64>,
+}
+static PROBE: std::sync::Mutex<Option<ProbeStats>> = std::sync::Mutex::new(None);
+fn probe_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("BARE86_JITPROBE").is_some())
+}
+pub fn probe_report() {
+    if let Some(p) = PROBE.lock().unwrap().as_ref() {
+        eprintln!("[jitprobe] bursts {} instructions {} (avg {:.0}) outs3C5 {} (instr/out {:.1}) by_outs {:?}", p.bursts, p.instructions, p.instructions as f64 / p.bursts.max(1) as f64, p.outs, p.instructions as f64 / p.outs.max(1) as f64, p.by_outs);
+        let mut v: Vec<_> = p.reasons.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1));
+        for (r, n) in v.iter().take(25) {
+            eprintln!("[jitprobe]   {n:>9} {r}");
+        }
+    }
 }
 
 /// Bus de la sonde d'attente active (`interp::probe_spin`) : la VRAM et la
@@ -214,7 +245,7 @@ impl MmioBus<'_> {
     /// empruntée par le bus) : la palette en rafale ordinaire, les plans
     /// pendant la traversée d'un choix de plan de lecture.
     fn serves_vga(&self, port: u16) -> bool {
-        (self.io.is_some() && vga_dac_port(port)) || (self.plane_read && vga_plane_port(port))
+        (self.io.is_some() && vga_dac_port(port)) || ((self.plane_read || self.probe) && vga_plane_port(port))
     }
 }
 
@@ -253,6 +284,9 @@ impl Mmio for MmioBus<'_> {
     fn port_out(&mut self, port: u16, size: u8, v: u32) {
         self.port_accesses += 1;
         if self.serves_vga(port) {
+            if port == 0x3C5 || (port == 0x3C4 && size == 2) {
+                self.plane_outs += 1;
+            }
             self.vga.port_write(port, v as u8);
             if size == 2 {
                 self.vga.port_write(port + 1, (v >> 8) as u8);
@@ -1005,7 +1039,7 @@ impl<B: Backend> Pc<B> {
     fn short_transfer_burst(&mut self) -> Result<()> {
         if self.interp {
             let mut vga = self.vga.borrow_mut();
-            let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read: false };
+            let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read: false, probe: false, plane_outs: 0 };
             let burst = interp::continue_in_host(&mut self.vm, &mut bus, u64::MAX, u64::from(SHORT_TRANSFER_STEPS))?;
             self.stats.interpreted += burst.instructions;
         }
@@ -1292,6 +1326,7 @@ impl<B: Backend> Pc<B> {
             // Choix d'un plan de lecture, fenêtre mappée en écriture : la
             // suite passe par l'interpréteur jusqu'à la sortie de cet état.
             let mut plane_read = false;
+            let mut probe_burst = false;
             match self.vm.run()? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
                 Exit::IoOut { port: crate::glide::proto::PORT, .. } => glide_call = true,
@@ -1310,6 +1345,10 @@ impl<B: Backend> Pc<B> {
                     // Palette : 768 écritures de suite (Quake en charge une à
                     // presque chaque image), servies en rafale.
                     port_burst = data.len() == usize::from(size) && (self.io.starts_burst(port) || vga_dac_port(port));
+                    if probe_on() && port == 0x3C5 && data.len() == usize::from(size) {
+                        probe_burst = true;
+                        port_burst = true;
+                    }
                     if matches!(port, 0x60 | 0x64 | 0x92) {
                         self.sync_a20()?;
                         if self.kbc.borrow().reset
@@ -1352,7 +1391,7 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::MmioRead { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
-                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0, plane_read: false };
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0, plane_read: false, probe: false, plane_outs: 0 };
                     for (i, b) in data.iter_mut().enumerate() {
                         let a = addr as u32 + i as u32;
                         *b = if bus.claims(a, false) { bus.read8(a) } else { 0xFF };
@@ -1365,7 +1404,7 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::MmioWrite { addr, data } => {
                     let mut vga = self.vga.borrow_mut();
-                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0, plane_read: false };
+                    let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: None, port_accesses: 0, plane_read: false, probe: false, plane_outs: 0 };
                     for (i, &b) in data.iter().enumerate() {
                         bus.write8(addr as u32 + i as u32, b);
                     }
@@ -1395,8 +1434,34 @@ impl<B: Backend> Pc<B> {
             }
             if (mmio || port_burst) && self.interp {
                 let mut vga = self.vga.borrow_mut();
-                let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read };
-                let burst = interp::continue_in_host(&mut self.vm, &mut bus, IDLE_LIMIT, BURST_BUDGET)?;
+                let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read, probe: probe_burst, plane_outs: 0 };
+                let idle = if probe_burst { 1_000_000 } else { IDLE_LIMIT };
+                let burst = interp::continue_in_host(&mut self.vm, &mut bus, idle, BURST_BUDGET)?;
+                if probe_burst {
+                    let outs = bus.plane_outs;
+                    let why = match burst.reason {
+                        interp::StopReason::Unsupported => {
+                            let cpu = self.vm.state()?;
+                            format!("unsupported {}", interp::describe_at(&cpu, self.vm.mem()))
+                        }
+                        ref r => format!("{r:?}"),
+                    };
+                    static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    if burst.reason == interp::StopReason::Budget && !SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        let cpu = self.vm.state()?;
+                        eprintln!("[jitprobe] cr0 {:08X} cr3 {:08X} cr4 {:08X} flags {:08X}\n{}", cpu.cr0, cpu.cr3, cpu.cr4, cpu.flags, crate::debug::format_regs(&cpu));
+                        for (n, sg) in ["es", "cs", "ss", "ds", "fs", "gs"].iter().zip(cpu.seg.iter()) {
+                            eprintln!("[jitprobe] {n} {:04X} base {:08X} limit {:08X} db {} typ {:X}", sg.selector, sg.base, sg.limit, sg.db, sg.typ);
+                        }
+                    }
+                    let mut g = PROBE.lock().unwrap();
+                    let p = g.get_or_insert_with(ProbeStats::default);
+                    p.bursts += 1;
+                    p.instructions += burst.instructions;
+                    p.outs += outs;
+                    p.by_outs[match outs { 0 => 0, 1 => 1, 2..=9 => 2, 10..=99 => 3, _ => 4 }] += 1;
+                    *p.reasons.entry(why).or_default() += 1;
+                }
                 self.stats.burst_ports += bus.port_accesses;
                 self.window.emulated_in_epoch += bus.accesses;
                 self.window.reads_in_epoch += bus.reads;
