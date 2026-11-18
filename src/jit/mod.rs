@@ -209,6 +209,13 @@ pub struct JitStats {
     pub slow_exits: u64,
     pub smc_flushes: u64,
     pub stale_flushes: u64,
+    /// Retours à Rust : chaîne épuisée, sortie vers une cible connue pas
+    /// encore liée, cible calculée absente de la table de répartition.
+    pub ret_chain: u64,
+    pub ret_static: u64,
+    pub ret_dynamic: u64,
+    /// Débuts de rafale où le code a pu changer (enchaînements défaits).
+    pub external_touches: u64,
     /// Instructions laissées à l'interpréteur, par mnémonique.
     pub fallbacks: HashMap<String, u64>,
 }
@@ -225,6 +232,10 @@ pub struct Jit {
     dispatch: Vec<[u64; 2]>,
     code_bits: Vec<u64>,
     code_pages: Vec<u8>,
+    /// Pages de code traduit surveillées par le journal de KVM, et celles
+    /// à ajouter après la rafale (`continue_in_host`).
+    watched: Vec<u32>,
+    new_pages: Vec<u32>,
     /// Pages à accès direct (voir `State::rtab`) ; `wtab` = `rtab` plus les
     /// pages de code traduit (et celles qui les précèdent).
     rtab: Vec<u8>,
@@ -269,6 +280,8 @@ impl Jit {
             dispatch: vec![[0; 2]; DISPATCH],
             code_bits: vec![0; mem.size().div_ceil(64) + 1],
             code_pages: vec![0; mem.size().div_ceil(0x1000) + 1],
+            watched: Vec::new(),
+            new_pages: Vec::new(),
             rtab: page_table(mem.size()),
             wtab: page_table(mem.size()),
             bmi2: std::arch::is_x86_feature_detected!("bmi2") && std::env::var_os("BARE86_JIT_NO_BMI2").is_none(),
@@ -293,6 +306,23 @@ impl Jit {
         self.code_bits.fill(0);
         self.code_pages.fill(0);
         self.wtab.copy_from_slice(&self.rtab);
+        self.watched.clear();
+        self.new_pages.clear();
+    }
+
+    /// Un bloc traduit qui touche l'une de `pages` a-t-il changé (hors
+    /// immédiats volatils) ?
+    fn changed_on(&self, mem: &GuestMem, pages: &[u32]) -> bool {
+        self.blocks.iter().any(|(&eip, b)| {
+            let Some(b) = b else { return false };
+            let (lo, hi) = (eip >> 12, (eip + b.bytes.len() as u32 - 1) >> 12);
+            if !pages.iter().any(|&p| p >= lo && p <= hi) {
+                return false;
+            }
+            // SAFETY: le bloc a été lu à cette adresse, dans les bornes.
+            let now = unsafe { std::slice::from_raw_parts(mem.ptr.add(eip as usize), b.bytes.len()) };
+            !now.iter().zip(&b.mask).map(|(x, m)| x & m).eq(b.bytes.iter().copied())
+        })
     }
 
     /// La mémoire a pu changer hors du code traduit.
@@ -312,7 +342,6 @@ impl Jit {
     /// de `idle` instructions passent sans activité de la carte
     /// (`Mmio::activity`) : le code natif fait alors mieux.
     pub fn run<M: Mmio>(&mut self, cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, budget: u64, idle: u64) -> (u64, StopReason) {
-        self.touch();
         let mut st = State {
             membase: mem.ptr as u64,
             vram: mmio.direct_write_window(),
@@ -375,6 +404,15 @@ impl Jit {
                 done += st.total;
                 self.stats.blocks_run += 1 + CHAIN_MAX - st.chain.min(CHAIN_MAX);
                 self.stats.jit_instructions += st.total;
+                if st.exit == EXIT_NEXT {
+                    if st.chain == 0 {
+                        self.stats.ret_chain += 1;
+                    } else if st.link != 0 {
+                        self.stats.ret_static += 1;
+                    } else {
+                        self.stats.ret_dynamic += 1;
+                    }
+                }
                 match st.exit {
                     EXIT_SLOW => {
                         self.stats.slow_exits += 1;
@@ -431,7 +469,12 @@ impl Jit {
                     }
                     *self.stats.fallbacks.entry(mnemonic).or_default() += 1;
                 }
-                let writes = interp_may_write(cpu, mem);
+                let writes = match interp_write_range(cpu, mem) {
+                    WriteRange::None => false,
+                    WriteRange::Unknown => true,
+                    // Seules les pages de code traduit comptent.
+                    WriteRange::Range(lo, hi) => (lo >> 12..=hi >> 12).any(|p| self.code_pages.get(p as usize).is_none_or(|&c| c != 0)),
+                };
                 let b = interp::run_burst(cpu, mem, mmio, u64::MAX, 1);
                 self.stats.interp_steps += 1;
                 if b.reason == StopReason::Unsupported {
@@ -533,8 +576,12 @@ impl Jit {
                         self.code_bits[a / 64] |= 1 << (a % 64);
                         // La page précédente aussi : une écriture qui commence
                         // juste avant déborde peut-être sur ce code.
-                        self.code_pages[a >> 12] = 1;
-                        self.code_pages[(a >> 12).saturating_sub(1)] = 1;
+                        if self.code_pages[a >> 12] & 2 == 0 {
+                            self.new_pages.push((a >> 12) as u32);
+                        }
+                        // Bit 0 : préfiltre (page et précédente) ; bit 1 : code.
+                        self.code_pages[a >> 12] |= 3;
+                        self.code_pages[(a >> 12).saturating_sub(1)] |= 1;
                         self.wtab[a >> 12] = 1;
                         self.wtab[(a >> 12).saturating_sub(1)] = 1;
                     }
@@ -612,24 +659,73 @@ fn perf_map(at: *const u8, len: usize, eip: u32) {
     }
 }
 
-/// L'instruction à CS:EIP peut-elle écrire en mémoire ? (Opérande mémoire,
-/// pile, chaînes, interruptions ; prudent : vrai si elle ne se décode pas.)
-fn interp_may_write(cpu: &Cpu, mem: &GuestMem) -> bool {
+/// Zone de mémoire qu'un pas d'interpréteur peut écrire.
+enum WriteRange {
+    None,
+    /// Octets `lo..=hi` (adresses linéaires = physiques en mode plat).
+    Range(u32, u32),
+    /// Inconnue (instruction rare, segment non plat…) : prudence.
+    Unknown,
+}
+
+/// Ce que l'instruction à CS:EIP peut écrire en mémoire (opérande, chaînes,
+/// pile), calculé avant de l'exécuter : un pas qui n'écrit pas dans du code
+/// traduit laisse les enchaînements et la table de répartition en place.
+fn interp_write_range(cpu: &Cpu, mem: &GuestMem) -> WriteRange {
     let at = cpu.ip as usize;
     if at + 15 > mem.size() {
-        return true;
+        return WriteRange::Unknown;
     }
     // SAFETY: dans les bornes ; le vCPU est arrêté.
     let bytes = unsafe { std::slice::from_raw_parts(mem.ptr.add(at), 15) };
     let ins = Decoder::with_ip(32, bytes, u64::from(cpu.ip), DecoderOptions::NONE).decode();
     if ins.is_invalid() {
-        return true;
+        return WriteRange::Unknown;
+    }
+    let g = |r: Register| -> u32 {
+        match r {
+            Register::None => 0,
+            r if r.is_gpr32() => cpu.gpr[r.number()],
+            _ => u32::MAX,
+        }
+    };
+    let stack = cpu.gpr[4];
+    // Pile : push, call, interruptions… (64 octets sous ESP, large).
+    if ins.is_stack_instruction() || matches!(ins.flow_control(), FlowControl::Interrupt | FlowControl::Call | FlowControl::IndirectCall) {
+        return WriteRange::Range(stack.wrapping_sub(64), stack.wrapping_sub(1));
+    }
+    if ins.is_string_instruction() {
+        if matches!(ins.mnemonic(), Mn::Cmpsb | Mn::Cmpsw | Mn::Cmpsd | Mn::Scasb | Mn::Scasw | Mn::Scasd | Mn::Lodsb | Mn::Lodsw | Mn::Lodsd | Mn::Outsb | Mn::Outsw | Mn::Outsd) {
+            return WriteRange::None;
+        }
+        if ins.memory_size().size() == 0 || ins.memory_base() != Register::None && !ins.memory_base().is_gpr32() {
+            return WriteRange::Unknown;
+        }
+        let size = ins.memory_size().size() as u64;
+        let count = if ins.has_rep_prefix() || ins.has_repne_prefix() { u64::from(cpu.gpr[1]).max(1) } else { 1 };
+        let span = size * count;
+        if span > 0x10_0000 {
+            return WriteRange::Unknown;
+        }
+        let dst = u64::from(cpu.gpr[7]);
+        let (lo, hi) = if cpu.flags & 0x400 != 0 { ((dst + size).saturating_sub(span), dst + size - 1) } else { (dst, dst + span - 1) };
+        return if hi > u64::from(u32::MAX) { WriteRange::Unknown } else { WriteRange::Range(lo as u32, hi as u32) };
     }
     let reads_only = matches!(ins.mnemonic(), Mn::Cmp | Mn::Test | Mn::Bt | Mn::Lea | Mn::Nop);
-    let memory = (0..ins.op_count()).any(|i| ins.op_kind(i) == OpKind::Memory) && !reads_only;
-    let implicit = ins.is_string_instruction() || ins.is_stack_instruction() || matches!(ins.flow_control(), FlowControl::Interrupt | FlowControl::Call | FlowControl::IndirectCall)
-        || matches!(ins.mnemonic(), Mn::Pushf | Mn::Pushfd | Mn::Enter | Mn::Leave);
-    memory || implicit
+    let memory = (0..ins.op_count()).any(|i| ins.op_kind(i) == OpKind::Memory);
+    if !memory || reads_only {
+        return WriteRange::None;
+    }
+    if !matches!(ins.memory_segment(), Register::DS | Register::ES | Register::SS | Register::CS) {
+        return WriteRange::Unknown;
+    }
+    let (base, index) = (g(ins.memory_base()), g(ins.memory_index()));
+    if base == u32::MAX && ins.memory_base() != Register::None || index == u32::MAX && ins.memory_index() != Register::None {
+        return WriteRange::Unknown;
+    }
+    let addr = base.wrapping_add(index.wrapping_mul(ins.memory_index_scale())).wrapping_add(ins.memory_displacement32());
+    let size = ins.memory_size().size().clamp(1, 512) as u32;
+    WriteRange::Range(addr, addr.saturating_add(size - 1))
 }
 
 /// Immédiat d'une instruction : décalage et taille dans ses octets.
@@ -975,11 +1071,20 @@ struct Deferred {
 /// (un accès qui commence juste avant peut y déborder).
 fn page_table(mem_size: usize) -> Vec<u8> {
     let limit = mem_size.saturating_sub(MEM_GUARD as usize);
-    let slow = |p: usize| {
+    // 0 : RAM directe ; 1 : refusé ; 2 : fenêtre VGA A0000–AFFFF (accès
+    // direct au plan, s'il est possible) ; un accès qui peut déborder sur
+    // une page d'un autre état est refusé.
+    let kind = |p: usize| -> u8 {
         let (start, end) = (p << 12, (p + 1) << 12);
-        (start < 0x10_0000 && end > 0xA_0000) || end > limit
+        if (0xA_0000..0xB_0000).contains(&start) {
+            2
+        } else if (start < 0x10_0000 && end > 0xA_0000) || end > limit {
+            1
+        } else {
+            0
+        }
     };
-    (0..1usize << 20).map(|p| u8::from(slow(p) || slow(p + 1))).collect()
+    (0..1usize << 20).map(|p| if kind(p) == kind(p + 1) { kind(p) } else { 1 }).collect()
 }
 
 impl Emit {
@@ -1070,10 +1175,12 @@ impl Emit {
     fn checked(&mut self, ip: u32, count: u32, size: i32, write: bool, live: bool, vga: Option<CodeLabel>) -> Result<(), IcedError> {
         let saved = live || write;
         if !self.bmi2 {
+            // Sans BMI2 : contrôles complets ; la fenêtre VGA passe au
+            // chemin lent (le chemin direct suppose les drapeaux intacts).
             if saved {
                 self.save()?;
             }
-            self.guard(ip, count, size, write, saved, vga)?;
+            self.guard(ip, count, size, write, saved, None)?;
             if live {
                 self.restore()?;
             }
@@ -1090,12 +1197,24 @@ impl Emit {
         a.mov(r11, rcx)?;
         a.mov(ecx, r14d)?;
         a.jrcxz(fast)?;
-        a.mov(rcx, r11)?;
-        a.jmp(entry)?;
+        if let Some(v) = vga {
+            // Fenêtre VGA (état 2) : chemin direct, drapeaux intacts.
+            let mut to_vga = a.create_label();
+            a.lea(ecx, ptr(rcx - 2))?;
+            a.jrcxz(to_vga)?;
+            a.mov(rcx, r11)?;
+            a.jmp(entry)?;
+            a.set_label(&mut to_vga)?;
+            a.mov(rcx, r11)?;
+            a.jmp(v)?;
+        } else {
+            a.mov(rcx, r11)?;
+            a.jmp(entry)?;
+        }
         a.set_label(&mut fast)?;
         a.mov(rcx, r11)?;
         a.set_label(&mut back)?;
-        self.deferred.push(Deferred { entry, back, ip, count, size, write, live, vga });
+        self.deferred.push(Deferred { entry, back, ip, count, size, write, live, vga: None });
         Ok(())
     }
 
@@ -1416,37 +1535,40 @@ fn emit_block(
                 let direct_read = !writes_memory(ins) && !matches!(ins.mnemonic(), Mn::Xchg);
                 let direct = direct_write || direct_read;
                 let mut vga = e.a.create_label();
-                let pushed = live_here || writes_memory(ins);
                 e.address(ins)?;
                 let size = ins.memory_size().size().max(1) as i32;
-                e.checked(ip, n, size, writes_memory(ins), live_here, direct.then_some(vga))?;
+                e.checked(ip, n, size, writes_memory(ins), live_here, (direct && e.bmi2).then_some(vga))?;
                 e.a.add_instruction(*h)?;
-                if direct {
-                    let slow = e.exit(Some(ip), n, EXIT_SLOW, pushed);
+                if direct && e.bmi2 {
+                    // Fenêtre VGA, venu du chemin rapide de `checked` (page
+                    // d'état 2, drapeaux intacts) : directement dans le plan,
+                    // ou chemin lent si la configuration ne le permet pas.
+                    let slow = e.exit(Some(ip), n, EXIT_SLOW, false);
                     let a = &mut e.a;
                     let mut done = a.create_label();
+                    let mut noptr = a.create_label();
                     a.jmp(done)?;
                     a.set_label(&mut vga)?;
                     a.lea(r14d, ptr(r13 - 0xA0000))?;
-                    a.cmp(r14d, 0x10000 - size + 1)?;
-                    a.jae(slow)?;
                     a.mov(r9, qword_ptr(r10 + if direct_write { OFF_VRAM } else { OFF_VRAM_READ }))?;
-                    a.test(r9, r9)?;
-                    a.jz(slow)?;
+                    a.mov(r11, rcx)?;
+                    a.mov(rcx, r9)?;
+                    a.jrcxz(noptr)?;
+                    a.mov(rcx, r11)?;
                     a.mov(byte_ptr(r10 + OFF_VGA_WRITES), 1)?;
                     if direct_read {
                         // Latches : chargés par la carte depuis cette lecture.
                         a.lea(r11d, ptr(r14 + 1))?;
                         a.mov(qword_ptr(r10 + OFF_READ_AT), r11)?;
                     }
-                    if live_here {
-                        e.restore()?;
-                    }
-                    let a = &mut e.a;
                     let mut w = *h;
                     w.set_memory_base(Register::R9);
                     w.set_memory_index(Register::R14);
                     a.add_instruction(w)?;
+                    a.jmp(done)?;
+                    a.set_label(&mut noptr)?;
+                    a.mov(rcx, r11)?;
+                    a.jmp(slow)?;
                     a.set_label(&mut done)?;
                     a.nop()?;
                 }
@@ -1662,9 +1784,25 @@ pub fn continue_in_host<B: crate::backend::Backend, M: Mmio>(
             }
         }
     })?;
+    // Le code a-t-il pu changer depuis la rafale précédente (invité en
+    // natif, écritures de l'hôte) ? Sinon, enchaînements et table de
+    // répartition restent valables.
+    let mut written = Vec::new();
+    let watched = vm.watched_written(&jit.watched, &mut written)?;
+    vm.mem().take_host_written(&jit.watched, &mut written);
+    // Pages écrites : seuls leurs blocs sont revérifiés (Doom réécrit en
+    // natif des immédiats volatils, exclus de la comparaison).
+    if !watched || (!written.is_empty() && jit.changed_on(vm.mem(), &written)) {
+        jit.stats.external_touches += 1;
+        jit.touch();
+    }
     let mut cpu = vm.state()?;
     let (instructions, reason) = jit.run(&mut cpu, vm.mem(), mmio, budget, idle);
     vm.set_state(&cpu)?;
+    let new = std::mem::take(&mut jit.new_pages);
+    if !new.is_empty() && vm.watch_pages(&new)? {
+        jit.watched.extend(new);
+    }
     Ok(interp::Burst { instructions, mmio_accesses: 0, reason })
 }
 

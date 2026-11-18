@@ -102,4 +102,18 @@ pub trait Backend {
     /// Framebuffer linéaire SVGA : `size` octets de mémoire hôte à
     /// `host_addr`, mappés une fois pour toutes à l'adresse du LFB.
     fn map_lfb(&mut self, host_addr: u64, size: usize) -> Result<()>;
+
+    /// Surveillance des pages de code du traducteur dynamique : les
+    /// écritures de l'invité sur `pages` seront notées (journal des pages
+    /// modifiées). Faux si ce n'est pas possible.
+    fn watch_pages(&mut self, _pages: &[u32]) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Pages de `pages` écrites par l'invité depuis leur surveillance,
+    /// ajoutées à `out` (et de nouveau surveillées). Faux si la surveillance
+    /// n'est pas en place : toute page doit alors être tenue pour écrite.
+    fn watched_written(&mut self, _pages: &[u32], _out: &mut Vec<u32>) -> Result<bool> {
+        Ok(false)
+    }
 }

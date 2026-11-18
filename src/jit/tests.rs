@@ -101,10 +101,12 @@ fn random_native(rng: &mut Rng) -> Vec<u8> {
 
 fn fill_memory(mem: &GuestMem, seed: u64) {
     let mut r = Rng(seed | 1);
-    for a in (0..MEM_SIZE).step_by(8) {
-        let v = r.next();
-        mem.write(a, &v.to_le_bytes()[..(MEM_SIZE - a).min(8)]);
+    let mut all = vec![0u8; MEM_SIZE];
+    for chunk in all.chunks_mut(8) {
+        let v = r.next().to_le_bytes();
+        chunk.copy_from_slice(&v[..chunk.len()]);
     }
+    mem.write(0, &all);
 }
 
 #[test]

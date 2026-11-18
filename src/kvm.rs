@@ -51,6 +51,11 @@ pub struct KvmVm {
     injected: bool,
     /// Registres système à la création du vCPU (réinitialisation).
     reset_sregs: kvm_bindings::kvm_sregs,
+    /// Slots de RAM (numéro, début, fin) et leur adresse hôte : journal des
+    /// pages modifiées pour la surveillance du code traduit.
+    ram_slots: Vec<(u32, usize, usize)>,
+    /// Journal en place (`None` : pas encore essayé).
+    dirty_log: Option<bool>,
 }
 
 impl KvmVm {
@@ -99,7 +104,21 @@ impl KvmVm {
         vcpu.set_msrs(&pat)?;
         let reset_sregs = vcpu.get_sregs()?;
         let hw_bp = hw_breakpoints()?;
-        let vm = Self { _kvm: kvm, vm, vcpu, mem, vga_mapped: false.into(), single_step: false, hw_bp, resume_rf: false, injected: false, reset_sregs };
+        let ram_slots = regions.iter().enumerate().filter(|(_, r)| !r.readonly).map(|(i, r)| (i as u32, r.start, r.end)).collect();
+        let vm = Self {
+            _kvm: kvm,
+            vm,
+            vcpu,
+            mem,
+            vga_mapped: false.into(),
+            single_step: false,
+            hw_bp,
+            resume_rf: false,
+            injected: false,
+            reset_sregs,
+            ram_slots,
+            dirty_log: None,
+        };
         if !vm.hw_bp.is_empty() {
             vm.arm_single_step()?;
         }
@@ -146,6 +165,70 @@ impl KvmVm {
         unsafe { self.vm.set_user_memory_region(region)? };
         self.vga_mapped.set(true);
         Ok(())
+    }
+
+    /// Journal des pages modifiées sur les slots de RAM, protection manuelle
+    /// et bits initialement levés : aucune page n'est protégée (ni découpée)
+    /// avant `protect_pages`. Activé au premier besoin ; faux si KVM ne sait
+    /// pas faire.
+    fn enable_dirty_log(&mut self) -> bool {
+        if let Some(ok) = self.dirty_log {
+            return ok;
+        }
+        use kvm_bindings::{KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, KVM_DIRTY_LOG_INITIALLY_SET, KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE, KVM_MEM_LOG_DIRTY_PAGES};
+        let want = KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE | KVM_DIRTY_LOG_INITIALLY_SET;
+        let caps = self.vm.check_extension_raw(libc::c_ulong::from(KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2));
+        let mut ok = caps > 0 && caps as u32 & want == want;
+        if ok {
+            let cap = kvm_bindings::kvm_enable_cap { cap: KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, args: [u64::from(want), 0, 0, 0], ..Default::default() };
+            ok = self.vm.enable_cap(&cap).is_ok();
+        }
+        for &(slot, start, end) in &self.ram_slots {
+            if !ok {
+                break;
+            }
+            let region = kvm_userspace_memory_region {
+                slot,
+                flags: KVM_MEM_LOG_DIRTY_PAGES,
+                guest_phys_addr: start as u64,
+                memory_size: (end - start) as u64,
+                // SAFETY: dans notre mappage, comme à la création du slot.
+                userspace_addr: unsafe { self.mem.ptr.add(start) } as u64,
+            };
+            // SAFETY: même slot, mêmes bornes : seuls les drapeaux changent.
+            ok = unsafe { self.vm.set_user_memory_region(region) }.is_ok();
+        }
+        self.dirty_log = Some(ok);
+        ok
+    }
+
+    /// Slot de RAM d'une page : (numéro, première page du slot, taille).
+    fn page_slot(&self, page: u32) -> Option<(u32, u32, usize)> {
+        let a = (page as usize) << 12;
+        self.ram_slots.iter().find(|&&(_, s, e)| a >= s && a + 0x1000 <= e).map(|&(slot, s, e)| (slot, (s >> 12) as u32, e - s))
+    }
+
+    /// Protège `pages` (bits du journal effacés : la prochaine écriture de
+    /// l'invité y sera notée). Pages hors des slots de RAM ignorées.
+    fn protect_pages(&self, pages: &[u32]) {
+        for &p in pages {
+            let Some((slot, first, size)) = self.page_slot(p) else { continue };
+            let rel = p - first;
+            // Par blocs de 64 pages alignés sur le slot (exigence de KVM).
+            let chunk = rel & !63;
+            let num = 64.min(((size >> 12) as u32) - chunk);
+            let mut bitmap = [1u64 << (rel - chunk)];
+            let clear = kvm_bindings::kvm_clear_dirty_log {
+                slot,
+                num_pages: num,
+                first_page: u64::from(chunk),
+                __bindgen_anon_1: kvm_bindings::kvm_clear_dirty_log__bindgen_ty_1 { dirty_bitmap: bitmap.as_mut_ptr().cast() },
+            };
+            // KVM_CLEAR_DIRTY_LOG = _IOWR(KVMIO, 0xC0, struct kvm_clear_dirty_log).
+            const KVM_CLEAR_DIRTY_LOG: libc::c_ulong = 0xC018_AEC0;
+            // SAFETY: structure et bitmap valides pendant l'appel.
+            unsafe { libc::ioctl(std::os::fd::AsRawFd::as_raw_fd(&self.vm), KVM_CLEAR_DIRTY_LOG, &clear) };
+        }
     }
 
     /// Porte A20 : HMA sur la mémoire de 1 Mo (ouverte) ou repliée sur 0.
@@ -332,6 +415,40 @@ impl Backend for KvmVm {
 
     fn set_a20(&mut self, open: bool) -> Result<()> {
         self.set_a20_slot(open)
+    }
+
+    fn watch_pages(&mut self, pages: &[u32]) -> Result<bool> {
+        if !self.enable_dirty_log() {
+            return Ok(false);
+        }
+        self.protect_pages(pages);
+        Ok(true)
+    }
+
+    fn watched_written(&mut self, pages: &[u32], out: &mut Vec<u32>) -> Result<bool> {
+        if self.dirty_log != Some(true) {
+            return Ok(false);
+        }
+        let start = out.len();
+        let mut logs: Vec<(u32, Vec<u64>)> = Vec::new();
+        for &p in pages {
+            let Some((slot, first, size)) = self.page_slot(p) else {
+                // Hors des slots journalisés (HMA…) : tenue pour écrite.
+                out.push(p);
+                continue;
+            };
+            if !logs.iter().any(|(s, _)| *s == slot) {
+                logs.push((slot, self.vm.get_dirty_log(slot, size)?));
+            }
+            let log = &logs.iter().find(|(s, _)| *s == slot).unwrap().1;
+            let rel = (p - first) as usize;
+            if log.get(rel / 64).is_some_and(|w| w >> (rel % 64) & 1 != 0) {
+                out.push(p);
+            }
+        }
+        // Surveillées de nouveau.
+        self.protect_pages(&out[start..]);
+        Ok(true)
     }
 
     fn map_lfb(&mut self, host_addr: u64, size: usize) -> Result<()> {
