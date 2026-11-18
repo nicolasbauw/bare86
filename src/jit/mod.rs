@@ -78,6 +78,14 @@ pub struct State {
     /// époque courante décalée de 32 bits (clé = époque << 32 | EIP).
     table: u64,
     gen_hi: u64,
+    /// Un octet par page de 4 Ko : la page (ou la suivante) contient du code
+    /// traduit ; préfiltre des contrôles d'écriture.
+    code_pages: u64,
+    /// Un octet par page de 4 Ko des 4 Go : 0 si une lecture (`rtab`) ou une
+    /// écriture (`wtab`) de 1 à 4096 octets y peut se faire directement en
+    /// RAM (contrôle sans drapeaux, BMI2).
+    rtab: u64,
+    wtab: u64,
 }
 
 const OFF_FLAGS: i32 = 32;
@@ -98,6 +106,9 @@ const OFF_VRAM_READ: i32 = 136;
 const OFF_READ_AT: i32 = 144;
 const OFF_TABLE: i32 = 152;
 const OFF_GEN_HI: i32 = 160;
+const OFF_CODE_PAGES: i32 = 168;
+const OFF_RTAB: i32 = 176;
+const OFF_WTAB: i32 = 184;
 /// Entrées de la table de répartition (index : 16 bits bas de l'EIP).
 const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
@@ -213,6 +224,14 @@ pub struct Jit {
     /// plus (changer d'époque invalide tout sans rien effacer).
     dispatch: Vec<[u64; 2]>,
     code_bits: Vec<u64>,
+    code_pages: Vec<u8>,
+    /// Pages à accès direct (voir `State::rtab`) ; `wtab` = `rtab` plus les
+    /// pages de code traduit (et celles qui les précèdent).
+    rtab: Vec<u8>,
+    wtab: Vec<u8>,
+    /// Contrôles d'accès sans drapeaux (BMI2 : `shrx`) ; sinon contrôles
+    /// complets, drapeaux sauvés autour.
+    pub bmi2: bool,
     /// Instructions dont le programme réécrit l'immédiat (Doom : pas de
     /// texture des colonnes et des sols) : traduites avec l'immédiat lu en
     /// mémoire. Gardé d'un vidage à l'autre.
@@ -249,6 +268,10 @@ impl Jit {
             links: Vec::new(),
             dispatch: vec![[0; 2]; DISPATCH],
             code_bits: vec![0; mem.size().div_ceil(64) + 1],
+            code_pages: vec![0; mem.size().div_ceil(0x1000) + 1],
+            rtab: page_table(mem.size()),
+            wtab: page_table(mem.size()),
+            bmi2: std::arch::is_x86_feature_detected!("bmi2") && std::env::var_os("BARE86_JIT_NO_BMI2").is_none(),
             volatile: Default::default(),
             mem_size: mem.size(),
             epoch: 1,
@@ -262,10 +285,14 @@ impl Jit {
     pub fn flush(&mut self) {
         self.blocks.clear();
         self.links.clear();
+        // Le tampon n'est réutilisé qu'une fois plein (`block`) : les
+        // adresses ne servent qu'une fois tant qu'il reste de la place
+        // (carte des symboles de `perf` juste).
         // Les entrées de répartition visent l'ancien code.
         self.epoch += 1;
-        self.code.used = 0;
         self.code_bits.fill(0);
+        self.code_pages.fill(0);
+        self.wtab.copy_from_slice(&self.rtab);
     }
 
     /// La mémoire a pu changer hors du code traduit.
@@ -296,11 +323,18 @@ impl Jit {
         };
         let mut done = 0u64;
         let (mut activity, mut active_at) = (mmio.activity(), 0u64);
+        // Écritures directes dans un plan vues depuis le début (le code
+        // traduit ne fait que lever `State::vga_writes`).
+        let mut vga_seen = 0u64;
         loop {
             if done >= budget {
                 return (done, StopReason::Budget);
             }
-            let a = mmio.activity() + st.vga_writes;
+            if st.vga_writes != 0 {
+                vga_seen += 1;
+                st.vga_writes = 0;
+            }
+            let a = mmio.activity() + vga_seen;
             if a != activity {
                 (activity, active_at) = (a, done);
             } else if done - active_at > idle {
@@ -317,6 +351,9 @@ impl Jit {
                 st.gpr = cpu.gpr;
                 st.flags = cpu.flags;
                 st.code_bits = self.code_bits.as_ptr() as u64;
+                st.code_pages = self.code_pages.as_ptr() as u64;
+                st.rtab = self.rtab.as_ptr() as u64;
+                st.wtab = self.wtab.as_ptr() as u64;
                 st.total = 0;
                 st.chain = CHAIN_MAX;
                 st.link = 0;
@@ -451,12 +488,15 @@ impl Jit {
         for _ in 0..2 {
             // SAFETY: `used` reste dans le tampon.
             let at = unsafe { self.code.ptr.add(self.code.used) };
-            match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile, self.max_block) {
+            match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile, self.max_block, self.bmi2) {
                 Ok(Some((code, len, holes, body))) if self.code.used + code.len() <= CODE_SIZE => {
                     emitted = Some((at, code, len, holes, body));
                     break;
                 }
-                Ok(Some(_)) => self.flush(),
+                Ok(Some(_)) => {
+                    self.flush();
+                    self.code.used = 0;
+                }
                 Err(e) => {
                     if self.count_fallbacks {
                         eprintln!("[jit] assembly of {eip:08X} failed: {e}");
@@ -491,10 +531,30 @@ impl Jit {
                     if mask[i] != 0 {
                         let a = eip as usize + i;
                         self.code_bits[a / 64] |= 1 << (a % 64);
+                        // La page précédente aussi : une écriture qui commence
+                        // juste avant déborde peut-être sur ce code.
+                        self.code_pages[a >> 12] = 1;
+                        self.code_pages[(a >> 12).saturating_sub(1)] = 1;
+                        self.wtab[a >> 12] = 1;
+                        self.wtab[(a >> 12).saturating_sub(1)] = 1;
                     }
                 }
                 // SAFETY: décalage dans le code émis.
                 let body = unsafe { at.add(body) };
+                perf_map(at, code.len(), eip);
+                if let Some(dir) = std::env::var_os("BARE86_PERFMAP").filter(|d| std::path::Path::new(d).is_dir()) {
+                    let mut text = String::new();
+                    let mut g = vec![0u8; len];
+                    mem.read(eip as usize, &mut g);
+                    for i in Decoder::with_ip(32, &g, u64::from(eip), DecoderOptions::NONE) {
+                        text += &format!("{:08X} {i}\n", i.ip());
+                    }
+                    text += "----\n";
+                    for i in Decoder::with_ip(64, &code, at as u64, DecoderOptions::NONE) {
+                        text += &format!("{:X} {i}\n", i.ip() - at as u64);
+                    }
+                    let _ = std::fs::write(std::path::Path::new(&dir).join(format!("guest_{eip:08X}.txt")), text);
+                }
                 self.blocks.insert(eip, Some(Block { entry: at, body, bytes, mask, verified: self.epoch }));
                 self.stats.translated += 1;
                 at as *const u8
@@ -534,6 +594,21 @@ impl Jit {
                 }
             }
         }
+    }
+}
+
+/// Carte des symboles du code émis pour `perf` (`BARE86_PERFMAP=1`) :
+/// `/tmp/perf-<pid>.map`, un bloc par ligne, nommé d'après son EIP.
+fn perf_map(at: *const u8, len: usize, eip: u32) {
+    use std::io::Write as _;
+    static MAP: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    let map = MAP.get_or_init(|| {
+        std::env::var_os("BARE86_PERFMAP")?;
+        let path = format!("/tmp/perf-{}.map", std::process::id());
+        std::fs::File::create(path).ok().map(std::sync::Mutex::new)
+    });
+    if let Some(f) = map {
+        let _ = writeln!(f.lock().unwrap(), "{:x} {len:x} guest_{eip:08X}", at as usize);
     }
 }
 
@@ -877,6 +952,34 @@ struct Emit {
     a: CodeAssembler,
     exits: Vec<Exit>,
     mem_limit: i32,
+    bmi2: bool,
+    /// Contrôles complets rejetés en fin de bloc (`checked`).
+    deferred: Vec<Deferred>,
+}
+
+/// Contrôle complet d'un accès, émis après le corps du bloc : on y vient
+/// quand la table des pages refuse l'accès direct, on en revient à l'accès.
+struct Deferred {
+    entry: CodeLabel,
+    back: CodeLabel,
+    ip: u32,
+    count: u32,
+    size: i32,
+    write: bool,
+    live: bool,
+    vga: Option<CodeLabel>,
+}
+
+/// Table des pages à accès direct (une entrée par page des 4 Go) : refusé
+/// dans A0000–FFFFF, au-delà de la mémoire, et sur la page qui précède
+/// (un accès qui commence juste avant peut y déborder).
+fn page_table(mem_size: usize) -> Vec<u8> {
+    let limit = mem_size.saturating_sub(MEM_GUARD as usize);
+    let slow = |p: usize| {
+        let (start, end) = (p << 12, (p + 1) << 12);
+        (start < 0x10_0000 && end > 0xA_0000) || end > limit
+    };
+    (0..1usize << 20).map(|p| u8::from(slow(p) || slow(p + 1))).collect()
 }
 
 impl Emit {
@@ -905,16 +1008,32 @@ impl Emit {
     /// Sans `vga`, la fenêtre mène au chemin lent ; sinon à `vga`.
     fn guard(&mut self, ip: u32, count: u32, size: i32, write: bool, pushed: bool, vga: Option<CodeLabel>) -> Result<(), IcedError> {
         let slow = self.exit(Some(ip), count, EXIT_SLOW, pushed);
+        let smc = if write { Some(self.exit(Some(ip), count, EXIT_SMC, pushed)) } else { None };
         let a = &mut self.a;
+        let mut hi = a.create_label();
+        let mut bits = a.create_label();
+        let mut ok = a.create_label();
+        // Chemin rapide : au-dessus du premier Mo et dans la mémoire (les
+        // données d'un programme DOS/4GW).
+        a.lea(r14d, ptr(r13 - 0x10_0000))?;
+        a.cmp(r14d, self.mem_limit - 0x10_0000)?;
+        a.jb(if write { hi } else { ok })?;
         a.cmp(r13d, self.mem_limit)?;
         a.jae(slow)?;
         // [r13, r13+size) touche-t-il A0000–FFFFF ?
         a.lea(r14d, ptr(r13 - (0xA0000 - size + 1)))?;
         a.cmp(r14d, 0x60000 + size - 1)?;
         a.jb(vga.unwrap_or(slow))?;
-        if write {
-            let smc = self.exit(Some(ip), count, EXIT_SMC, pushed);
-            let a = &mut self.a;
+        a.jmp(if write { bits } else { ok })?;
+        if let Some(smc) = smc {
+            // Page sans code traduit : rien à vérifier au bit.
+            a.set_label(&mut hi)?;
+            a.mov(r14d, r13d)?;
+            a.shr(r14d, 12)?;
+            a.mov(r9, qword_ptr(r10 + OFF_CODE_PAGES))?;
+            a.cmp(byte_ptr(r9 + r14), 0)?;
+            a.je(ok)?;
+            a.set_label(&mut bits)?;
             // Bits du premier et du dernier octet écrits.
             a.mov(r9, qword_ptr(r10 + OFF_CODE_BITS))?;
             a.mov(r14d, r13d)?;
@@ -924,11 +1043,75 @@ impl Emit {
             a.and(r11d, 7)?;
             a.bt(r14d, r11d)?;
             a.jb(smc)?;
-            if size > 1 {
+            if (2..=8).contains(&size) {
+                // Le dernier octet tient dans le mot chargé (rang ≤ 14).
                 a.add(r11d, size - 1)?;
                 a.bt(r14d, r11d)?;
                 a.jb(smc)?;
+            } else if size > 8 {
+                // pushad (32 octets) : le dernier octet par son propre mot.
+                a.lea(r11d, ptr(r13 + (size - 1)))?;
+                a.mov(r14d, r11d)?;
+                a.shr(r14d, 3)?;
+                a.movzx(r14d, word_ptr(r9 + r14))?;
+                a.and(r11d, 7)?;
+                a.bt(r14d, r11d)?;
+                a.jb(smc)?;
             }
+        }
+        a.set_label(&mut ok)?;
+        Ok(())
+    }
+
+    /// Contrôle de l'accès de `size` octets à l'adresse de R13D, puis le code
+    /// qui suit fait l'accès. Avec BMI2 : table des pages, sans toucher aux
+    /// drapeaux (`shrx`, `jrcxz`) ; refusé, le contrôle complet (`guard`,
+    /// drapeaux sauvés autour) est rejeté en fin de bloc. Écrase R9, R11, R14.
+    fn checked(&mut self, ip: u32, count: u32, size: i32, write: bool, live: bool, vga: Option<CodeLabel>) -> Result<(), IcedError> {
+        let saved = live || write;
+        if !self.bmi2 {
+            if saved {
+                self.save()?;
+            }
+            self.guard(ip, count, size, write, saved, vga)?;
+            if live {
+                self.restore()?;
+            }
+            return Ok(());
+        }
+        let entry = self.a.create_label();
+        let mut fast = self.a.create_label();
+        let mut back = self.a.create_label();
+        let a = &mut self.a;
+        a.mov(r9d, 12)?;
+        a.shrx(r14d, r13d, r9d)?;
+        a.mov(r9, qword_ptr(r10 + if write { OFF_WTAB } else { OFF_RTAB }))?;
+        a.movzx(r14d, byte_ptr(r9 + r14))?;
+        a.mov(r11, rcx)?;
+        a.mov(ecx, r14d)?;
+        a.jrcxz(fast)?;
+        a.mov(rcx, r11)?;
+        a.jmp(entry)?;
+        a.set_label(&mut fast)?;
+        a.mov(rcx, r11)?;
+        a.set_label(&mut back)?;
+        self.deferred.push(Deferred { entry, back, ip, count, size, write, live, vga });
+        Ok(())
+    }
+
+    /// Les contrôles complets rejetés (`checked`).
+    fn emit_deferred(&mut self) -> Result<(), IcedError> {
+        for mut d in std::mem::take(&mut self.deferred) {
+            self.a.set_label(&mut d.entry)?;
+            let saved = d.live || d.write;
+            if saved {
+                self.save()?;
+            }
+            self.guard(d.ip, d.count, d.size, d.write, saved, d.vga)?;
+            if d.live {
+                self.restore()?;
+            }
+            self.a.jmp(d.back)?;
         }
         Ok(())
     }
@@ -969,7 +1152,7 @@ fn r32(r: Register) -> AsmRegister32 {
 fn emit_div(e: &mut Emit, ins: &Instruction, signed: bool, ip: u32, n: u32) -> Result<(), IcedError> {
     if ins.op0_kind() == OpKind::Memory {
         e.address(ins)?;
-        e.guard(ip, n, 4, false, false, None)?;
+        e.checked(ip, n, 4, false, false, None)?;
         e.a.mov(r11d, dword_ptr(r15 + r13))?;
     } else {
         let r = host_reg(ins.op0_register()).unwrap();
@@ -1063,14 +1246,16 @@ extern "sysv64" fn out_trampoline<M: Mmio>(ctx: *mut M, port: u32, size: u32, va
 }
 
 fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live: bool) -> Result<(), IcedError> {
-    let pushed = live || matches!(op, Op::Push(..) | Op::Pushad | Op::HighStore(_));
-    if pushed {
+    // Registres hauts : la fusion dans le registre complet touche aux
+    // drapeaux, sauvés autour s'ils sont vivants.
+    let high = matches!(op, Op::HighLoad(_) | Op::HighStore(_));
+    if high && live {
         e.save()?;
     }
     match *op {
         Op::Push(src, imm) => {
             e.a.lea(r13d, ptr(r12 - 4))?;
-            e.guard(ip, n, 4, true, pushed, None)?;
+            e.checked(ip, n, 4, true, live, None)?;
             match src {
                 Some(r) => e.a.mov(dword_ptr(r15 + r13), r32(r))?,
                 None => e.a.mov(dword_ptr(r15 + r13), imm)?,
@@ -1079,14 +1264,14 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
         }
         Op::Pop(dst) => {
             e.a.mov(r13d, r12d)?;
-            e.guard(ip, n, 4, false, pushed, None)?;
+            e.checked(ip, n, 4, false, live, None)?;
             e.a.mov(r11d, dword_ptr(r15 + r13))?;
             e.a.lea(r12d, ptr(r12 + 4))?;
             e.a.mov(r32(dst), r11d)?;
         }
         Op::Pushad => {
             e.a.lea(r13d, ptr(r12 - 32))?;
-            e.guard(ip, n, 32, true, pushed, None)?;
+            e.checked(ip, n, 32, true, live, None)?;
             for (k, r) in [edi, esi, ebp, r12d, ebx, edx, ecx, eax].into_iter().enumerate() {
                 e.a.mov(dword_ptr(r15 + r13 + 4 * k as i32), r)?;
             }
@@ -1094,7 +1279,7 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
         }
         Op::Popad => {
             e.a.mov(r13d, r12d)?;
-            e.guard(ip, n, 32, false, pushed, None)?;
+            e.checked(ip, n, 32, false, live, None)?;
             for (k, r) in [Some(edi), Some(esi), Some(ebp), None, Some(ebx), Some(edx), Some(ecx), Some(eax)].into_iter().enumerate() {
                 if let Some(r) = r {
                     e.a.mov(r, dword_ptr(r15 + r13 + 4 * k as i32))?;
@@ -1104,14 +1289,14 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
         }
         Op::Leave => {
             e.a.mov(r13d, ebp)?;
-            e.guard(ip, n, 4, false, pushed, None)?;
+            e.checked(ip, n, 4, false, live, None)?;
             e.a.mov(r11d, dword_ptr(r15 + r13))?;
             e.a.lea(r12d, ptr(r13 + 4))?;
             e.a.mov(ebp, r11d)?;
         }
         Op::HighLoad(full) => {
             e.address(ins)?;
-            e.guard(ip, n, 1, false, pushed, None)?;
+            e.guard(ip, n, 1, false, live, None)?;
             let f = r32(full);
             e.a.movzx(r11d, byte_ptr(r15 + r13))?;
             e.a.shl(r11d, 8)?;
@@ -1119,15 +1304,18 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
             e.a.or(f, r11d)?;
         }
         Op::HighStore(full) => {
+            if !live {
+                e.save()?;
+            }
             e.address(ins)?;
-            e.guard(ip, n, 1, true, pushed, None)?;
+            e.guard(ip, n, 1, true, true, None)?;
             e.a.mov(r11d, r32(full))?;
             e.a.shr(r11d, 8)?;
             e.a.mov(byte_ptr(r15 + r13), r11b)?;
         }
         _ => unreachable!(),
     }
-    if live {
+    if high && live {
         e.restore()?;
     }
     Ok(())
@@ -1147,6 +1335,7 @@ fn emit_block(
     rip: u64,
     volatile: &std::collections::HashSet<u32>,
     max: usize,
+    bmi2: bool,
 ) -> Result<Option<Emitted>, IcedError> {
     let all = decode_block(eip, mem, mem_size, max);
     let mut holes = Vec::new();
@@ -1186,7 +1375,13 @@ fn emit_block(
         live[i] = (live[i + 1] & !flags_written(ins)) | flags_read(ins);
     }
 
-    let mut e = Emit { a: CodeAssembler::new(64)?, exits: Vec::new(), mem_limit: (mem_size as u32).saturating_sub(MEM_GUARD) as i32 };
+    let mut e = Emit {
+        a: CodeAssembler::new(64)?,
+        exits: Vec::new(),
+        mem_limit: (mem_size as u32).saturating_sub(MEM_GUARD) as i32,
+        bmi2,
+        deferred: Vec::new(),
+    };
     // Prologue.
     for r in [rbx, rbp, r12, r13, r14, r15] {
         e.a.push(r)?;
@@ -1222,15 +1417,9 @@ fn emit_block(
                 let direct = direct_write || direct_read;
                 let mut vga = e.a.create_label();
                 let pushed = live_here || writes_memory(ins);
-                if pushed {
-                    e.save()?;
-                }
                 e.address(ins)?;
                 let size = ins.memory_size().size().max(1) as i32;
-                e.guard(ip, n, size, writes_memory(ins), pushed, direct.then_some(vga))?;
-                if live_here {
-                    e.restore()?;
-                }
+                e.checked(ip, n, size, writes_memory(ins), live_here, direct.then_some(vga))?;
                 e.a.add_instruction(*h)?;
                 if direct {
                     let slow = e.exit(Some(ip), n, EXIT_SLOW, pushed);
@@ -1244,7 +1433,7 @@ fn emit_block(
                     a.mov(r9, qword_ptr(r10 + if direct_write { OFF_VRAM } else { OFF_VRAM_READ }))?;
                     a.test(r9, r9)?;
                     a.jz(slow)?;
-                    a.add(qword_ptr(r10 + OFF_VGA_WRITES), 1)?;
+                    a.mov(byte_ptr(r10 + OFF_VGA_WRITES), 1)?;
                     if direct_read {
                         // Latches : chargés par la carte depuis cette lecture.
                         a.lea(r11d, ptr(r14 + 1))?;
@@ -1286,10 +1475,8 @@ fn emit_block(
         }
         Tail::Call(t) => {
             let ip = t.ip32();
-            e.save()?;
             e.a.lea(r13d, ptr(r12 - 4))?;
-            e.guard(ip, n, 4, true, true, None)?;
-            e.restore()?;
+            e.checked(ip, n, 4, true, true, None)?;
             e.a.mov(dword_ptr(r15 + r13), end)?;
             e.a.mov(r12d, r13d)?;
             let l = e.exit(Some(t.near_branch32()), n + 1, EXIT_NEXT, false);
@@ -1297,10 +1484,8 @@ fn emit_block(
         }
         Tail::Ret(extra) => {
             let ip = tail_ins.unwrap().ip32();
-            e.save()?;
             e.a.mov(r13d, r12d)?;
-            e.guard(ip, n, 4, false, true, None)?;
-            e.restore()?;
+            e.checked(ip, n, 4, false, true, None)?;
             e.a.mov(r8d, dword_ptr(r15 + r13))?;
             e.a.lea(r12d, ptr(r12 + 4 + *extra as i32))?;
             let l = e.exit(None, n + 1, EXIT_NEXT, false);
@@ -1308,27 +1493,26 @@ fn emit_block(
         }
         Tail::Indirect(t) => {
             let ip = t.ip32();
-            e.save()?;
             if t.op0_kind() == OpKind::Register {
                 e.a.mov(r8d, r32(host_reg(t.op0_register()).unwrap()))?;
             } else {
                 e.address(t)?;
-                e.guard(ip, n, 4, false, true, None)?;
+                e.checked(ip, n, 4, false, true, None)?;
                 e.a.mov(r8d, dword_ptr(r15 + r13))?;
             }
             if t.flow_control() == FlowControl::IndirectCall {
                 e.a.lea(r13d, ptr(r12 - 4))?;
-                e.guard(ip, n, 4, true, true, None)?;
+                e.checked(ip, n, 4, true, true, None)?;
                 e.a.mov(dword_ptr(r15 + r13), end)?;
                 e.a.mov(r12d, r13d)?;
             }
-            e.restore()?;
             let l = e.exit(None, n + 1, EXIT_NEXT, false);
             e.a.jmp(l)?;
         }
     }
 
-    // Sorties, puis épilogue commun.
+    // Contrôles complets rejetés, puis sorties et épilogue commun.
+    e.emit_deferred()?;
     let Emit { mut a, mut exits, .. } = e;
     let mut common = a.create_label();
     // Cases de saut des sorties enchaînables : (case, sortie normale).

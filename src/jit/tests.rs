@@ -12,8 +12,11 @@ use super::*;
 use crate::interp::difftest::{Rng, interesting, undefined_flags};
 use crate::interp::{Seg, run_burst};
 
-const MEM_SIZE: usize = 0x11_0000;
+const MEM_SIZE: usize = 0x30_0000;
 const CODE_AT: u32 = 0x2000;
+/// Code au-dessus du premier Mo (chemin rapide des contrôles, préfiltre des
+/// pages de code), un cas sur deux.
+const HIGH_CODE_AT: u32 = 0x10_1000;
 
 struct NoMmio;
 
@@ -37,7 +40,11 @@ fn random_cpu(rng: &mut Rng) -> Cpu {
     for g in &mut gpr {
         // Une moitié d'adresses de la RAM (accès mémoire), une moitié de
         // valeurs limites (arithmétique).
-        *g = if rng.chance(50) { 0x10000 + rng.below(0x80000) as u32 } else { interesting(rng) };
+        *g = match rng.below(4) {
+            0 => 0x10000 + rng.below(0x80000) as u32,
+            1 => 0x10_0000 + rng.below(0x1C_0000) as u32,
+            _ => interesting(rng),
+        };
     }
     // Pile valide (push, pop, call, ret).
     gpr[4] = 0x9_0000 + (rng.below(0x1000) as u32 & !3);
@@ -117,6 +124,7 @@ fn jit_matches_interpreter() {
         fill_memory(&mem_ref, fill);
         // Séquence : instructions natives, quelques sauts conditionnels
         // courts vers l'avant, puis `hlt` (rendu au processeur).
+        let code_at = if case % 2 == 0 { CODE_AT } else { HIGH_CODE_AT };
         let n = 1 + rng.below(12) as usize;
         let mut code = Vec::new();
         for _ in 0..n {
@@ -124,7 +132,7 @@ fn jit_matches_interpreter() {
             if rng.chance(10) {
                 code.extend([0x70 + rng.below(16) as u8, 0x00]); // jcc +0
             }
-            let here = CODE_AT + code.len() as u32;
+            let here = code_at + code.len() as u32;
             match rng.below(40) {
                 // call +0 ; add esp,4
                 0 => code.extend([0xE8, 0, 0, 0, 0, 0x83, 0xC4, 0x04]),
@@ -156,11 +164,12 @@ fn jit_matches_interpreter() {
             }
         }
         code.push(0xF4);
-        mem_jit.write(CODE_AT as usize, &code);
-        mem_ref.write(CODE_AT as usize, &code);
+        mem_jit.write(code_at as usize, &code);
+        mem_ref.write(code_at as usize, &code);
         jit.flush();
 
-        let start = random_cpu(&mut rng);
+        let mut start = random_cpu(&mut rng);
+        start.ip = code_at;
         // Référence : l'interpréteur, pas à pas, avec les drapeaux non
         // définis encore visibles à la fin.
         let mut reference = start.clone();
@@ -204,7 +213,7 @@ fn jit_matches_interpreter() {
         // Arrêt avant `hlt` (instruction refusée) : les drapeaux que la suite
         // écrit avant de les lire sont morts, le contrôle d'adresse du
         // traducteur a pu les écraser.
-        let dead = if reference.ip as usize != CODE_AT as usize + code.len() - 1 { dead_flags(&mem_ref, reference.ip) } else { 0 };
+        let dead = if reference.ip as usize != code_at as usize + code.len() - 1 { dead_flags(&mem_ref, reference.ip) } else { 0 };
         let mask = !(undefined | dead | 0x20 | 0x8);
         let mut diffs = Vec::new();
         if ours.gpr != reference.gpr {
@@ -226,10 +235,10 @@ fn jit_matches_interpreter() {
             diffs.push(format!("memory at {i:06X}: ours {:02X} ref {:02X}", a[i], b[i]));
         }
         if !diffs.is_empty() && std::env::var_os("JIT_TRACE").is_some() {
-            trace(&code, &start, fill);
+            trace(&code, &start, fill, code_at);
         }
         if !diffs.is_empty() {
-            let listing: Vec<String> = Decoder::with_ip(32, &code, u64::from(CODE_AT), DecoderOptions::NONE)
+            let listing: Vec<String> = Decoder::with_ip(32, &code, u64::from(code_at), DecoderOptions::NONE)
                 .into_iter()
                 .map(|i| format!("  {:08X} {i}", i.ip()))
                 .collect();
@@ -250,48 +259,6 @@ fn jit_matches_interpreter() {
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n\n"));
 }
 
-/// Rejoue `code` préfixe par préfixe et affiche le premier qui diverge.
-fn bisect(code: &[u8], start: &Cpu, fill: u64) {
-    let instrs: Vec<Instruction> = Decoder::with_ip(32, code, u64::from(CODE_AT), DecoderOptions::NONE).into_iter().collect();
-    let mem_jit = GuestMem::new(MEM_SIZE).unwrap();
-    let mem_ref = GuestMem::new(MEM_SIZE).unwrap();
-    let mut jit = Jit::new(&mem_jit).unwrap();
-    for k in 1..instrs.len() {
-        let end = (instrs[k - 1].next_ip() as u32 - CODE_AT) as usize;
-        let mut c = code[..end].to_vec();
-        c.push(0xF4);
-        fill_memory(&mem_jit, fill);
-        fill_memory(&mem_ref, fill);
-        mem_jit.write(CODE_AT as usize, &c);
-        mem_ref.write(CODE_AT as usize, &c);
-        jit.flush();
-        let mut r = start.clone();
-        while run_burst(&mut r, &mem_ref, &mut NoMmio, u64::MAX, 1).reason != StopReason::Unsupported {}
-        let mut o = start.clone();
-        jit.run(&mut o, &mem_jit, &mut NoMmio, u64::MAX, u64::MAX);
-        let mut before = start.clone();
-        let mut stepped = 0;
-        // État avant la k-ième instruction (référence), pour ses drapeaux non définis.
-        {
-            let mut t = start.clone();
-            let m2 = GuestMem::new(MEM_SIZE).unwrap();
-            fill_memory(&m2, fill);
-            m2.write(CODE_AT as usize, &c);
-            while stepped + 1 < k && run_burst(&mut t, &m2, &mut NoMmio, u64::MAX, 1).reason != StopReason::Unsupported {
-                stepped += 1;
-            }
-            before = if stepped + 1 == k { t } else { before };
-        }
-        let mask = !(undefined_flags(&instrs[k - 1], &before) | 0x28);
-        let (mut a, mut b) = (vec![0u8; MEM_SIZE], vec![0u8; MEM_SIZE]);
-        mem_jit.read(0, &mut a);
-        mem_ref.read(0, &mut b);
-        if o.gpr != r.gpr || o.flags & mask != r.flags & mask || a != b {
-            println!("first divergence after {k} instructions (last: {}):\n ours {:08X?} {:08X}\n ref  {:08X?} {:08X}\n stats {:?}", instrs[k - 1], o.gpr, o.flags, r.gpr, r.flags, jit.stats);
-            return;
-        }
-    }
-}
 
 /// Drapeaux écrits avant d'être lus par le code qui suit `eip` (jusqu'à `hlt`).
 fn dead_flags(mem: &GuestMem, eip: u32) -> u32 {
@@ -313,12 +280,12 @@ fn dead_flags(mem: &GuestMem, eip: u32) -> u32 {
 
 /// Rejoue `code` pas à pas (blocs d'une instruction) contre l'interpréteur
 /// et affiche le premier pas qui diverge.
-fn trace(code: &[u8], start: &Cpu, fill: u64) {
+fn trace(code: &[u8], start: &Cpu, fill: u64, code_at: u32) {
     let mem_jit = GuestMem::new(MEM_SIZE).unwrap();
     let mem_ref = GuestMem::new(MEM_SIZE).unwrap();
     for m in [&mem_jit, &mem_ref] {
         fill_memory(m, fill);
-        m.write(CODE_AT as usize, code);
+        m.write(code_at as usize, code);
     }
     let mut jit = Jit::new(&mem_jit).unwrap();
     jit.max_block = 1;
