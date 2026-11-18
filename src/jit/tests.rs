@@ -392,3 +392,36 @@ fn chained_loop() {
     assert_eq!(cpu.ip, CODE_AT + code.len() as u32 - 1);
     assert!(jit.stats.blocks_run > 3000, "{:?}", jit.stats);
 }
+
+/// Appels répétés d'un sous-programme : les `ret` passent par la table de
+/// répartition du code traduit, un `jmp ebx` aussi.
+#[test]
+fn call_ret_loop_through_dispatch() {
+    let mem = GuestMem::new(MEM_SIZE).unwrap();
+    // 2000: mov ecx,3000 ; mov ebx,2014h
+    // 200A: l: call 2018 ; dec ecx ; jnz l ; jmp ebx      (→ 2014)
+    // 2014: hlt ; nop ; nop ; nop
+    // 2018: s: add eax,ecx ; adc edx,0 ; ret
+    let code = [
+        0xB9, 0xB8, 0x0B, 0, 0, 0xBB, 0x14, 0x20, 0, 0, // mov ecx ; mov ebx
+        0xE8, 0x09, 0, 0, 0, 0x49, 0x75, 0xF8, 0xFF, 0xE3, // call ; dec ; jnz ; jmp ebx
+        0xF4, 0x90, 0x90, 0x90, // hlt
+        0x01, 0xC8, 0x83, 0xD2, 0x00, 0xC3, // add ; adc ; ret
+    ];
+    mem.write(CODE_AT as usize, &code);
+    let mut rng = Rng(9);
+    let mut cpu = random_cpu(&mut rng);
+    cpu.gpr[0] = 0;
+    cpu.gpr[2] = 0;
+    cpu.flags &= !1;
+    let stack = cpu.gpr[4];
+    let mut jit = Jit::new(&mem).unwrap();
+    let (done, reason) = jit.run(&mut cpu, &mem, &mut NoMmio, u64::MAX, u64::MAX);
+    assert_eq!(reason, StopReason::Unsupported);
+    assert_eq!(done, 2 + 3000 * 6 + 1);
+    assert_eq!(cpu.gpr[0], 3000 * 3001 / 2);
+    assert_eq!(cpu.gpr[4], stack);
+    assert_eq!(cpu.ip, 0x2014);
+    // Peu de retours à Rust : la plupart des `ret` sont servis par la table.
+    assert!(jit.stats.blocks_run > 9000, "{:?}", jit.stats);
+}

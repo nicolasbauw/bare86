@@ -74,6 +74,10 @@ pub struct State {
     /// Décalage + 1 de la dernière lecture directe (0 : aucune) : transmis
     /// à la carte pour ses latches.
     read_at: u64,
+    /// Table de répartition des sorties dynamiques (`Jit::dispatch`) et
+    /// époque courante décalée de 32 bits (clé = époque << 32 | EIP).
+    table: u64,
+    gen_hi: u64,
 }
 
 const OFF_FLAGS: i32 = 32;
@@ -92,6 +96,10 @@ const OFF_OUT_FN: i32 = 120;
 const OFF_OUT_CTX: i32 = 128;
 const OFF_VRAM_READ: i32 = 136;
 const OFF_READ_AT: i32 = 144;
+const OFF_TABLE: i32 = 152;
+const OFF_GEN_HI: i32 = 160;
+/// Entrées de la table de répartition (index : 16 bits bas de l'EIP).
+const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
 /// budget, inactivité et arrêt).
 const CHAIN_MAX: u64 = 256;
@@ -200,6 +208,10 @@ pub struct Jit {
     blocks: Map<Option<Block>>,
     /// Cases de saut redirigées vers un bloc, et leur valeur d'origine.
     links: Vec<(*mut u64, u64)>,
+    /// Répartition des sorties dynamiques (`ret`, sauts indirects) par le
+    /// code traduit : [clé, corps] ; une clé d'une autre époque ne répond
+    /// plus (changer d'époque invalide tout sans rien effacer).
+    dispatch: Vec<[u64; 2]>,
     code_bits: Vec<u64>,
     /// Instructions dont le programme réécrit l'immédiat (Doom : pas de
     /// texture des colonnes et des sols) : traduites avec l'immédiat lu en
@@ -235,6 +247,7 @@ impl Jit {
             code: CodeBuf::new()?,
             blocks: Map::default(),
             links: Vec::new(),
+            dispatch: vec![[0; 2]; DISPATCH],
             code_bits: vec![0; mem.size().div_ceil(64) + 1],
             volatile: Default::default(),
             mem_size: mem.size(),
@@ -249,6 +262,8 @@ impl Jit {
     pub fn flush(&mut self) {
         self.blocks.clear();
         self.links.clear();
+        // Les entrées de répartition visent l'ancien code.
+        self.epoch += 1;
         self.code.used = 0;
         self.code_bits.fill(0);
     }
@@ -305,6 +320,8 @@ impl Jit {
                 st.total = 0;
                 st.chain = CHAIN_MAX;
                 st.link = 0;
+                st.table = self.dispatch.as_ptr() as u64;
+                st.gen_hi = (self.epoch as u32 as u64) << 32;
                 // SAFETY: code émis par `translate` pour cet état ; R15 et
                 // les contrôles bornent les accès à la mémoire de l'invité.
                 unsafe {
@@ -403,7 +420,10 @@ impl Jit {
         if let Some(slot) = self.blocks.get_mut(&eip) {
             match slot {
                 None => return None,
-                Some(b) if b.verified == self.epoch => return Some(b.entry),
+                Some(b) if b.verified == self.epoch => {
+                    self.dispatch[eip as usize % DISPATCH] = [(self.epoch as u32 as u64) << 32 | u64::from(eip), b.body as u64];
+                    return Some(b.entry);
+                }
                 Some(b) => {
                     // SAFETY: le bloc a été lu dans la mémoire de l'invité à
                     // cette adresse (dans ses bornes) ; le vCPU est arrêté.
@@ -1258,6 +1278,9 @@ fn emit_block(
     // Cases de saut des sorties enchaînables : (case, sortie normale).
     let mut slots = Vec::new();
     for x in &mut exits {
+        // Succès de la table de répartition : émis juste après la sortie
+        // (portée de 127 octets du `jrcxz`).
+        let mut pending_hit: Option<CodeLabel> = None;
         a.set_label(&mut x.label)?;
         if x.pushed {
             a.push(qword_ptr(r10 + OFF_SAVED))?;
@@ -1288,6 +1311,30 @@ fn emit_block(
             a.lea(r9, ptr(slot))?;
             a.mov(qword_ptr(r10 + OFF_LINK), r9)?;
             slots.push((slot, unlinked));
+        } else if x.kind == EXIT_NEXT {
+            // Cible calculée (R8D) : table de répartition, sans toucher aux
+            // drapeaux (index par movzx, comparaison par lea + jrcxz).
+            let mut miss = a.create_label();
+            let hit = a.create_label();
+            a.mov(r14, rcx)?;
+            a.mov(rcx, qword_ptr(r10 + OFF_CHAIN))?;
+            a.lea(rcx, ptr(rcx - 1))?;
+            a.mov(qword_ptr(r10 + OFF_CHAIN), rcx)?;
+            a.jrcxz(miss)?;
+            a.movzx(r11d, r8w)?;
+            a.lea(r11, ptr(r11 + r11))?;
+            a.mov(r9, qword_ptr(r10 + OFF_TABLE))?;
+            a.lea(r11, ptr(r9 + r11 * 8))?;
+            a.mov(r9, qword_ptr(r10 + OFF_GEN_HI))?;
+            a.lea(r9, ptr(r9 + r8))?;
+            a.not(r9)?;
+            a.mov(rcx, qword_ptr(r11))?;
+            a.lea(rcx, ptr(rcx + r9 + 1))?;
+            a.jrcxz(hit)?;
+            a.set_label(&mut miss)?;
+            a.mov(rcx, r14)?;
+            a.mov(qword_ptr(r10 + OFF_LINK), 0)?;
+            pending_hit = Some(hit);
         } else {
             a.mov(qword_ptr(r10 + OFF_LINK), 0)?;
         }
@@ -1300,6 +1347,11 @@ fn emit_block(
             a.mov(dword_ptr(r10 + OFF_ADDR), r13d)?;
         }
         a.jmp(common)?;
+        if let Some(mut hit) = pending_hit {
+            a.set_label(&mut hit)?;
+            a.mov(rcx, r14)?;
+            a.jmp(qword_ptr(r11 + 8))?;
+        }
     }
     a.set_label(&mut common)?;
     a.pushfq()?;
