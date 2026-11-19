@@ -205,6 +205,7 @@ impl Xms {
     /// AX=0 et BL = code d'erreur. `a20` : état réel de la porte, que les
     /// fonctions 03h à 06h modifient.
     pub fn call(&mut self, cpu: &mut Cpu, mem: &GuestMem, a20: &mut bool) -> Flow {
+        if std::env::var_os("XMSDBG").is_some() { eprintln!("XMSDBG in  {:08X?}", cpu.gpr); } // XMSDBG
         let ah = cpu.hi(AX);
         let r: Result<(), u8> = match ah {
             // Version 3.00, révision 3.95, HMA présente.
