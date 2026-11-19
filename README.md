@@ -42,7 +42,7 @@ difference is under the hood, and shows with demanding late-90s games.
   game (DOS/4GW without paging) runs translated on the host around its
   video work, writing straight into the video planes, and goes back to
   native execution as soon as it stops touching the card. Doom's `timedemo
-  demo1` goes from about 105 to about 850 frames per second; Rise of the
+  demo1` goes from about 105 to about 960 frames per second; Rise of the
   Triad, capped at 35, uses about half the processor. Games that do not need
   it (mode 13h, VESA, 16-bit code) never see it; `--no-jit` (or `jit = off`
   in a profile) turns it off.
@@ -497,7 +497,13 @@ DIFFTEST_CASES=100000 DIFFTEST_SEED=7 cargo test --release interpreter_matches_c
 The dynamic translator is checked the same way against the interpreter, on
 random instruction sequences (`JIT_TRACE=1` replays a failing case one
 instruction at a time); `BARE86_JIT=count` prints at the end what it left
-to the interpreter:
+to the interpreter. Translated code reaches guest memory through a second
+mapping of it where the video window, the ROM and translated code pages are
+protected: an access that faults there is taken back by a `SIGSEGV`
+handler and that instruction is translated with explicit checks from then
+on (`BARE86_JIT_NO_FASTMEM=1` checks every access, `BARE86_JIT_NO_BMI2=1`
+without the BMI2 fast checks; `BARE86_PERFMAP=1` writes a symbol map of the
+translated code for `perf`):
 
 ```sh
 JIT_CASES=100000 JIT_SEED=7 cargo test --release jit_matches_interpreter -- --nocapture
