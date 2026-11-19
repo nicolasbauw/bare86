@@ -531,6 +531,8 @@ pub struct Pc<B: Backend = KvmVm> {
     started: Instant,
     limit: Option<Duration>,
     last_frame: Option<Instant>,
+    /// Enregistrement vidéo (`--video`).
+    video: Option<crate::video::VideoOut>,
     /// Dernier rafraîchissement de l'écran du terminal.
     last_render: Option<Instant>,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
@@ -776,6 +778,7 @@ impl<B: Backend> Pc<B> {
             started: Instant::now(),
             limit: cfg.limit,
             last_frame: None,
+            video: None,
             input_paused_until: None,
             until_text: None,
             stepping: false,
@@ -1716,6 +1719,11 @@ impl<B: Backend> Pc<B> {
         if self.host.wants_frames {
             self.present_frame();
         }
+        if self.video.as_ref().is_some_and(|v| v.due(Instant::now())) {
+            let frame = self.frame();
+            if let Some(v) = &mut self.video {
+                v.push(frame.as_ref().map(|(w, h, px)| (*w, *h, &px[..])), Instant::now());
+            }        }
         if self.input_finished() {
             return Err("end of input: session stopped".into());
         }
@@ -2075,6 +2083,12 @@ impl<B: Backend> Pc<B> {
     }
 
     /// Police du mode texte (rendu en image : fenêtre, captures).
+    /// Enregistre la session en vidéo (`--video`).
+    pub fn record_video(&mut self, path: &str) -> std::result::Result<(), String> {
+        self.video = Some(crate::video::VideoOut::start(path)?);
+        Ok(())
+    }
+
     pub fn set_font(&mut self, font: crate::font::Font) {
         self.font = Some(font);
     }

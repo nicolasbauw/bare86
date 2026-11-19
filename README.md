@@ -237,6 +237,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--screen` | Print the text screen when the program ends |
 | `--shot F.png` | Screenshot when the program ends |
 | `--wav F.wav` | Record the sound to a file (without a window) |
+| `--video F.mkv` | Record the screen at 70 frames per second, 640×480, through `ffmpeg` (to compare with a reference with `tools/compare.py`) |
 
 **Scripting and diagnostics**
 
@@ -568,6 +569,7 @@ writes the game's memory; `src/opengl/mod.rs` handles them by hand.
 |---|---|
 | `netbench.sh IMAGE MB [RUNS]` | Network throughput: a FreeDOS image downloads a file from a host HTTP server, timed from the `BARE86_NETLOG=1` TCP trace |
 | `is5x.py CABDIR DEST` | Extract InstallShield 5 cabinets that `unshield` cannot (some game demos) |
+| `compare.py --ref REF --video OURS --out DIR` | Compare a session recorded with `--video` with a reference video of the same demo or game (a real PC, DOSBox, a downloaded video): each 20-second window is found in the reference by its pictures, giving the drift (the program running slower or faster than in the reference), distinct frames per second on both sides, and side-by-side sheets at the same moments |
 | `terminus_cp437.py` | Rebuild the built-in font `fonts/terminus-cp437-8x16.bin` from Terminus |
 
 ## Status and limits

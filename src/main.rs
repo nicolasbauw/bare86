@@ -18,6 +18,7 @@ mod font;
 mod gameport;
 mod glide;
 mod gus;
+mod video;
 mod hle;
 mod host;
 mod ide;
@@ -108,6 +109,8 @@ usage: bare86 [options] [program [arguments…]]
   --term         show the text screen live in the terminal
   --shot F.png   screenshot when the program ends
   --wav F.wav    record the sound to a file (without a window)
+  --video F.mkv  record the screen at 70 frames per second, 640×480 (needs
+                 ffmpeg), for comparisons with a reference (tools/compare.py)
   --window       SDL3 window (vCPU on its own thread)
   --window-auto  window shown at the first graphics mode (VGA, VESA, Glide,
                  OpenGL); until then, and for text-mode programs, the
@@ -154,6 +157,7 @@ fn main() -> ExitCode {
     // `--window` explicite : fenêtre montrée d'emblée, même avec `--window-auto`.
     let mut window_now = false;
     let mut wav: Option<String> = None;
+    let mut video: Option<String> = None;
     let mut stats = false;
     let mut font: Option<std::path::PathBuf> = None;
     let mut keys = None;
@@ -379,6 +383,7 @@ fn main() -> ExitCode {
             "--term" => term = true,
             "--shot" => shot = args.next(),
             "--wav" => wav = args.next(),
+            "--video" => video = args.next(),
             "--window" => {
                 window = true;
                 window_now = true;
@@ -452,7 +457,7 @@ fn main() -> ExitCode {
     cfg.opl = opl_choice.unwrap_or(card_opl);
     // Arguments à traduire : ceux de la ligne de commande seulement.
     let program_args = if host_paths { Some(program_args) } else { None };
-    let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, font, stats, boot };
+    let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, video, font, stats, boot };
     let result = if window {
         let host_keys = keys;
         let menu = menu::State {
@@ -506,6 +511,7 @@ struct RunOptions {
     debug: bool,
     screen: bool,
     shot: Option<String>,
+    video: Option<String>,
     font: Option<std::path::PathBuf>,
     stats: bool,
     boot: bool,
@@ -517,6 +523,9 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
         Some(p) => font::Font::load(p)?,
         None => font::Font::builtin(),
     });
+    if let Some(v) = &o.video {
+        pc.record_video(v)?;
+    }
     match &o.program {
         _ if o.boot => {
             let drive = if !o.cfg.disks[0].is_empty() { 0 } else if !o.cfg.disks[2].is_empty() { 0x80 } else { 1 };
