@@ -943,6 +943,50 @@ mod tests {
         assert_eq!(v.plane_byte(0, 20), 0xF0);
     }
 
+    /// Mode X : décalage fin au pixel (attributs 13h) et écran partagé
+    /// (comparaison de ligne), décalage annulé dessous (attributs 10h, bit 5).
+    #[test]
+    fn pel_panning_and_split_screen() {
+        let mem = crate::mem::GuestMem::new(0x10_0000).unwrap();
+        let mut v = Vga::new().unwrap();
+        v.set_mode(0x13, true);
+        set(&mut v, 0x3C4, 4, 0x06); // non chaîné
+        for i in 0..256 {
+            v.dac[i] = [i as u8 & 0x3F, 0, 0];
+        }
+        // Pixel x de la ligne : plan x & 3, octet x / 4. En 100h (haut de
+        // l'écran) : 10, 11, 12, 13, 20, 21… ; en 0 (écran partagé) : 30…
+        for p in 0..4 {
+            v.vram.set(p, 0x100, 10 + p as u8);
+            v.vram.set(p, 0x101, 20 + p as u8);
+            v.vram.set(p, 0, 30 + p as u8);
+        }
+        set(&mut v, 0x3D4, 0x0C, 0x01);
+        set(&mut v, 0x3D4, 0x0D, 0x00);
+        let attr = |v: &mut Vga, i: u8, x: u8| {
+            v.port_read(0x3DA);
+            v.port_write(0x3C0, i | 0x20);
+            v.port_write(0x3C0, x);
+        };
+        attr(&mut v, 0x13, 2); // un pixel
+        let red = |c: u32| ((c >> 16) * 63 + 127) / 255;
+        let mut out = Vec::new();
+        let (w, _) = crate::render::render(&v, &mem, &mut out).unwrap();
+        assert_eq!(red(out[0]), 11);
+        assert_eq!(red(out[3]), 20);
+        // Écran partagé après la ligne de balayage 1 (lignes doublées : à
+        // partir de la ligne affichée 1), sans décalage dessous.
+        set(&mut v, 0x3D4, 0x18, 0x01);
+        let (c7, c9) = (v.crtc[7] & !0x10, v.crtc[9] & !0x40);
+        set(&mut v, 0x3D4, 0x07, c7);
+        set(&mut v, 0x3D4, 0x09, c9);
+        attr(&mut v, 0x10, 0x41 | 0x20);
+        crate::render::render(&v, &mem, &mut out).unwrap();
+        assert_eq!(red(out[0]), 11);
+        assert_eq!(red(out[w]), 30);
+        assert_eq!(red(out[w + 1]), 31);
+    }
+
     #[test]
     fn vbe_direct_color_rendering() {
         let mem = crate::mem::GuestMem::new(0x10_0000).unwrap();

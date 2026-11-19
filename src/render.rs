@@ -5,8 +5,9 @@
 //! pas de ligne, adresse de départ). Le mode texte demande une police
 //! (question ouverte) : il est rendu par le terminal en attendant.
 //!
-//! Non gérés pour l'instant : décalage horizontal (panning), écran partagé
-//! (line compare), modes 200 lignes CGA hors 4, 5 et 6.
+//! Décalage fin au pixel (registre d'attributs 13h) et écran partagé
+//! (comparaison de ligne du CRTC) gérés pour les modes palettisés. Non gérés
+//! : modes 200 lignes CGA hors 4, 5 et 6.
 
 use crate::mem::GuestMem;
 use crate::vga::Vga;
@@ -39,6 +40,24 @@ pub struct Geometry {
     /// Octets par ligne (dans la mémoire du mode).
     pitch: usize,
     start: usize,
+    /// Ligne de balayage de comparaison (écran partagé) : au-delà,
+    /// l'adresse repart de 0.
+    line_compare: usize,
+    /// Décalage fin annulé sous l'écran partagé (attributs 10h, bit 5).
+    split_unpanned: bool,
+}
+
+impl Geometry {
+    /// Adresse (en unités du CRTC) du début de la ligne affichée `y`, et si
+    /// le décalage fin s'y applique.
+    fn row(&self, y: usize) -> (usize, bool) {
+        let scan = y * self.repeat;
+        if scan > self.line_compare {
+            ((scan - self.line_compare - 1) / self.repeat * self.pitch, !self.split_unpanned)
+        } else {
+            (self.start + y * self.pitch, true)
+        }
+    }
 }
 
 fn geometry(vga: &Vga, pixels_per_char: usize) -> Geometry {
@@ -55,7 +74,9 @@ fn geometry(vga: &Vga, pixels_per_char: usize) -> Geometry {
     }
     let height = (vde + 1) / repeat;
     let start = (usize::from(c[0x0C]) << 8) | usize::from(c[0x0D]);
-    Geometry { width, height, repeat, pitch: usize::from(c[0x13]) * 2, start }
+    let line_compare = usize::from(c[0x18]) | (usize::from(c[7] & 0x10) << 4) | (usize::from(c[9] & 0x40) << 3);
+    let split_unpanned = vga.attr[0x10] & 0x20 != 0;
+    Geometry { width, height, repeat, pitch: usize::from(c[0x13]) * 2, start, line_compare, split_unpanned }
 }
 
 /// Mode graphique (et non texte) : mêmes conditions que `render`.
@@ -81,20 +102,27 @@ pub fn render(vga: &Vga, mem: &GuestMem, out: &mut Vec<u32>) -> Option<(usize, u
         // (le rendu se fait dans le thread du vCPU : ≈ 1 ms → ≈ 0,1 ms).
         let g = geometry(vga, 4);
         let lut: [u32; 256] = std::array::from_fn(|i| dac_rgb(vga, i as u8));
+        // Décalage fin : 0, 2, 4, 6 → 0 à 3 pixels (deux points par pixel).
+        let pan = usize::from(vga.attr[0x13] & 7) / 2;
         out.clear();
         out.reserve(g.width * g.height);
         if vga.chain4() {
             // Adressage en doubles mots : 4 octets par adresse du CRTC.
             let lin = vga.region(crate::vga::LINEAR);
             for y in 0..g.height {
-                let base = g.start * 4 + y * g.pitch * 4;
+                let (row, panned) = g.row(y);
+                let base = row * 4 + if panned { pan } else { 0 };
                 out.extend((0..g.width).map(|x| lut[usize::from(lin[(base + x) & 0xFFFF])]));
             }
         } else {
             let planes = [vga.region(0), vga.region(1), vga.region(2), vga.region(3)];
             for y in 0..g.height {
-                let row = g.start + y * g.pitch;
-                out.extend((0..g.width).map(|x| lut[usize::from(planes[x & 3][(row + x / 4) & 0xFFFF])]));
+                let (row, panned) = g.row(y);
+                let p = if panned { pan } else { 0 };
+                out.extend((0..g.width).map(|x| {
+                    let x = x + p;
+                    lut[usize::from(planes[x & 3][(row + x / 4) & 0xFFFF])]
+                }));
             }
         }
         return Some((g.width, g.height));
@@ -105,9 +133,12 @@ pub fn render(vga: &Vga, mem: &GuestMem, out: &mut Vec<u32>) -> Option<(usize, u
     let planes = [vga.region(0), vga.region(1), vga.region(2), vga.region(3)];
     out.clear();
     out.reserve(g.width * g.height);
+    let pan = usize::from(vga.attr[0x13] & 7);
     for y in 0..g.height {
-        let line = g.start + y * g.pitch;
+        let (line, panned) = g.row(y);
+        let p = if panned { pan } else { 0 };
         out.extend((0..g.width).map(|x| {
+            let x = x + p;
             let off = (line + x / 8) & 0xFFFF;
             let bit = 7 - (x & 7);
             let c = (0..4).fold(0usize, |acc, p| acc | (usize::from((planes[p][off] >> bit) & 1) << p));
