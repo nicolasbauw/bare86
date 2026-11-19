@@ -96,7 +96,7 @@ usage: bare86 [options] [program [arguments…]]
                  in a profile, one \"set = NAME=VALUE\" line each), e.g.
                  DPMILDR=16 for some Win32 programs under HX
   --mips N       throttle to N million instructions per second
-  --mem MB       total memory in MB (default 16)
+  --mem MB       total memory in MB (default 64)
   --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
   --trace-int    log of interrupts serviced by the host
   --trace-io     report I/O ports with no device

@@ -157,7 +157,7 @@ fn choices(f: Field) -> Option<(&'static str, &'static [(Option<&'static str>, &
             ],
         ),
         Field::Speed => ("mips", &[(None, "unthrottled"), (Some("3"), "3 MIPS"), (Some("6"), "6 MIPS"), (Some("12"), "12 MIPS"), (Some("25"), "25 MIPS"), (Some("50"), "50 MIPS"), (Some("100"), "100 MIPS"), (Some("200"), "200 MIPS"), (Some("400"), "400 MIPS")]),
-        Field::Memory => ("mem", &[(Some("4"), "4 MB"), (Some("8"), "8 MB"), (None, "16 MB"), (Some("32"), "32 MB"), (Some("64"), "64 MB")]),
+        Field::Memory => ("mem", &[(Some("4"), "4 MB"), (Some("8"), "8 MB"), (Some("16"), "16 MB"), (Some("32"), "32 MB"), (None, "64 MB")]),
         _ => return None,
     })
 }

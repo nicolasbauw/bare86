@@ -27,7 +27,10 @@ fn machine_with_input(cfg: &Config, image: &[u8], input: &[InputEvent]) -> (Pc, 
 }
 
 fn run(image: &[u8]) -> (u8, String, Pc) {
-    let (mut pc, out) = machine(&Config::default(), image);
+    // Machine de 16 Mo : les programmes de test en vérifient le découpage
+    // (CMOS, INT 15h E801h).
+    let cfg = Config { extended_kb: 15 * 1024, ..Config::default() };
+    let (mut pc, out) = machine(&cfg, image);
     let code = pc.run().expect("exécution");
     let text = String::from_utf8_lossy(&out.0.borrow()).into_owned();
     (code, text, pc)
