@@ -387,6 +387,11 @@ driver, EMS in a page frame at E000h. The environment holds
 `BLASTER=A220 I5 D1 H5 P330 T6` (`A220 I5 D1 T4` with a Sound Blaster Pro), so that
 games find the Sound Blaster and the MPU-401.
 
+Programs built with Turbo Pascal 7 or Borland Pascal 7 and its CRT unit stop
+with "Runtime error 200" on any modern processor: the `Delay` calibration
+overflows. The built-in DOS fixes it in memory when such a program starts, as
+the TPPATCH tool did on disk. Tested with Second Reality (Future Crew, 1993).
+
 ## Booting a real DOS
 
 With `--boot`, Bare86 starts the boot sector of A: (or of C: without a floppy)
