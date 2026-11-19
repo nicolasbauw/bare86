@@ -42,7 +42,7 @@ difference is under the hood, and shows with demanding late-90s games.
   game (DOS/4GW without paging) runs translated on the host around its
   video work, writing straight into the video planes, and goes back to
   native execution as soon as it stops touching the card. Doom's `timedemo
-  demo1` goes from about 105 to about 960 frames per second; Rise of the
+  demo1` goes from about 105 to about 1,100 frames per second; Rise of the
   Triad, capped at 35, uses about half the processor. Games that do not need
   it (mode 13h, VESA, 16-bit code) never see it; `--no-jit` (or `jit = off`
   in a profile) turns it off.
