@@ -125,6 +125,11 @@ const IDLE_LIMIT: u64 = 256;
 const JIT_IDLE: u64 = 8192;
 /// Plafond d'instructions par rafale interprétée.
 const BURST_BUDGET: u64 = 100_000;
+/// Plafond d'une rafale traduite (≈ 20 ms au pire) : elle rend surtout la
+/// main au signal du battement (`timer::kick_pending`), comme le vCPU ; un
+/// plafond de 100 000 coupait les boucles de rendu de Doom toutes les
+/// ≈ 150 µs (≈ 40 000 allers-retours avec le natif par timedemo).
+const JIT_BUDGET: u64 = 10_000_000;
 
 #[derive(Clone)]
 pub struct Config {
@@ -1505,7 +1510,7 @@ impl<B: Backend> Pc<B> {
                         self.jit = Some(j);
                     }
                     let jit = self.jit.as_mut().unwrap();
-                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, BURST_BUDGET, JIT_IDLE)?;
+                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, JIT_BUDGET, JIT_IDLE)?;
                     self.stats.jit_bursts += 1;
                     self.stats.jit_instructions += b.instructions;
                     self.stats.jit_fallbacks = jit.stats.interp_steps;

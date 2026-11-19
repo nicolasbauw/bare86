@@ -473,7 +473,7 @@ impl Jit {
             } else if done - active_at > idle {
                 return (done, StopReason::Idle);
             }
-            if mmio.stop() {
+            if mmio.stop() || crate::timer::kick_pending() {
                 return (done, StopReason::Stopped);
             }
             if !eligible(cpu) {

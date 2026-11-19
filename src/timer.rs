@@ -9,19 +9,30 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// Signal arrivé et pas encore vu par la boucle du vCPU. Hors de `KVM_RUN`
-/// (pendant le service d'une sortie de VM), le signal n'interrompt rien : sans
-/// ce drapeau, la sonde d'attente active qui suit un réveil se perdait une
-/// fois sur quelques-unes, et le vCPU tournait à vide jusqu'au battement.
-static KICKED: AtomicBool = AtomicBool::new(false);
+// Signal arrivé et pas encore vu par la boucle du vCPU. Hors de `KVM_RUN`
+// (pendant le service d'une sortie de VM), le signal n'interrompt rien : sans
+// ce drapeau, la sonde d'attente active qui suit un réveil se perdait une
+// fois sur quelques-unes, et le vCPU tournait à vide jusqu'au battement.
+// Propre au thread : le signal vise le thread du vCPU et son gestionnaire
+// s'y exécute (les tests font tourner plusieurs machines à la fois).
+thread_local! {
+    static KICKED: AtomicBool = const { AtomicBool::new(false) };
+}
 
 extern "C" fn on_signal(_: libc::c_int) {
-    KICKED.store(true, Ordering::Relaxed);
+    KICKED.with(|k| k.store(true, Ordering::Relaxed));
 }
 
 /// Rend et efface le drapeau d'un signal reçu.
 pub fn take_kick() -> bool {
-    KICKED.swap(false, Ordering::Relaxed)
+    KICKED.with(|k| k.swap(false, Ordering::Relaxed))
+}
+
+/// Un signal est-il arrivé (sans l'effacer) ? Le traducteur dynamique,
+/// qui exécute l'invité hors de `KVM_RUN`, rend alors la main comme le
+/// ferait le vCPU, pour que l'hôte serve l'échéance.
+pub fn kick_pending() -> bool {
+    KICKED.with(|k| k.load(Ordering::Relaxed))
 }
 
 /// Signal du battement ; envoyé aussi par d'autres threads (réseau) pour
