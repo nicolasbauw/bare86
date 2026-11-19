@@ -190,6 +190,8 @@ pub const WAIT16: u16 = 0xE850;
 pub const WAIT21: u16 = 0xE860;
 /// INT 33h en ROM (AX=0003h sans sortie) et son bloc d'état (asm/bios.S).
 const INT33: u16 = 0xE870;
+/// INT 16h : AH=01h/11h à tampon vide servis dans la ROM (asm/bios.S).
+const INT16: u16 = 0xEB10;
 pub const MOUSE_STATE: usize = 0xF_E890;
 
 /// ROM BIOS en F0000 et IVT : le vecteur n pointe sur le stub F000:n*16,
@@ -214,6 +216,7 @@ pub fn install_rom(mem: &GuestMem) {
     set(0x08, INT08);
     set(0x09, INT09);
     set(0x33, INT33);
+    set(0x16, INT16);
     // EMS : segment de l'en-tête « EMMXXXX0 » (F000:E8B0), entrée en 12h.
     mem.write_u16(0x67 * 4, 0x0012);
     mem.write_u16(0x67 * 4 + 2, ROM_SEG + (0xE8B0 >> 4));

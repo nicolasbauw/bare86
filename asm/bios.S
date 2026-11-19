@@ -222,6 +222,33 @@ crt_delay_fix:
 1:  div cx
     retf
 
+    # INT 16h : AH=01h/11h (touche prête ?) servis ici sans sortie de VM
+    # quand le tampon de la BDA est vide (ZF = 1 dans le cadre) ; le reste
+    # passe par l'hôte. Des programmes l'appellent en boucle pendant leurs
+    # attentes (chargeur de Second Reality : ≈ 40 000 fois par seconde).
+    .org 0xEB10, 0xFF
+int16:
+    sti                         # comme le BIOS d'IBM
+    cmp ah, 0x01
+    je 1f
+    cmp ah, 0x11
+    jne 2f
+1:  push ds
+    push ax
+    push 0x40
+    pop ds
+    mov ax, ds:[0x1A]
+    cmp ax, ds:[0x1C]
+    pop ax
+    pop ds
+    jne 2f
+    push bp
+    mov bp, sp
+    or word ptr [bp + 6], 0x40
+    pop bp
+    iret
+2:  jmp stubs + 0x16 * 16
+
     # Table des paramètres de disquette (vecteur 1Eh, INT 13h AH=08h), à son
     # adresse traditionnelle : 1,44 Mo, 18 secteurs par piste.
     .org 0xEFC7, 0xFF
