@@ -98,6 +98,9 @@ pub struct State {
     vview_w: u64,
     vview_r: u64,
     vga_views: u64,
+    /// Opposé de `view` : RSI/RDI de l'hôte → ESI/EDI sans toucher aux
+    /// drapeaux (`lea`) après un `movs`.
+    neg_view: u64,
 }
 
 impl State {
@@ -137,6 +140,7 @@ const OFF_VIEW: i32 = 192;
 const OFF_TARGET: i32 = 200;
 const OFF_VVIEW_W: i32 = 208;
 const OFF_VVIEW_R: i32 = 216;
+const OFF_NEG_VIEW: i32 = 232;
 /// Entrées de la table de répartition (index : 16 bits bas de l'EIP).
 const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
@@ -439,6 +443,7 @@ impl Jit {
             ..Default::default()
         };
         st.set_vga_views();
+        st.neg_view = st.view.wrapping_neg();
         let mut done = 0u64;
         let (mut activity, mut active_at) = (mmio.activity(), 0u64);
         // Écritures directes dans un plan vues depuis le début (le code
@@ -1068,6 +1073,9 @@ enum Op {
     /// registres hauts ne s'encodent pas avec R13/R15.
     HighLoad(Register),
     HighStore(Register),
+    /// `movsb/w/d`, avec ou sans `rep` : fait par l'hôte dans la vue
+    /// protégée (accès directs seulement).
+    Movs(Instruction),
 }
 
 /// Fin de bloc.
@@ -1590,6 +1598,19 @@ fn vga_direct(ins: &Instruction) -> Option<bool> {
 enum SiteTarget {
     Exit(usize),
     Label(CodeLabel),
+    /// Reprise hors ligne qui remet l'état de l'invité en ordre avant de
+    /// sortir (`movs` : RSI/RDI de l'hôte → ESI/EDI).
+    Fixup(CodeLabel),
+}
+
+/// `movsb/w/d` (avec ou sans `rep`/`repne`), adressage 32 bits, source
+/// sans préfixe FS/GS.
+fn is_flat_movs(ins: &Instruction) -> bool {
+    matches!(ins.code(), Code::Movsb_m8_m8 | Code::Movsw_m16_m16 | Code::Movsd_m32_m32)
+        && !ins.has_lock_prefix()
+        && ins.op0_kind() == OpKind::MemoryESEDI
+        && ins.op1_kind() == OpKind::MemorySegESI
+        && matches!(ins.memory_segment(), Register::DS | Register::ES | Register::SS | Register::CS)
 }
 
 /// Instruction à opérande mémoire, contrôlée (`checked`) ; écriture simple
@@ -1661,6 +1682,13 @@ fn emit_block(
     let mut tail_ins = None;
     for (ins, imm) in &all {
         if ins.flow_control() == FlowControl::Next {
+            if is_flat_movs(ins) {
+                if !direct(ins.ip32()) {
+                    break;
+                }
+                body.push((*ins, Op::Movs(*ins)));
+                continue;
+            }
             match classify(ins, *imm, volatile) {
                 Some(op) => {
                     if let (Op::Volatile(_), Some((off, n))) = (&op, imm) {
@@ -1812,6 +1840,71 @@ fn emit_block(
                 site_labels.push((site, SiteTarget::Exit(stub), ip));
             }
             Op::Native(h) => emit_native_checked(&mut e, ins, h, ip, n, live_here)?,
+            Op::Movs(m) => {
+                // Copie par l'hôte dans la vue : RSI/RDI = vue + ESI/EDI.
+                // Une faute (fenêtre VGA, code traduit, hors RAM) laisse
+                // RSI/RDI/RCX à l'élément fautif (`rep movs` est
+                // interruptible) : reconvertis, l'interpréteur finit.
+                let rep = m.has_rep_prefix() || m.has_repne_prefix();
+                let stub = e.exit(Some(ip), n, EXIT_FAULT, false);
+                let a = &mut e.a;
+                let mut site = a.create_label();
+                let mut fixup = a.create_label();
+                let mut done = a.create_label();
+                a.mov(esi, esi)?;
+                a.mov(edi, edi)?;
+                a.lea(rsi, ptr(rsi + r8))?;
+                a.lea(rdi, ptr(rdi + r8))?;
+                if rep {
+                    // Comme l'interpréteur : une instruction par itération,
+                    // au moins une (la sortie compte déjà celle-ci) ; sans
+                    // toucher aux drapeaux.
+                    a.mov(ecx, ecx)?;
+                    a.jrcxz(site)?;
+                    a.mov(r9, qword_ptr(r10 + OFF_TOTAL))?;
+                    a.lea(r9, ptr(r9 + rcx - 1))?;
+                    a.mov(qword_ptr(r10 + OFF_TOTAL), r9)?;
+                }
+                a.set_label(&mut site)?;
+                match (m.code(), rep) {
+                    (Code::Movsb_m8_m8, true) => a.rep().movsb()?,
+                    (Code::Movsw_m16_m16, true) => a.rep().movsw()?,
+                    (Code::Movsd_m32_m32, true) => a.rep().movsd()?,
+                    (Code::Movsb_m8_m8, false) => a.movsb()?,
+                    (Code::Movsw_m16_m16, false) => a.movsw()?,
+                    _ => a.movsd()?,
+                }
+                for target in [None, Some(stub)] {
+                    if target.is_some() {
+                        a.set_label(&mut fixup)?;
+                        if rep {
+                            // Itérations restantes (RCX) : faites par
+                            // l'interpréteur, retirées du compte (sans
+                            // toucher aux drapeaux).
+                            a.not(rcx)?;
+                            a.mov(r9, qword_ptr(r10 + OFF_TOTAL))?;
+                            a.lea(r9, ptr(r9 + rcx + 2))?;
+                            a.mov(qword_ptr(r10 + OFF_TOTAL), r9)?;
+                            a.not(rcx)?;
+                        }
+                    }
+                    a.mov(r9, qword_ptr(r10 + OFF_NEG_VIEW))?;
+                    a.lea(rsi, ptr(rsi + r9))?;
+                    a.lea(rdi, ptr(rdi + r9))?;
+                    a.mov(esi, esi)?;
+                    a.mov(edi, edi)?;
+                    match target {
+                        None => a.jmp(done)?,
+                        Some(l) => {
+                            a.mov(r13d, edi)?;
+                            a.jmp(l)?;
+                        }
+                    }
+                }
+                a.set_label(&mut done)?;
+                a.nop()?;
+                site_labels.push((site, SiteTarget::Fixup(fixup), ip));
+            }
             Op::Out(size) => emit_out(&mut e, *size, ip, n, live_here)?,
             Op::Div(signed) => emit_div(&mut e, ins, *signed, ip, n)?,
             _ => emit_stackish(&mut e, ins, op, ip, n, live_here)?,
@@ -1985,6 +2078,7 @@ fn emit_block(
             Ok(match target {
                 SiteTarget::Exit(i) => [r.label_ip(site)?, r.label_ip(&exits[*i].label)?, u64::from(*ip)],
                 SiteTarget::Label(l) => [r.label_ip(site)?, r.label_ip(l)?, u64::from(*ip) | fastmem::INLINE_BIT],
+                SiteTarget::Fixup(l) => [r.label_ip(site)?, r.label_ip(l)?, u64::from(*ip)],
             })
         })
         .collect::<Result<Vec<_>, IcedError>>()?;

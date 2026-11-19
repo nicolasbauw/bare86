@@ -356,7 +356,9 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         let result = ex.step(&ins);
         let (hits, used) = (ex.mmio_hits, rep_budget - ex.rep_budget);
         mmio_accesses += hits;
-        instructions += 1 + used;
+        // Une par itération d'un `rep` (au moins une : ECX = 0, ou
+        // instruction simple).
+        instructions += used.max(1);
         idle = if hits == 0 { idle + 1 } else { 0 };
         if let Err(Bail) = result {
             break StopReason::Unsupported;

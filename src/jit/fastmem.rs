@@ -24,6 +24,11 @@ const RESERVE: usize = (1 << 32) + (64 << 10);
 /// cartes, BIOS (le code traduit n'y accède qu'avec contrôles).
 const HOLE: std::ops::Range<usize> = 0xA_0000..0x10_0000;
 
+/// Garde sans accès sous la vue : une copie descendante (`rep movs`,
+/// DF = 1) qui passe sous l'adresse 0 y faute au lieu de sortir de la
+/// réservation.
+const BELOW: usize = 64 << 10;
+
 /// Seconde vue de la mémoire de l'invité.
 pub struct View {
     base: *mut u8,
@@ -37,17 +42,18 @@ impl View {
         // SAFETY: réservation anonyme sans accès, puis mappage fixe du memfd
         // dans ses bornes ; tout est vérifié.
         unsafe {
-            let base = libc::mmap(
+            let below = libc::mmap(
                 std::ptr::null_mut(),
-                RESERVE,
+                BELOW + RESERVE,
                 libc::PROT_NONE,
                 libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
                 -1,
                 0,
             );
-            if base == libc::MAP_FAILED {
+            if below == libc::MAP_FAILED {
                 return Err(io::Error::last_os_error());
             }
+            let base = below.cast::<u8>().add(BELOW).cast::<libc::c_void>();
             let view = Self { base: base.cast(), size };
             let ram = libc::mmap(base, size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED | libc::MAP_FIXED, fd, 0);
             if ram == libc::MAP_FAILED {
@@ -144,8 +150,9 @@ const PLANE: usize = crate::vga::PLANE;
 
 impl Drop for View {
     fn drop(&mut self) {
-        // SAFETY: réservation de `new` (le memfd y est mappé en entier).
-        unsafe { libc::munmap(self.base.cast(), RESERVE) };
+        // SAFETY: réservation de `new`, garde comprise (le memfd y est
+        // mappé en entier).
+        unsafe { libc::munmap(self.base.sub(BELOW).cast(), BELOW + RESERVE) };
     }
 }
 
