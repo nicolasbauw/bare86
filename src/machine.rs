@@ -1389,7 +1389,12 @@ impl<B: Backend> Pc<B> {
             // suite passe par l'interpréteur jusqu'à la sortie de cet état.
             let mut plane_read = false;
             let mut probe_burst = false;
-            match self.vm.run()? {
+            let (io, ports) = (&mut self.io, &mut self.stats.io_ports);
+            let mut posted = |port: u16, data: &[u8]| {
+                ports.add(port);
+                io.write(port, data.len() as u8, data);
+            };
+            match self.vm.run(&mut posted)? {
                 Exit::IoOut { port: HOST_CALL_PORT, .. } => host_call = true,
                 Exit::IoOut { port: crate::glide::proto::PORT, .. } => glide_call = true,
                 Exit::IoOut { port: crate::opengl::PORT, .. } => opengl_call = true,

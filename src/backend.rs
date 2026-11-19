@@ -7,6 +7,12 @@ use std::fmt;
 use crate::interp::Cpu;
 use crate::mem::GuestMem;
 
+/// Ports dont les écritures peuvent être mises en file par le moteur, sans
+/// sortie de l'invité (index et données du CMOS) : aucun effet immédiat
+/// visible de l'invité, qui ne peut les observer que par une lecture (qui,
+/// elle, sort).
+pub const POSTED_PORTS: std::ops::Range<u16> = 0x70..0x72;
+
 /// Raison du retour de l'invité vers l'hôte.
 pub enum Exit<'a> {
     /// `size` : taille d'un accès (1, 2 ou 4) ; `data` en contient
@@ -70,8 +76,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Une VM à un vCPU.
 pub trait Backend {
     fn mem(&self) -> &GuestMem;
-    /// Exécute l'invité jusqu'à la prochaine sortie.
-    fn run(&mut self) -> Result<Exit<'_>>;
+    /// Exécute l'invité jusqu'à la prochaine sortie. Les écritures de ports
+    /// mises en file sans sortie (`POSTED_PORTS`) sont d'abord rendues, dans
+    /// l'ordre, à `posted(port, données)` : elles précèdent la sortie.
+    fn run(&mut self, posted: &mut dyn FnMut(u16, &[u8])) -> Result<Exit<'_>>;
     /// Termine l'instruction en cours (accès E/S ou MMIO déjà servi) sans
     /// relancer l'invité. Une instruction à deux accès MMIO (MOVS de la VRAM
     /// vers la VRAM) en produit un second, servi par `mmio(adresse,

@@ -41,6 +41,18 @@
     mov di, 4
     cmp bx, 15360
     jne fail
+    mov al, 0x40                # 5. CMOS : écriture (mise en file par KVM) relue
+    out 0x70, al
+    mov al, 0x5A
+    out 0x71, al
+    mov al, 0x0F
+    out 0x70, al
+    mov al, 0x40
+    out 0x70, al
+    in al, 0x71
+    mov di, 5
+    cmp al, 0x5A
+    jne fail
     xor di, di
 fail:
     mov ax, di

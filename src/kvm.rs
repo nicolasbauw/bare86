@@ -6,7 +6,7 @@ use std::os::fd::AsRawFd;
 
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
-use crate::backend::{Backend, Exit, Result};
+use crate::backend::{Backend, Exit, POSTED_PORTS, Result};
 use crate::interp::Cpu;
 use crate::mem::GuestMem;
 
@@ -56,6 +56,71 @@ pub struct KvmVm {
     ram_slots: Vec<(u32, usize, usize)>,
     /// Journal en place (`None` : pas encore essayé).
     dirty_log: Option<bool>,
+    /// File des écritures de ports mises en attente par KVM (`POSTED_PORTS`).
+    posted: Option<PostedRing>,
+}
+
+/// Page de la file des écritures mises en attente (« coalesced MMIO/PIO »)
+/// du vCPU, mappée ici plutôt que par `kvm-ioctls` : elle se lit pendant
+/// que la sortie de `KVM_RUN` emprunte le vCPU.
+struct PostedRing {
+    page: *mut kvm_bindings::kvm_coalesced_mmio_ring,
+    size: usize,
+    max: u32,
+}
+
+impl PostedRing {
+    fn map(vcpu: &VcpuFd) -> std::io::Result<Self> {
+        // SAFETY: sysconf sans effet de bord.
+        let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        // SAFETY: page de la file au décalage documenté du descripteur du
+        // vCPU ; l'appel échoue simplement si elle n'existe pas.
+        let page = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                vcpu.as_raw_fd(),
+                (kvm_bindings::KVM_COALESCED_MMIO_PAGE_OFFSET as usize * size) as libc::off_t,
+            )
+        };
+        if page == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        let max = ((size - size_of::<kvm_bindings::kvm_coalesced_mmio_ring>()) / size_of::<kvm_bindings::kvm_coalesced_mmio>()) as u32;
+        Ok(Self { page: page.cast(), size, max })
+    }
+
+    /// Rend les écritures en attente, dans l'ordre, à `f(port, données)`.
+    fn drain(&self, f: &mut dyn FnMut(u16, &[u8])) {
+        // SAFETY: page mappée tant que `self` vit ; KVM n'avance que `last`
+        // (après avoir écrit l'entrée), nous seulement `first`, et KVM_RUN
+        // n'est pas en cours.
+        unsafe {
+            let first = &raw mut (*self.page).first;
+            let last = &raw const (*self.page).last;
+            let entries = (&raw mut (*self.page).coalesced_mmio).cast::<kvm_bindings::kvm_coalesced_mmio>();
+            loop {
+                let i = first.read_volatile();
+                if i == last.read_volatile() {
+                    break;
+                }
+                std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+                let w = entries.add(i as usize).read_volatile();
+                let len = (w.len as usize).min(w.data.len());
+                f(w.phys_addr as u16, &w.data[..len]);
+                first.write_volatile((i + 1) % self.max);
+            }
+        }
+    }
+}
+
+impl Drop for PostedRing {
+    fn drop(&mut self) {
+        // SAFETY: mappage fait par `map`.
+        unsafe { libc::munmap(self.page.cast(), self.size) };
+    }
 }
 
 impl KvmVm {
@@ -102,6 +167,18 @@ impl KvmVm {
         }])
         .map_err(|e| format!("PAT MSR: {e:?}"))?;
         vcpu.set_msrs(&pat)?;
+        // Écritures de l'index (et des données) du CMOS mises en file par KVM
+        // au lieu d'une sortie chacune : DOS/4GW y écrit l'état d'arrêt à
+        // chaque passage en mode réel (≈ 6 000 fois par seconde sous Doom,
+        // pour la souris). Rendues avant la sortie suivante (`run`).
+        // Sans cette possibilité, ces écritures sortent comme les autres.
+        let posted = match kvm.check_extension(kvm_ioctls::Cap::CoalescedPio).then(|| PostedRing::map(&vcpu)) {
+            Some(Ok(ring)) => {
+                vm.register_coalesced_mmio(kvm_ioctls::IoEventAddress::Pio(u64::from(POSTED_PORTS.start)), POSTED_PORTS.len() as u32)?;
+                Some(ring)
+            }
+            _ => None,
+        };
         let reset_sregs = vcpu.get_sregs()?;
         let hw_bp = hw_breakpoints()?;
         let ram_slots = regions.iter().enumerate().filter(|(_, r)| !r.readonly).map(|(i, r)| (i as u32, r.start, r.end)).collect();
@@ -118,6 +195,7 @@ impl KvmVm {
             reset_sregs,
             ram_slots,
             dirty_log: None,
+            posted,
         };
         if !vm.hw_bp.is_empty() {
             vm.arm_single_step()?;
@@ -298,7 +376,7 @@ impl Backend for KvmVm {
         &self.mem
     }
 
-    fn run(&mut self) -> Result<Exit<'_>> {
+    fn run(&mut self, posted: &mut dyn FnMut(u16, &[u8])) -> Result<Exit<'_>> {
         if self.single_step {
             // KVM ne pose TF que si RIP est celui mémorisé par cet appel.
             self.arm_single_step()?;
@@ -322,6 +400,9 @@ impl Backend for KvmVm {
         let kvm_run: *const kvm_bindings::kvm_run = self.vcpu.get_kvm_run();
         let r = self.vcpu.run();
         self.injected = false;
+        if let Some(ring) = &self.posted {
+            ring.drain(posted);
+        }
         Ok(match r {
             // kvm-ioctls ne rend pas la taille d'un accès : elle est relue
             // dans kvm_run.
