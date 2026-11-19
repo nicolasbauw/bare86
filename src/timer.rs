@@ -60,6 +60,8 @@ pub struct Heartbeat {
     period: Duration,
     /// Minuterie ponctuelle, même signal (`probe_in`).
     probe: libc::timer_t,
+    /// Réveil à l'échéance de la prochaine IRQ de minuterie (`wake_in`).
+    deadline: libc::timer_t,
 }
 
 impl Heartbeat {
@@ -81,7 +83,11 @@ impl Heartbeat {
             if libc::timer_create(libc::CLOCK_MONOTONIC, &mut ev, &mut probe) != 0 {
                 return Err(io::Error::last_os_error());
             }
-            let mut hb = Self { id, period: Duration::ZERO, probe };
+            let mut deadline: libc::timer_t = std::mem::zeroed();
+            if libc::timer_create(libc::CLOCK_MONOTONIC, &mut ev, &mut deadline) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut hb = Self { id, period: Duration::ZERO, probe, deadline };
             hb.set_period(period)?;
             Ok(hb)
         }
@@ -117,12 +123,31 @@ impl Heartbeat {
     }
 }
 
+impl Heartbeat {
+    /// Un signal dans `d`, à l'échéance de la prochaine IRQ de minuterie :
+    /// sans lui, une IRQ due entre deux battements attendait le suivant
+    /// (jusqu'à une période du PIT, 10 ms au plus), ce que les démos qui
+    /// règlent le PIT juste avant le retour de trame ne tolèrent pas
+    /// (Second Reality : trames perdues, défilement 20 % trop lent).
+    pub fn wake_in(&self, d: Duration) -> io::Result<()> {
+        let zero = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        let ts = libc::timespec { tv_sec: d.as_secs() as _, tv_nsec: d.subsec_nanos().max(1) as _ };
+        let spec = libc::itimerspec { it_interval: zero, it_value: ts };
+        // SAFETY: minuterie créée par timer_create.
+        if unsafe { libc::timer_settime(self.deadline, 0, &spec, std::ptr::null_mut()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
 impl Drop for Heartbeat {
     fn drop(&mut self) {
         // SAFETY: minuteries possédées.
         unsafe {
             libc::timer_delete(self.id);
             libc::timer_delete(self.probe);
+            libc::timer_delete(self.deadline);
         }
     }
 }

@@ -559,6 +559,8 @@ pub struct Pc<B: Backend = KvmVm> {
     vga_polls: Option<(Instant, Instant)>,
     /// Sondes d'attente active encore permises après un échec (`spin_check`).
     spin_retries: u32,
+    /// Échéance pour laquelle le réveil ponctuel est armé (`Heartbeat::wake_in`).
+    wake_armed: Option<Instant>,
     /// La sortie précédente permet le chemin court (`resume`), et dernier
     /// tour complet du haut de la boucle.
     fast_next: bool,
@@ -797,6 +799,7 @@ impl<B: Backend> Pc<B> {
             pit_polls: None,
             vga_polls: None,
             spin_retries: 0,
+            wake_armed: None,
             fast_next: false,
             last_full: Instant::now(),
             ps2: Default::default(),
@@ -1085,6 +1088,14 @@ impl<B: Backend> Pc<B> {
         self.heartbeat.set_period(heartbeat_period(period))?;
         let speaker = pit.speaker();
         drop(pit);
+        // Réveil à l'échéance exacte de la prochaine IRQ de minuterie.
+        let next = self.next_timer_irq();
+        if next != self.wake_armed {
+            if let Some(t) = next {
+                self.heartbeat.wake_in(t.saturating_duration_since(now))?;
+            }
+            self.wake_armed = next;
+        }
         // Transfert court (détection d'IRQ) : achevé après quelques
         // instructions de l'invité (voir `Sb16::short_transfer_end`),
         // exécutées par l'interpréteur. Le pas à pas du processeur (TF) s'y
