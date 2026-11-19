@@ -409,6 +409,16 @@ impl Jit {
         })
     }
 
+    /// Le site `ip` change de forme de traduction : seuls les blocs qui le
+    /// contiennent sont écartés (retraduits au prochain passage) ; les
+    /// enchaînements et la table de répartition, qui peuvent viser leur
+    /// ancien code, sont défaits par un changement d'époque. Un vidage
+    /// complet retraduisait tout le code chaud à chaque nouveau site.
+    fn retranslate(&mut self, ip: u32) {
+        self.blocks.retain(|&start, b| b.as_ref().is_none_or(|b| ip < start || ip >= start + b.bytes.len() as u32));
+        self.touch();
+    }
+
     /// La mémoire a pu changer hors du code traduit.
     pub fn touch(&mut self) {
         self.epoch += 1;
@@ -499,7 +509,7 @@ impl Jit {
                     if *n > INLINE_MAX {
                         self.vga_sites.remove(&at);
                         self.checked.insert(at);
-                        self.flush();
+                        self.retranslate(at);
                     }
                 }
                 if st.read_at != 0 {
@@ -531,7 +541,7 @@ impl Jit {
                         } else {
                             self.checked.insert(cpu.ip);
                         }
-                        self.flush();
+                        self.retranslate(cpu.ip);
                     }
                     EXIT_SLOW => {
                         self.stats.slow_exits += 1;
