@@ -205,6 +205,23 @@ mouse33_fetch:
 mouse33_handler:
     .word 0, 0
 
+    # Étalonnage de `Delay` par l'unité CRT de Turbo/Borland Pascal 7
+    # (`not ax; not dx; mov cx,55; div cx`), remplacé par un appel lointain
+    # ici (`dos::crt_delay_patch`) : boucles comptées en DX:AX pendant un
+    # tic, divisées par 55 ms. Au-delà de 55 × 65 536 (tout processeur
+    # récent), la division déborde (« Runtime error 200 ») : plafonnée.
+    .org 0xEAF0, 0xFF
+crt_delay_fix:
+    not ax
+    not dx
+    mov cx, 55
+    cmp dx, cx
+    jb 1f
+    mov ax, 0xFFFF
+    retf
+1:  div cx
+    retf
+
     # Table des paramètres de disquette (vecteur 1Eh, INT 13h AH=08h), à son
     # adresse traditionnelle : 1,44 Mo, 18 secteurs par piste.
     .org 0xEFC7, 0xFF
