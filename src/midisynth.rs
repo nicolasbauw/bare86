@@ -57,6 +57,9 @@ pub struct Synth {
     /// Silence depuis la dernière note : le rendu continue un moment (fin
     /// des enveloppes), puis s'arrête pour ne rien coûter.
     idle_since: Option<Instant>,
+    /// Aucune note encore jouée : rien à rendre (sinon les 5 s de queue
+    /// coûteraient ≈ 9 % du thread du vCPU au démarrage de chaque jeu).
+    silent: bool,
     pub messages: u64,
 }
 
@@ -70,7 +73,7 @@ impl Synth {
             if dev.is_null() {
                 return Err("libADLMIDI: initialization failed".into());
             }
-            let s = Self { dev, buf: Vec::new(), idle_since: Some(Instant::now()), messages: 0 };
+            let s = Self { dev, buf: Vec::new(), idle_since: None, silent: true, messages: 0 };
             if adl_setBank(dev, bank as c_int) != 0 {
                 return Err(format!("unknown MIDI bank {bank} (0 to {})", adl_getBanksCount() - 1));
             }
@@ -119,6 +122,7 @@ impl MidiSink for Synth {
         self.messages += 1;
         if msg[0] & 0xF0 == 0x90 && msg.get(2).is_some_and(|&v| v > 0) {
             self.idle_since = None;
+            self.silent = false;
         } else if self.idle_since.is_none() && matches!(msg[0] & 0xF0, 0x80 | 0x90) {
             self.idle_since = Some(Instant::now());
         }
@@ -134,7 +138,7 @@ impl MidiSink for Synth {
 
 impl AudioSource for Synth {
     fn render(&mut self, _rate: u32, out: &mut [f32]) {
-        if self.idle_since.is_some_and(|t| t.elapsed() > TAIL) {
+        if self.silent || self.idle_since.is_some_and(|t| t.elapsed() > TAIL) {
             return;
         }
         self.buf.resize(out.len(), 0);
