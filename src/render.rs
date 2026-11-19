@@ -44,8 +44,10 @@ pub struct Geometry {
 fn geometry(vga: &Vga, pixels_per_char: usize) -> Geometry {
     let c = &vga.crtc;
     let chars = usize::from(c[1]) + 1;
-    let half = vga.seq[1] & 0x08 != 0;
-    let width = chars * pixels_per_char / if half { 2 } else { 1 };
+    // Le demi-débit de points (`seq[1]` bit 3, mode 0Dh) double la durée
+    // de chaque pixel à l'écran, pas leur nombre par caractère : 40
+    // caractères de 8 points font 320 pixels (et non 160).
+    let width = chars * pixels_per_char;
     let vde = usize::from(c[0x12]) | (usize::from(c[7] & 0x02) << 7) | (usize::from(c[7] & 0x40) << 3);
     let mut repeat = usize::from(c[9] & 0x1F) + 1;
     if c[9] & 0x80 != 0 {
@@ -75,34 +77,42 @@ pub fn render(vga: &Vga, mem: &GuestMem, out: &mut Vec<u32>) -> Option<(usize, u
     }
     if vga.gc[5] & 0x40 != 0 {
         // 256 couleurs : 4 pixels par caractère d'horloge (8 points / 2).
+        // Palette convertie une fois par image, plans lus directement
+        // (le rendu se fait dans le thread du vCPU : ≈ 1 ms → ≈ 0,1 ms).
         let g = geometry(vga, 4);
+        let lut: [u32; 256] = std::array::from_fn(|i| dac_rgb(vga, i as u8));
         out.clear();
         out.reserve(g.width * g.height);
-        for y in 0..g.height {
-            for x in 0..g.width {
-                let idx = if vga.chain4() {
-                    // Adressage en doubles mots : 4 octets par adresse du CRTC.
-                    vga.linear_byte((g.start * 4 + y * g.pitch * 4 + x) & 0xFFFF)
-                } else {
-                    vga.plane_byte(x & 3, (g.start + y * g.pitch + x / 4) & 0xFFFF)
-                };
-                out.push(dac_rgb(vga, idx));
+        if vga.chain4() {
+            // Adressage en doubles mots : 4 octets par adresse du CRTC.
+            let lin = vga.region(crate::vga::LINEAR);
+            for y in 0..g.height {
+                let base = g.start * 4 + y * g.pitch * 4;
+                out.extend((0..g.width).map(|x| lut[usize::from(lin[(base + x) & 0xFFFF])]));
+            }
+        } else {
+            let planes = [vga.region(0), vga.region(1), vga.region(2), vga.region(3)];
+            for y in 0..g.height {
+                let row = g.start + y * g.pitch;
+                out.extend((0..g.width).map(|x| lut[usize::from(planes[x & 3][(row + x / 4) & 0xFFFF])]));
             }
         }
         return Some((g.width, g.height));
     }
     // Planaire 16 couleurs : 8 pixels par octet de plan.
     let g = geometry(vga, 8);
+    let lut: [u32; 16] = std::array::from_fn(|c| dac_rgb(vga, attr_color(vga, c as u8)));
+    let planes = [vga.region(0), vga.region(1), vga.region(2), vga.region(3)];
     out.clear();
     out.reserve(g.width * g.height);
     for y in 0..g.height {
         let line = g.start + y * g.pitch;
-        for x in 0..g.width {
+        out.extend((0..g.width).map(|x| {
             let off = (line + x / 8) & 0xFFFF;
             let bit = 7 - (x & 7);
-            let c = (0..4).fold(0u8, |acc, p| acc | (((vga.plane_byte(p, off) >> bit) & 1) << p));
-            out.push(dac_rgb(vga, attr_color(vga, c)));
-        }
+            let c = (0..4).fold(0usize, |acc, p| acc | (usize::from((planes[p][off] >> bit) & 1) << p));
+            lut[c]
+        }));
     }
     Some((g.width, g.height))
 }

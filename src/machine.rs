@@ -90,6 +90,10 @@ const KEY_IRQ_WAIT: Duration = Duration::from_millis(50);
 const QUIT_GRACE: Duration = Duration::from_millis(300);
 /// Période des images envoyées à l'affichage (70 Hz, comme la VGA).
 const FRAME_PERIOD: Duration = Duration::from_micros(14_286);
+/// Rendu de l'image quand le prochain blanc vertical est à au moins
+/// `PRESENT_AFTER` (et au plus `PRESENT_BEFORE` : pas pendant celui-ci).
+const PRESENT_AFTER: Duration = Duration::from_millis(4);
+const PRESENT_BEFORE: Duration = Duration::from_millis(12);
 /// Période de rafraîchissement de l'écran du terminal.
 const TERM_FRAME: Duration = Duration::from_millis(33);
 
@@ -2020,7 +2024,17 @@ impl<B: Backend> Pc<B> {
 
     /// Image envoyée à l'affichage de l'hôte, à 70 Hz.
     fn present_frame(&mut self) {
-        if self.last_frame.is_some_and(|t| t.elapsed() < FRAME_PERIOD) {
+        let since = self.last_frame.map(|t| t.elapsed());
+        if since.is_some_and(|d| d < FRAME_PERIOD) {
+            return;
+        }
+        // Rendu (≈ 1 ms en 320×400, dans ce thread) pendant la partie
+        // visible de la trame, loin du blanc vertical : les programmes qui
+        // règlent l'IRQ 0 juste avant celui-ci pour l'attendre (Second
+        // Reality) le manquaient, et perdaient une trame. Sans plus attendre
+        // au-delà de deux périodes.
+        let until = self.vga.borrow().until_vblank();
+        if !(PRESENT_AFTER..=PRESENT_BEFORE).contains(&until) && since.is_some_and(|d| d < 2 * FRAME_PERIOD) {
             return;
         }
         self.last_frame = Some(Instant::now());

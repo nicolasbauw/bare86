@@ -518,13 +518,25 @@ impl Vga {
     }
 
     /// Octet d'un plan (rendu, tests).
+    #[cfg(test)]
     pub fn plane_byte(&self, plane: usize, off: usize) -> u8 {
         self.vram.get(plane, off)
     }
 
-    /// Octet du tampon linéaire chain4 (rendu du mode 13h, tests).
+    /// Octet du tampon linéaire chain4 (tests).
+    #[cfg(test)]
     pub fn linear_byte(&self, off: usize) -> u8 {
         self.vram.get(LINEAR, off)
+    }
+
+    /// Contenu d'un plan (0–3) ou du tampon linéaire (`LINEAR`), pour le
+    /// rendu : à lire vCPU arrêté, comme `plane_byte`.
+    pub fn region(&self, region: usize) -> &[u8] {
+        assert!(region < STAGE);
+        let r = self.vram.locate(region);
+        // SAFETY: dans le mappage complet (TOTAL octets), vivant autant que
+        // `self` ; le vCPU est arrêté pendant le rendu.
+        unsafe { std::slice::from_raw_parts(self.vram.all.add(r * PLANE), PLANE) }
     }
 
     // ---- Ports ----
