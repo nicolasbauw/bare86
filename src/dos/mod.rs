@@ -177,6 +177,11 @@ impl Dos {
         }
     }
 
+    /// Pilote EMS présent : le périphérique « EMMXXXX0 » s'ouvre.
+    pub fn set_ems(&mut self, on: bool) {
+        self.drives.ems = on;
+    }
+
     pub fn mount(&mut self, drive: u8, root: PathBuf) {
         self.drives.mount(drive, root);
     }
@@ -433,6 +438,31 @@ impl Dos {
 
     /// Fin du programme courant (`kind` : 0 normale, 3 résident).
     fn terminate(&mut self, cpu: &mut Cpu, mem: &GuestMem, code: u8, kind: u8) -> Out {
+        // PSP courant créé par AH=55h (et rendu courant par AH=50h), sans
+        // EXEC : comme DOS, retour à l'adresse de fin de ce PSP (PSP:0Ah),
+        // son parent (PSP:16h) redevenant le PSP courant. Chargeur de Second
+        // Reality : chaque partie, lue dans SECOND.EXE, finit ainsi.
+        let child = self.current_psp;
+        if self.procs.last().is_some_and(|p| p.psp != child) && mem.read_u16(psp_addr(child, 0)) == 0x20CD {
+            if kind != 3 {
+                for (h, idx) in handles::all(mem, child) {
+                    self.sft.release(idx);
+                    handles::set(mem, child, h, handles::UNUSED);
+                }
+                memory::free_owned(mem, child);
+            }
+            let mut v = [0u8; 12];
+            mem.read(psp_addr(child, psp::INT22), &mut v);
+            mem.write(0x22 * 4, &v);
+            self.last_return = (u16::from(kind) << 8) | u16::from(code);
+            let parent = mem.read_u16(psp_addr(child, psp::PARENT));
+            self.current_psp = parent;
+            self.dta = (parent, 0x80);
+            // Le cadre d'IRET de l'appel reprend à l'adresse de fin.
+            let frame = lin(cpu.sreg(SS), cpu.w(SP));
+            mem.write(frame, &v[..4]);
+            return Out::Keep;
+        }
         if self.procs.len() <= 1 {
             return Out::Flow(Flow::Exit(code));
         }
@@ -589,7 +619,7 @@ impl Dos {
             Target::Device(d) => {
                 let kind = match d {
                     Device::Con => Kind::Con,
-                    Device::Nul => Kind::Nul,
+                    Device::Nul | Device::Ems => Kind::Nul,
                     Device::Aux => Kind::Aux,
                     Device::Prn => Kind::Prn,
                 };

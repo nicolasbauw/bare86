@@ -33,12 +33,16 @@ pub enum Device {
     Nul,
     Aux,
     Prn,
+    /// « EMMXXXX0 », le pilote EMS (présent si la machine a de l'EMS) : les
+    /// programmes l'ouvrent pour vérifier sa présence (Second Reality).
+    Ems,
 }
 
-fn device(name: &[u8]) -> Option<Device> {
+fn device(name: &[u8], ems: bool) -> Option<Device> {
     let base = name.split(|&c| c == b'.').next().unwrap_or(name);
     Some(match base {
         b"CON" => Device::Con,
+        b"EMMXXXX0" if ems => Device::Ems,
         b"NUL" => Device::Nul,
         b"AUX" | b"COM1" | b"COM2" | b"COM3" | b"COM4" => Device::Aux,
         b"PRN" | b"LPT1" | b"LPT2" | b"LPT3" => Device::Prn,
@@ -148,11 +152,13 @@ pub struct Drives {
     /// Répertoire courant par lecteur, sans lecteur ni « \ » initial.
     cwd: [Vec<u8>; 26],
     pub current: u8,
+    /// Pilote EMS présent (périphérique « EMMXXXX0 »).
+    pub ems: bool,
 }
 
 impl Drives {
     pub fn new() -> Self {
-        Self { roots: Default::default(), cwd: Default::default(), current: 2 }
+        Self { roots: Default::default(), cwd: Default::default(), current: 2, ems: false }
     }
 
     /// Racine hôte d'un lecteur monté.
@@ -245,7 +251,7 @@ impl Drives {
             // Racine du lecteur.
             return Ok(Target::Path { host: self.host_dir(drive, &[])?, exists: true, dos });
         };
-        if let Some(d) = device(last) {
+        if let Some(d) = device(last, self.ems) {
             return Ok(Target::Device(d));
         }
         if last.contains(&b'?') || last.contains(&b'*') {
@@ -343,7 +349,7 @@ impl Drives {
             let host = self.host_dir(drive, &[])?;
             return Ok(Target::Path { host, exists: true, dos: canonical(drive, &[]) });
         };
-        if let Some(d) = device(&last.to_ascii_uppercase()) {
+        if let Some(d) = device(&last.to_ascii_uppercase(), self.ems) {
             return Ok(Target::Device(d));
         }
         if last.contains(&b'?') || last.contains(&b'*') {

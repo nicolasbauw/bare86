@@ -597,6 +597,7 @@ impl<B: Backend> Pc<B> {
         bios.install(vm.mem());
         let mut dos = dos::Dos::new();
         dos.sb_pro = cfg.sb_pro || cfg.sb_ess;
+        dos.set_ems(cfg.ems_kb > 0);
         dos.env = cfg.env.clone();
         dos.boot(vm.mem());
         // Compteur refusé par le noyau : pleine vitesse, avec l'explication.

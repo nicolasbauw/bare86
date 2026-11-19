@@ -20,6 +20,13 @@ const DMA8: usize = 1;
 const DMA16: usize = 5;
 /// Taille (unités DMA) sous laquelle un transfert en cycle unique est achevé aussitôt.
 const SHORT_TRANSFER: u32 = 64;
+/// Transferts courts achevés aussitôt d'affilée (moins de `SHORT_GAP` entre
+/// deux) : au-delà, ils suivent leur vrai minutage. Le chargeur de Second
+/// Reality relance un transfert de 5 octets depuis son gestionnaire d'IRQ :
+/// achevés aussitôt, ils ne laissaient plus passer une seule instruction du
+/// programme, qui attendait de lire le compteur du DMA.
+const SHORT_STREAK: u32 = 8;
+const SHORT_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Bits {
@@ -75,6 +82,9 @@ pub struct Sb16 {
     cur: [f32; 2],
     /// Sortie directe (10h) : dernier échantillon.
     direct: f32,
+    /// Transferts courts rapprochés (`SHORT_STREAK`) et début du dernier.
+    short_streak: u32,
+    last_short: Option<Instant>,
 }
 
 impl Default for Sb16 {
@@ -107,6 +117,8 @@ impl Sb16 {
             prev: [0.0; 2],
             cur: [0.0; 2],
             direct: 0.0,
+            short_streak: 0,
+            last_short: None,
         };
         sb.reset_mixer();
         sb
@@ -188,6 +200,9 @@ impl Sb16 {
     /// l'IRQ précéderait la remise à zéro du drapeau attendu ; au passage
     /// suivant du mixeur, elle arriverait après la fin de la boucle.
     pub fn short_transfer_end(&self) -> Option<Instant> {
+        if self.short_streak >= SHORT_STREAK {
+            return None;
+        }
         let t = self.transfer.filter(|t| !t.auto_init && !t.paused && t.block <= SHORT_TRANSFER)?;
         let ns = u64::from(t.block) * 1_000_000_000 / u64::from(self.rate.max(1000));
         Some(t.started + Duration::from_nanos(ns))
@@ -203,6 +218,12 @@ impl Sb16 {
     }
 
     fn start(&mut self, bits: Bits, mode: u8, auto_init: bool, units: u32) {
+        if !auto_init && units <= SHORT_TRANSFER {
+            let now = Instant::now();
+            let close = self.last_short.is_some_and(|t| now.duration_since(t) < SHORT_GAP);
+            self.short_streak = if close { self.short_streak.saturating_add(1) } else { 0 };
+            self.last_short = Some(now);
+        }
         let t = Transfer {
             bits,
             stereo: mode & 0x20 != 0,
