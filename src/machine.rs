@@ -58,11 +58,8 @@ fn int09_hooked(mem: &crate::mem::GuestMem) -> bool {
 
 /// Prochaine interruption d'horloge : IRQ 0 du PIT ou IRQ 8 périodique de
 /// la RTC.
-fn next_timer_irq(pit: &RefCell<crate::pit::Pit>, rtc: &RefCell<crate::rtc::Rtc>) -> Option<Instant> {
-    match (pit.borrow().next_irq0(), rtc.borrow().next_irq()) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
+fn next_timer_irq(pit: &RefCell<crate::pit::Pit>, rtc: &RefCell<crate::rtc::Rtc>, gus: Option<&Rc<RefCell<crate::gus::Gus>>>) -> Option<Instant> {
+    [pit.borrow().next_irq0(), rtc.borrow().next_irq(), gus.and_then(|g| g.borrow().next_due())].into_iter().flatten().min()
 }
 
 /// Battement : la période de l'IRQ 0, entre 50 µs et 10 ms.
@@ -171,6 +168,9 @@ pub struct Config {
     pub env: Vec<(String, String)>,
     /// ESS AudioDrive ES1688 (`--sb ess`) : compatible SB Pro, FM ESFM.
     pub sb_ess: bool,
+    /// Gravis UltraSound en 240h, DMA 3, IRQ 7 (`ULTRASND`), en plus de la
+    /// Sound Blaster.
+    pub gus: bool,
     /// Puce FM : OPL3 (SB Pro 2, SB16), OPL2, double OPL2 (SB Pro 1).
     pub opl: crate::opl::OplModel,
     /// Enregistrement de la musique MIDI (MPU-401) en fichier MIDI standard.
@@ -181,7 +181,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 63 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, jit: crate::jit::policy::Mode::Auto, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
+        Self { extended_kb: 63 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, jit: crate::jit::policy::Mode::Auto, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, gus: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -498,6 +498,7 @@ pub struct Pc<B: Backend = KvmVm> {
     dma: Rc<RefCell<crate::dma::Dma>>,
     gameport: Rc<RefCell<crate::gameport::Gameport>>,
     sb: Rc<RefCell<crate::sb16::Sb16>>,
+    gus: Option<Rc<RefCell<crate::gus::Gus>>>,
     /// Horloge temps réel : interruption périodique (IRQ 8).
     rtc: Rc<RefCell<crate::rtc::Rtc>>,
     opl: Rc<RefCell<crate::opl::Opl>>,
@@ -607,6 +608,11 @@ impl<B: Backend> Pc<B> {
         dos.sb_pro = cfg.sb_pro || cfg.sb_ess;
         dos.set_ems(cfg.ems_kb > 0);
         dos.env = cfg.env.clone();
+        if cfg.gus {
+            // Avant celles de `--set`, qui peuvent les remplacer.
+            dos.env.insert(0, ("ULTRADIR".into(), "C:\\ULTRASND".into()));
+            dos.env.insert(0, ("ULTRASND".into(), crate::gus::ULTRASND.into()));
+        }
         dos.boot(vm.mem());
         // Compteur refusé par le noyau : pleine vitesse, avec l'explication.
         let throttle = match cfg.mips.map(Throttle::new).transpose() {
@@ -689,6 +695,18 @@ impl<B: Backend> Pc<B> {
         // détection qui scrutent le DSP restent dans l'interpréteur.
         io.burst_on(crate::sb16::BASE + 4..=crate::sb16::BASE + 7, false);
         io.burst_on(crate::sb16::BASE + 0x0A..=crate::sb16::BASE + 0x0F, false);
+        let gus = cfg.gus.then(|| {
+            let g = Rc::new(RefCell::new(crate::gus::Gus::new()));
+            let b = crate::gus::BASE;
+            for ports in [b..=b, b + 6..=b + 6, b + 8..=b + 0x0B, b + 0x102..=b + 0x107] {
+                io.map(ports, Box::new(crate::gus::GusPorts(g.clone())));
+            }
+            // Registres des voix et mémoire de la carte (chargement des
+            // échantillons octet par octet par 3x7 : des centaines de
+            // milliers d'accès) servis en rafale par l'interpréteur.
+            io.burst_on(b + 0x102..=b + 0x107, true);
+            g
+        });
         let opl = Rc::new(RefCell::new(crate::opl::Opl::new()));
         opl.borrow_mut().model = cfg.opl;
         for ports in [0x388..=0x38B, crate::sb16::BASE..=crate::sb16::BASE + 3, crate::sb16::BASE + 8..=crate::sb16::BASE + 9] {
@@ -738,6 +756,7 @@ impl<B: Backend> Pc<B> {
             dma,
             gameport,
             sb,
+            gus,
             rtc,
             opl,
             mixer,
@@ -1050,8 +1069,16 @@ impl<B: Backend> Pc<B> {
             self.pic.borrow_mut().raise(crate::rtc::IRQ);
         }
         // Battement : assez serré pour la plus rapide des deux horloges.
-        let period = rtc.periodic().map_or(pit.irq0_period(), |p| p.min(pit.irq0_period()));
+        let mut period = rtc.periodic().map_or(pit.irq0_period(), |p| p.min(pit.irq0_period()));
         drop(rtc);
+        if let Some(g) = &self.gus {
+            let mut g = g.borrow_mut();
+            g.tick(now);
+            if let Some(p) = g.timer_period() {
+                period = period.min(p);
+            }
+            g.service_dma(&mut self.dma.borrow_mut(), self.vm.mem());
+        }
         self.heartbeat.set_period(heartbeat_period(period))?;
         let speaker = pit.speaker();
         drop(pit);
@@ -1074,8 +1101,23 @@ impl<B: Backend> Pc<B> {
         if let Some(m) = midi.as_deref_mut() {
             sources.push(m);
         }
+        let mut gus = self.gus.as_ref().map(|g| g.borrow_mut());
+        if let Some(g) = gus.as_deref_mut() {
+            sources.push(g);
+        }
         self.mixer.advance(now, &mut sb, &mut self.opl.borrow_mut(), &mut self.dma.borrow_mut(), self.vm.mem(), speaker, &mut sources);
         drop(sources);
+        // IRQ de la carte : un front par événement, demande retirée si la
+        // ligne retombe avant d'être servie.
+        if let Some(g) = gus.as_deref_mut() {
+            let edge = g.take_edge();
+            if !g.irq_line() {
+                self.pic.borrow_mut().lower(g.irq1);
+            } else if edge {
+                self.pic.borrow_mut().raise(g.irq1);
+            }
+        }
+        drop(gus);
         drop((cd, midi));
         if sb.take_irq() {
             self.pic.borrow_mut().raise(crate::sb16::IRQ);
@@ -1297,7 +1339,7 @@ impl<B: Backend> Pc<B> {
     /// Prochaine interruption d'horloge : IRQ 0 du PIT ou IRQ 8 périodique
     /// de la RTC.
     fn next_timer_irq(&self) -> Option<Instant> {
-        next_timer_irq(&self.pit, &self.rtc)
+        next_timer_irq(&self.pit, &self.rtc, self.gus.as_ref())
     }
 
     /// HLT : attend la prochaine interruption (IF doit être levé).
@@ -1463,7 +1505,7 @@ impl<B: Backend> Pc<B> {
                         self.stats.pit_yields += 1;
                     }
                     if matches!(port, 0x3BA | 0x3DA)
-                        && Self::vga_poll(&mut self.vga_polls, &self.vga.borrow(), next_timer_irq(&self.pit, &self.rtc), port)
+                        && Self::vga_poll(&mut self.vga_polls, &self.vga.borrow(), next_timer_irq(&self.pit, &self.rtc, self.gus.as_ref()), port)
                     {
                         self.stats.vga_yields += 1;
                     }
@@ -1508,7 +1550,12 @@ impl<B: Backend> Pc<B> {
                     self.reboot()?;
                 }
                 Exit::Shutdown => return Err("processor shutdown (triple fault?)".into()),
-                Exit::Other(e) => return Err(format!("unexpected VM exit: {e}").into()),
+                Exit::Other(e) => {
+                    let e = e.clone();
+                    let cpu = self.vm.state()?;
+                    let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);
+                    return Err(format!("unexpected VM exit: {e}\n{}\n{}", crate::debug::format_regs(&cpu), code.join("\n")).into());
+                }
             }
             if mmio {
                 self.stats.mmio_exits += 1;

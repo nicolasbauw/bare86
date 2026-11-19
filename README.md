@@ -112,7 +112,11 @@ difference is under the hood, and shows with demanding late-90s games.
   MIDI interface at 330h (UART mode), whose General MIDI music is played on
   OPL3 FM chips by [libADLMIDI](https://github.com/Wohlstand/libADLMIDI), with
   79 instrument banks (default: the Windows 9x FM synthesizer), and can be
-  recorded to a standard MIDI file (`--midi-out`).
+  recorded to a standard MIDI file (`--midi-out`). With `--gus` (`gus = on`
+  in a profile), a Gravis UltraSound as well, at 240h, DMA 3, IRQ 7 (the
+  `ULTRASND` variable is set): 1 MB of sample memory, 32 wavetable voices,
+  volume ramps, timers, DMA uploads, after DOSBox Staging's emulation of the
+  GF1; many demos of the 1990s were written for it.
 - **Input.** Keyboard by physical key position (the DOS sees a US keyboard),
   mouse (INT 33h driver under the built-in DOS, PS/2 under a real DOS),
   joystick or game controller on the game port.
@@ -212,6 +216,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
 | `--set NAME=VALUE` | Environment variable for the built-in DOS (repeatable; in a profile, one `set = NAME=VALUE` line each), e.g. `DPMILDR=16` for Heretic II under HX |
 | `--sb 16\|pro2\|pro1\|ess` | Sound card: Sound Blaster 16 (default), Sound Blaster Pro 2 (`pro` too: DSP 3.02, OPL3), Pro 1 (two OPL2 chips), or ESS AudioDrive ES1688 (Sound Blaster Pro compatible, ESS identification, ESFM FM: the aggressive, saturated FM sound of many cheap mid-90s PCs); the Creative Pro models filter their output like the real cards |
+| `--gus` | Gravis UltraSound (GF1) at 240h, DMA 3, IRQ 7, in addition to the Sound Blaster; `gus = on` in a profile |
 | `--opl opl2\|dualopl2\|opl3\|cqm\|esfm` | FM chip, instead of the card's own: OPL2 (YM3812, AdLib and Sound Blaster 1.x/2.0), two OPL2, OPL3 (YMF262), Creative's CQM (Sound Blaster 16 Vibra and AWE64, with its metallic sound) or ESS's ESFM (AudioDrive cards); the last two are OPL3-compatible clones found on many cheap cards |
 | `--midi opl3\|off` | General MIDI music played on OPL3 FM chips (default), or not played |
 | `--midi-bank N` | FM instrument bank (default 58, the Windows 9x FM synthesizer; 14 is the bank of Doom); `--midi-bank list` prints them |

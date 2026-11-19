@@ -54,7 +54,6 @@ impl Dma {
         Rc::new(RefCell::new(self))
     }
 
-    #[cfg(test)]
     pub fn masked(&self, n: usize) -> bool {
         self.ch[n].masked
     }

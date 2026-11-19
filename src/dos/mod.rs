@@ -1297,6 +1297,17 @@ impl Dos {
                 Out::Keep
             }
             0x5A => self.create_temp(cpu, mem),
+            // Créer un PSP (DOS 1.x) en DX : copie du PSP courant, vecteurs
+            // 22h–24h du moment (Dope, Complex).
+            0x26 => {
+                let mut b = [0u8; 0x100];
+                mem.read(psp_addr(self.current_psp, 0), &mut b);
+                mem.write(psp_addr(dx, 0), &b);
+                let mut v = [0u8; 12];
+                mem.read(0x22 * 4, &mut v);
+                mem.write(psp_addr(dx, psp::INT22), &v);
+                Out::Keep
+            }
             // Créer un PSP enfant en DX (bloc déjà réservé par l'appelant),
             // fin de mémoire SI ; il devient le PSP courant. Handles hérités
             // comme par EXEC, environnement partagé avec le parent.

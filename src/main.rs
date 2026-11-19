@@ -17,6 +17,7 @@ mod ems;
 mod font;
 mod gameport;
 mod glide;
+mod gus;
 mod hle;
 mod host;
 mod ide;
@@ -83,6 +84,8 @@ usage: bare86 [options] [program [arguments…]]
   --sb 16|pro2|pro1|ess   sound card: Sound Blaster 16 (default), Pro 2
                  (also pro: DSP 3.02, OPL3), Pro 1 (two OPL2 chips), or ESS
                  AudioDrive ES1688 (Sound Blaster Pro compatible, ESFM FM)
+  --gus          Gravis UltraSound (240h, DMA 3, IRQ 7, ULTRASND set) in
+                 addition to the Sound Blaster
   --opl opl2|dualopl2|opl3|cqm|esfm   FM chip, instead of the card's own:
                  OPL2 (YM3812, AdLib and early Sound Blasters), two OPL2, OPL3,
                  Creative's CQM (Sound Blaster 16 Vibra, AWE64) or ESS's ESFM
@@ -275,6 +278,7 @@ fn main() -> ExitCode {
                 }
             },
             "--boot" => boot = true,
+            "--gus" => cfg.gus = true,
             "--sb" => match args.next().as_deref() {
                 // SB Pro 2 (OPL3), SB Pro 1 (deux OPL2), SB16 (OPL3).
                 Some("pro" | "pro2") => (cfg.sb_pro, cfg.sb_ess, card_opl) = (true, false, opl::OplModel::Opl3),

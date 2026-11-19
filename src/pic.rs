@@ -109,6 +109,16 @@ impl Pic {
         }
     }
 
+    /// Ligne retombée avant d'être servie : l'IRQ 0–15 n'est plus demandée
+    /// (périphérique à ligne tenue, comme la Gravis UltraSound).
+    pub fn lower(&mut self, irq: u8) {
+        if irq < 8 {
+            self.master.irr &= !(1 << irq);
+        } else {
+            self.slave.irr &= !(1 << (irq - 8));
+        }
+    }
+
     /// Front montant sur l'IRQ 0–15.
     pub fn raise(&mut self, irq: u8) {
         if irq < 8 {
