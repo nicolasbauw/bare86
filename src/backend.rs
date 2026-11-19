@@ -87,6 +87,12 @@ pub trait Backend {
     /// L'invité accepte une interruption externe maintenant (IF = 1, pas
     /// d'ombre d'interruption) ; d'après la dernière sortie.
     fn can_inject(&mut self) -> bool;
+    /// Une interruption injectée attend encore d'être livrée à l'invité
+    /// (`KVM_RUN` interrompu avant l'entrée, ou livraison elle-même
+    /// interrompue par une sortie) : il faut rentrer dans l'invité.
+    fn holds_injection(&mut self) -> bool {
+        false
+    }
     /// Injecte l'interruption externe `vector` avant la prochaine instruction.
     fn inject(&mut self, vector: u8) -> Result<()>;
     /// Demande une sortie dès que l'invité pourra recevoir une interruption.

@@ -310,7 +310,7 @@ impl Backend for KvmVm {
         // première (IRQ 0 restée « en service » au PIC, sans gestionnaire :
         // Doom privé de tics jusqu'à l'EOI d'une autre IRQ). Le signal reste
         // alors noté, pour la sortie suivante.
-        if !self.injected && crate::timer::take_kick() {
+        if !self.holds_injection() && crate::timer::take_kick() {
             return Ok(Exit::Interrupted);
         }
         if std::mem::take(&mut self.resume_rf) {
@@ -393,6 +393,20 @@ impl Backend for KvmVm {
     fn set_single_step(&mut self, on: bool) -> Result<()> {
         self.single_step = on;
         self.arm_single_step()
+    }
+
+    /// Sans irqchip dans le noyau, KVM tient `ready_for_interrupt_injection`
+    /// à zéro tant qu'une interruption injectée n'est pas livrée
+    /// (`kvm_cpu_has_extint` = `interrupt.injected`) : avec IF à 1, c'est
+    /// le signe qu'elle attend (ou d'une ombre d'interruption, aussi brève).
+    /// Sans ce test, un `KVM_RUN` interrompu par un signal juste avant
+    /// l'entrée laissait l'IRQ 0 en file ; la sonde d'attente active, ne
+    /// voyant rien d'attendu au PIC, endormait le vCPU, et chaque signal
+    /// reçu pendant le sommeil faisait rendre `Interrupted` sans rentrer
+    /// dans l'invité : Doom figé après `ST_Init`, IRQ 0 « en service ».
+    fn holds_injection(&mut self) -> bool {
+        let run = self.vcpu.get_kvm_run();
+        self.injected || (run.ready_for_interrupt_injection == 0 && run.if_flag != 0)
     }
 
     fn can_inject(&mut self) -> bool {

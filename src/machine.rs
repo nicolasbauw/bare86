@@ -1304,7 +1304,7 @@ impl<B: Backend> Pc<B> {
     /// `SPIN_REPROBE`, pour rattraper la boucle au retour du gestionnaire
     /// d'interruption sans attendre le battement suivant.
     fn spin_check(&mut self) -> Result<()> {
-        if !self.interp || self.stepping || self.pic.borrow().pending().is_some() {
+        if !self.interp || self.stepping || self.pic.borrow().pending().is_some() || self.vm.holds_injection() {
             return Ok(());
         }
         let cpu = self.vm.state()?;
