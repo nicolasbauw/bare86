@@ -340,6 +340,11 @@ impl KvmVm {
                 dbg.arch.debugreg[i] = a;
                 // DR7 : Li posé, R/W = 00 (exécution), LEN = 00.
                 dbg.arch.debugreg[7] |= 1 << (2 * i);
+                // BARE86_HWBP_W : surveillance des écritures de 4 octets
+                // (R/W = 01, LEN = 11) ; arrêt après l'instruction qui écrit.
+                if std::env::var_os("BARE86_HWBP_W").is_some() {
+                    dbg.arch.debugreg[7] |= 0b1101 << (16 + 4 * i);
+                }
             }
         }
         self.vcpu.set_guest_debug(&dbg)?;
@@ -348,7 +353,8 @@ impl KvmVm {
 }
 
 /// Points d'arrêt de `BARE86_HWBP` (adresses linéaires en hexadécimal,
-/// séparées par des virgules ; quatre au plus).
+/// séparées par des virgules ; quatre au plus). Avec `BARE86_HWBP_W`, ce
+/// sont des surveillances d'écriture (dword) au lieu de points d'exécution.
 fn hw_breakpoints() -> Result<Vec<u64>> {
     let Some(v) = std::env::var_os("BARE86_HWBP") else { return Ok(Vec::new()) };
     let v = v.to_string_lossy();

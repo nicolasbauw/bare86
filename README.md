@@ -532,6 +532,9 @@ names) that HX makes for the program. `BARE86_HWBP=ADDR[,ADDR…]` sets up to
 four hardware execution breakpoints (linear addresses in hexadecimal, e.g.
 in the game's EXE, loaded at its base address): at each hit, the registers
 and the top of the stack go to the terminal, and the program goes on.
+With `BARE86_HWBP_W=1` as well, the addresses become write watchpoints
+(4 bytes; the stop comes after the writing instruction); use `--no-jit`,
+since translated code and interpreter bursts write from the host.
 `BARE86_KEYLOG=1` traces the keys received by the window and the bytes
 handed to the keyboard controller.
 
