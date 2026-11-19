@@ -168,7 +168,7 @@ fn jit_matches_interpreter() {
         code.push(0xF4);
         mem_jit.write(code_at as usize, &code);
         mem_ref.write(code_at as usize, &code);
-        jit.flush();
+        jit.forget_sites();
 
         let mut start = random_cpu(&mut rng);
         start.ip = code_at;
@@ -259,6 +259,7 @@ fn jit_matches_interpreter() {
     }
     println!("{cases} cases ({skipped} skipped: undefined flag read), {translated_total} instructions run by translated code, stats {:?}", jit.stats);
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n\n"));
+    assert_eq!(jit.stats.assembly_errors, 0, "blocks refused by the assembler");
 }
 
 

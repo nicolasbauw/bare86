@@ -338,6 +338,12 @@ impl Vga {
     /// faire directement (mode d'écriture 0 sans logique, un seul plan
     /// écrit) : le plan écrit, là où il se trouve (scène comprise). Pour le
     /// traducteur dynamique.
+    /// memfd de la VRAM, adresse de son mappage complet, régions des plans
+    /// (planes, linéaire, scène) que `direct_*_window` peuvent rendre.
+    pub fn vram_mapping(&self) -> (i32, u64, usize) {
+        (self.vram.fd, self.vram.all as u64, REGIONS)
+    }
+
     pub fn direct_write_window(&self) -> Option<*mut u8> {
         if self.vbe.is_some() || self.chain4() {
             return None;

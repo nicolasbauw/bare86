@@ -54,6 +54,12 @@ pub trait Mmio {
     fn direct_write_window(&mut self) -> u64 {
         0
     }
+    /// memfd de la VRAM, adresse hôte de son mappage complet et nombre de
+    /// régions de 64 Ko (plans) que les fenêtres directes peuvent viser :
+    /// le traducteur en fait des vues (`jit::fastmem::VgaViews`).
+    fn vram_mapping(&self) -> Option<(i32, u64, usize)> {
+        None
+    }
     /// Vrai si la rafale doit s'arrêter après l'instruction courante.
     fn stop(&self) -> bool {
         false

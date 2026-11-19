@@ -320,6 +320,9 @@ impl Mmio for MmioBus<'_> {
     fn direct_read_at(&mut self, off: u32) {
         self.vga.direct_read_at(off as usize);
     }
+    fn vram_mapping(&self) -> Option<(i32, u64, usize)> {
+        Some(self.vga.vram_mapping())
+    }
     fn activity(&self) -> u64 {
         self.accesses + self.port_accesses
     }

@@ -16,6 +16,7 @@
 //! - le reste (pile, chaînes, E/S, fautes possibles…) est rendu à
 //!   l'interpréteur, une instruction à la fois.
 
+mod fastmem;
 pub mod policy;
 #[cfg(test)]
 mod tests;
@@ -86,6 +87,29 @@ pub struct State {
     /// RAM (contrôle sans drapeaux, BMI2).
     rtab: u64,
     wtab: u64,
+    /// Base de la vue protégée de la mémoire (`fastmem`), tenue dans R8 par
+    /// le code traduit : accès directs sans contrôle.
+    view: u64,
+    /// Cible calculée d'un `ret` ou d'un saut indirect, pour la sortie.
+    target: u32,
+    _pad3: u32,
+    /// Vues des plans écrit et lu (`fastmem::VgaViews`, vue vide si aucun
+    /// plan direct), et les vues elles-mêmes (pour `out_trampoline`).
+    vview_w: u64,
+    vview_r: u64,
+    vga_views: u64,
+}
+
+impl State {
+    /// Vues des plans écrit et lu d'après `vram` et `vram_read`.
+    fn set_vga_views(&mut self) {
+        if self.vga_views != 0 {
+            // SAFETY: vues possédées par le `Jit` de la rafale en cours.
+            let v = unsafe { &*(self.vga_views as *const fastmem::VgaViews) };
+            self.vview_w = v.view_of(self.vram);
+            self.vview_r = v.view_of(self.vram_read);
+        }
+    }
 }
 
 const OFF_FLAGS: i32 = 32;
@@ -109,6 +133,10 @@ const OFF_GEN_HI: i32 = 160;
 const OFF_CODE_PAGES: i32 = 168;
 const OFF_RTAB: i32 = 176;
 const OFF_WTAB: i32 = 184;
+const OFF_VIEW: i32 = 192;
+const OFF_TARGET: i32 = 200;
+const OFF_VVIEW_W: i32 = 208;
+const OFF_VVIEW_R: i32 = 216;
 /// Entrées de la table de répartition (index : 16 bits bas de l'EIP).
 const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
@@ -122,6 +150,9 @@ pub const EXIT_NEXT: u32 = 0;
 pub const EXIT_SLOW: u32 = 1;
 /// Écriture dans une page de code traduit : cache vidé, puis interpréteur.
 pub const EXIT_SMC: u32 = 2;
+/// Faute d'un accès direct (`fastmem`) : l'instruction n'a rien fait ; elle
+/// passe à l'interpréteur et son site sera traduit avec contrôles.
+pub const EXIT_FAULT: u32 = 3;
 
 /// Drapeaux arithmétiques et DF : ceux que le code traduit porte dans
 /// RFLAGS de l'hôte.
@@ -131,6 +162,9 @@ const ARITH: u32 = 0x08D5;
 
 /// Instructions au plus par bloc.
 const MAX_BLOCK: usize = 64;
+/// Reprises en ligne d'un site VGA avant de le traduire avec contrôles (il
+/// vise aussi la RAM, ou la carte n'offre pas de plan direct).
+const INLINE_MAX: u32 = 16;
 /// Taille du tampon de code exécutable.
 const CODE_SIZE: usize = 32 << 20;
 /// Accès mémoire au-delà de `mem.size() - MEM_GUARD` : chemin lent.
@@ -207,6 +241,11 @@ pub struct JitStats {
     pub jit_instructions: u64,
     pub interp_steps: u64,
     pub slow_exits: u64,
+    /// Fautes d'accès directs (une par site, sauf vidage).
+    pub fault_exits: u64,
+    /// Blocs que l'assembleur a refusés (défaut du traducteur : rendus à
+    /// l'interpréteur, invisibles autrement).
+    pub assembly_errors: u64,
     pub smc_flushes: u64,
     pub stale_flushes: u64,
     /// Retours à Rust : chaîne épuisée, sortie vers une cible connue pas
@@ -247,6 +286,24 @@ pub struct Jit {
     /// texture des colonnes et des sols) : traduites avec l'immédiat lu en
     /// mémoire. Gardé d'un vidage à l'autre.
     volatile: std::collections::HashSet<u32>,
+    /// Vue protégée de la mémoire (`None` : tous les accès contrôlés).
+    view: Option<fastmem::View>,
+    /// Instructions dont l'accès direct a fauté : traduites avec contrôles.
+    /// Gardé d'un vidage à l'autre.
+    checked: std::collections::HashSet<u32>,
+    /// Sites d'accès direct du code émis : [adresse hôte de l'instruction,
+    /// sortie de repli], croissants (le tampon ne fait que grandir entre
+    /// deux vidages).
+    sites: Vec<[u64; 3]>,
+    /// Vues des plans VGA, créées à la première rafale qui en offre.
+    vga_views: Option<fastmem::VgaViews>,
+    /// Instructions dont l'accès direct a fauté dans la fenêtre VGA : accès
+    /// par la vue du plan, chemin contrôlé en reprise.
+    vga_sites: std::collections::HashSet<u32>,
+    /// Reprises en ligne par site VGA : au-delà de `INLINE_MAX`, contrôlé.
+    inline_faults: Map<u32>,
+    /// Pages de la vue mises en lecture seule (code traduit).
+    readonly: Vec<u32>,
     mem_size: usize,
     /// Incrémentée quand la mémoire a pu changer hors du code traduit
     /// (rafale nouvelle, pas de l'interpréteur) : les blocs sont revérifiés.
@@ -286,6 +343,13 @@ impl Jit {
             wtab: page_table(mem.size()),
             bmi2: std::arch::is_x86_feature_detected!("bmi2") && std::env::var_os("BARE86_JIT_NO_BMI2").is_none(),
             volatile: Default::default(),
+            view: if std::env::var_os("BARE86_JIT_NO_FASTMEM").is_some() { None } else { fastmem::View::new(mem.fd(), mem.size()).ok() },
+            checked: Default::default(),
+            sites: Vec::new(),
+            vga_views: None,
+            vga_sites: Default::default(),
+            inline_faults: Map::default(),
+            readonly: Vec::new(),
             mem_size: mem.size(),
             epoch: 1,
             stats: JitStats::default(),
@@ -308,6 +372,22 @@ impl Jit {
         self.wtab.copy_from_slice(&self.rtab);
         self.watched.clear();
         self.new_pages.clear();
+        self.sites.clear();
+        if let Some(v) = &self.view {
+            for p in self.readonly.drain(..) {
+                let _ = v.set_readonly(p, false);
+            }
+        }
+    }
+
+    /// Oublie les sites appris (fautes d'accès direct), pour que chaque cas
+    /// d'un test exerce les accès directs.
+    #[cfg(test)]
+    pub fn forget_sites(&mut self) {
+        self.checked.clear();
+        self.vga_sites.clear();
+        self.inline_faults.clear();
+        self.flush();
     }
 
     /// Un bloc traduit qui touche l'une de `pages` a-t-il changé (hors
@@ -342,14 +422,23 @@ impl Jit {
     /// de `idle` instructions passent sans activité de la carte
     /// (`Mmio::activity`) : le code natif fait alors mieux.
     pub fn run<M: Mmio>(&mut self, cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, budget: u64, idle: u64) -> (u64, StopReason) {
+        if self.view.is_some()
+            && self.vga_views.is_none()
+            && let Some((fd, all, regions)) = mmio.vram_mapping()
+        {
+            self.vga_views = fastmem::VgaViews::new(fd, all, regions).ok();
+        }
         let mut st = State {
             membase: mem.ptr as u64,
             vram: mmio.direct_write_window(),
             out_fn: out_trampoline::<M> as *const () as u64,
             out_ctx: mmio as *mut M as u64,
             vram_read: mmio.direct_read_window(),
+            view: self.view.as_ref().map_or(0, |v| v.base()),
+            vga_views: self.vga_views.as_ref().map_or(0, |v| v as *const fastmem::VgaViews as u64),
             ..Default::default()
         };
+        st.set_vga_views();
         let mut done = 0u64;
         let (mut activity, mut active_at) = (mmio.activity(), 0u64);
         // Écritures directes dans un plan vues depuis le début (le code
@@ -388,6 +477,7 @@ impl Jit {
                 st.link = 0;
                 st.table = self.dispatch.as_ptr() as u64;
                 st.gen_hi = (self.epoch as u32 as u64) << 32;
+                fastmem::set_sites(&self.sites);
                 // SAFETY: code émis par `translate` pour cet état ; R15 et
                 // les contrôles bornent les accès à la mémoire de l'invité.
                 unsafe {
@@ -397,6 +487,16 @@ impl Jit {
                 cpu.gpr = st.gpr;
                 cpu.flags = st.flags;
                 cpu.ip = st.eip;
+                let (inline, at) = fastmem::take_inline();
+                if inline != 0 {
+                    let n = self.inline_faults.entry(at).or_default();
+                    *n += inline as u32;
+                    if *n > INLINE_MAX {
+                        self.vga_sites.remove(&at);
+                        self.checked.insert(at);
+                        self.flush();
+                    }
+                }
                 if st.read_at != 0 {
                     mmio.direct_read_at(st.read_at as u32 - 1);
                     st.read_at = 0;
@@ -414,6 +514,20 @@ impl Jit {
                     }
                 }
                 match st.exit {
+                    EXIT_FAULT => {
+                        // Accès direct refusé par la vue (VGA, ROM, code) :
+                        // site désormais contrôlé, retraduit.
+                        self.stats.fault_exits += 1;
+                        if self.count_fallbacks {
+                            *self.stats.fallbacks.entry(format!("fault at {:08X} on page {:05X}", cpu.ip, st.addr >> 12 << 12)).or_default() += 1;
+                        }
+                        if self.vga_views.is_some() && (0xA_0000..0xB_0000).contains(&st.addr) {
+                            self.vga_sites.insert(cpu.ip);
+                        } else {
+                            self.checked.insert(cpu.ip);
+                        }
+                        self.flush();
+                    }
                     EXIT_SLOW => {
                         self.stats.slow_exits += 1;
                         if self.count_fallbacks {
@@ -490,6 +604,7 @@ impl Jit {
                 }
                 st.vram = mmio.direct_write_window();
                 st.vram_read = mmio.direct_read_window();
+                st.set_vga_views();
             }
         }
     }
@@ -531,9 +646,11 @@ impl Jit {
         for _ in 0..2 {
             // SAFETY: `used` reste dans le tampon.
             let at = unsafe { self.code.ptr.add(self.code.used) };
-            match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile, self.max_block, self.bmi2) {
-                Ok(Some((code, len, holes, body))) if self.code.used + code.len() <= CODE_SIZE => {
-                    emitted = Some((at, code, len, holes, body));
+            let fast = self.view.is_some().then_some(&self.checked);
+            let vga = self.vga_views.is_some().then_some(&self.vga_sites);
+            match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile, self.max_block, self.bmi2, fast, vga) {
+                Ok(Some((code, len, holes, body, sites))) if self.code.used + code.len() <= CODE_SIZE => {
+                    emitted = Some((at, code, len, holes, body, sites));
                     break;
                 }
                 Ok(Some(_)) => {
@@ -541,6 +658,7 @@ impl Jit {
                     self.code.used = 0;
                 }
                 Err(e) => {
+                    self.stats.assembly_errors += 1;
                     if self.count_fallbacks {
                         eprintln!("[jit] assembly of {eip:08X} failed: {e}");
                     }
@@ -559,7 +677,9 @@ impl Jit {
                 self.blocks.insert(eip, None);
                 return None;
             }
-            Some((at, code, len, holes, body)) => {
+            Some((at, code, len, holes, body, sites)) => {
+                debug_assert!(self.sites.last().is_none_or(|l| sites.first().is_none_or(|f| f[0] > l[0])));
+                self.sites.extend(sites);
                 // SAFETY: place vérifiée ; le tampon est RWX.
                 unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), at, code.len()) };
                 self.code.used += code.len().next_multiple_of(16);
@@ -578,6 +698,12 @@ impl Jit {
                         // juste avant déborde peut-être sur ce code.
                         if self.code_pages[a >> 12] & 2 == 0 {
                             self.new_pages.push((a >> 12) as u32);
+                            // Vue : écritures directes refusées sur cette page.
+                            if let Some(v) = &self.view
+                                && v.set_readonly((a >> 12) as u32, true).is_ok()
+                            {
+                                self.readonly.push((a >> 12) as u32);
+                            }
                         }
                         // Bit 0 : préfiltre (page et précédente) ; bit 1 : code.
                         self.code_pages[a >> 12] |= 3;
@@ -910,7 +1036,8 @@ fn guest_address(ins: &Instruction) -> Option<MemoryOperand> {
 /// Sortie de bloc en attente d'émission.
 struct Exit {
     label: CodeLabel,
-    /// EIP de reprise ; `None` : calculé dans R8D (ret, sauts indirects).
+    /// EIP de reprise ; `None` : calculé (`OFF_TARGET` : ret, sauts
+    /// indirects).
     eip: Option<u32>,
     count: u32,
     kind: u32,
@@ -1318,12 +1445,11 @@ fn emit_out(e: &mut Emit, size: u32, ip: u32, n: u32, live: bool) -> Result<(), 
     e.save()?;
     let slow = e.exit(Some(ip), n, EXIT_SLOW, true);
     let a = &mut e.a;
-    for r in [rax, rcx, rdx, rsi, rdi, r10] {
+    // R8 (base de la vue) compris ; pile alignée sur 16 au moment de
+    // l'appel (entrée du bloc : 8 ; prologue et sauvegardes : 13 mots).
+    for r in [rax, rcx, rdx, rsi, rdi, r8, r10] {
         a.push(r)?;
     }
-    // Pile alignée sur 16 au moment de l'appel (entrée du bloc : 8 ;
-    // prologue et sauvegardes : 12 mots).
-    a.sub(rsp, 8)?;
     a.movzx(esi, dx)?;
     a.mov(ecx, eax)?;
     a.mov(edx, size)?;
@@ -1331,8 +1457,7 @@ fn emit_out(e: &mut Emit, size: u32, ip: u32, n: u32, live: bool) -> Result<(), 
     a.mov(rdi, qword_ptr(r10 + OFF_OUT_CTX))?;
     a.call(qword_ptr(r10 + OFF_OUT_FN))?;
     a.mov(r11, rax)?;
-    a.add(rsp, 8)?;
-    for r in [r10, rdi, rsi, rdx, rcx, rax] {
+    for r in [r10, r8, rdi, rsi, rdx, rcx, rax] {
         a.pop(r)?;
     }
     a.test(r11, r11)?;
@@ -1361,6 +1486,7 @@ extern "sysv64" fn out_trampoline<M: Mmio>(ctx: *mut M, port: u32, size: u32, va
     m.port_out(port, size as u8, if size == 1 { value & 0xFF } else { value & 0xFFFF });
     st.vram = m.direct_write_window();
     st.vram_read = m.direct_read_window();
+    st.set_vga_views();
     1
 }
 
@@ -1445,7 +1571,75 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
 /// Résultat : code, longueur en octets de l'invité, trous (immédiats
 /// volatils : décalage dans le bloc, taille).
 /// Le dernier élément est le décalage du corps (cible des enchaînements).
-type Emitted = (Vec<u8>, usize, Vec<(usize, usize)>, usize);
+type Emitted = (Vec<u8>, usize, Vec<(usize, usize)>, usize, Vec<[u64; 3]>);
+
+/// Accès vers la fenêtre VGA que la vue d'un plan peut servir : `mov` vers
+/// la mémoire (écriture, `Some(true)`) ou lecture sans écriture.
+fn vga_direct(ins: &Instruction) -> Option<bool> {
+    if ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory {
+        Some(true)
+    } else if !writes_memory(ins) && !matches!(ins.mnemonic(), Mn::Xchg) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Reprise d'une faute d'accès direct : sortie du bloc, ou chemin contrôlé
+/// émis dans le bloc (étiquette).
+enum SiteTarget {
+    Exit(usize),
+    Label(CodeLabel),
+}
+
+/// Instruction à opérande mémoire, contrôlée (`checked`) ; écriture simple
+/// ou lecture de la fenêtre VGA directement dans le plan.
+fn emit_native_checked(e: &mut Emit, ins: &Instruction, h: &Instruction, ip: u32, n: u32, live_here: bool) -> Result<(), IcedError> {
+    // Écriture simple (mov) dans la fenêtre : directement dans le
+    // plan écrit ; lecture sans écriture : dans le plan lu.
+    let direct_write = ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory;
+    let direct_read = !writes_memory(ins) && !matches!(ins.mnemonic(), Mn::Xchg);
+    let direct = direct_write || direct_read;
+    let mut vga = e.a.create_label();
+    e.address(ins)?;
+    let size = ins.memory_size().size().max(1) as i32;
+    e.checked(ip, n, size, writes_memory(ins), live_here, (direct && e.bmi2).then_some(vga))?;
+    e.a.add_instruction(*h)?;
+    if direct && e.bmi2 {
+        // Fenêtre VGA, venu du chemin rapide de `checked` (page
+        // d'état 2, drapeaux intacts) : directement dans le plan,
+        // ou chemin lent si la configuration ne le permet pas.
+        let slow = e.exit(Some(ip), n, EXIT_SLOW, false);
+        let a = &mut e.a;
+        let mut done = a.create_label();
+        let mut noptr = a.create_label();
+        a.jmp(done)?;
+        a.set_label(&mut vga)?;
+        a.lea(r14d, ptr(r13 - 0xA0000))?;
+        a.mov(r9, qword_ptr(r10 + if direct_write { OFF_VRAM } else { OFF_VRAM_READ }))?;
+        a.mov(r11, rcx)?;
+        a.mov(rcx, r9)?;
+        a.jrcxz(noptr)?;
+        a.mov(rcx, r11)?;
+        a.mov(byte_ptr(r10 + OFF_VGA_WRITES), 1)?;
+        if direct_read {
+            // Latches : chargés par la carte depuis cette lecture.
+            a.lea(r11d, ptr(r14 + 1))?;
+            a.mov(qword_ptr(r10 + OFF_READ_AT), r11)?;
+        }
+        let mut w = *h;
+        w.set_memory_base(Register::R9);
+        w.set_memory_index(Register::R14);
+        a.add_instruction(w)?;
+        a.jmp(done)?;
+        a.set_label(&mut noptr)?;
+        a.mov(rcx, r11)?;
+        a.jmp(slow)?;
+        a.set_label(&mut done)?;
+        a.nop()?;
+    }
+    Ok(())
+}
 
 fn emit_block(
     eip: u32,
@@ -1455,7 +1649,11 @@ fn emit_block(
     volatile: &std::collections::HashSet<u32>,
     max: usize,
     bmi2: bool,
+    fast: Option<&std::collections::HashSet<u32>>,
+    vga: Option<&std::collections::HashSet<u32>>,
 ) -> Result<Option<Emitted>, IcedError> {
+    // Accès direct par la vue de la mémoire (sauf sites qui y ont fauté).
+    let direct = |ip: u32| fast.is_some_and(|c| !c.contains(&ip)) && !vga.is_some_and(|v| v.contains(&ip));
     let all = decode_block(eip, mem, mem_size, max);
     let mut holes = Vec::new();
     let mut body: Vec<(Instruction, Op)> = Vec::new();
@@ -1507,6 +1705,7 @@ fn emit_block(
     }
     e.a.mov(r10, rdi)?;
     e.a.mov(r15, qword_ptr(r10 + OFF_MEMBASE))?;
+    e.a.mov(r8, qword_ptr(r10 + OFF_VIEW))?;
     e.a.mov(r11d, dword_ptr(r10 + OFF_FLAGS))?;
     e.a.and(r11d, HOST_FLAGS as i32)?;
     e.a.push(r11)?;
@@ -1517,6 +1716,7 @@ fn emit_block(
     e.a.mov(edi, dword_ptr(r10 + 28))?;
     let mut body_label = e.a.create_label();
     e.a.set_label(&mut body_label)?;
+    let mut site_labels: Vec<(CodeLabel, SiteTarget, u32)> = Vec::new();
 
     for (i, (ins, op)) in body.iter().enumerate() {
         let (ip, n) = (ins.ip32(), i as u32);
@@ -1528,51 +1728,90 @@ fn emit_block(
             }
             Op::Volatile(h) => e.a.add_instruction(*h)?,
             Op::Native(h) if !(0..ins.op_count()).any(|k| ins.op_kind(k) == OpKind::Memory) => e.a.add_instruction(*h)?,
-            Op::Native(h) => {
-                // Écriture simple (mov) dans la fenêtre : directement dans le
-                // plan écrit ; lecture sans écriture : dans le plan lu.
-                let direct_write = ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory;
-                let direct_read = !writes_memory(ins) && !matches!(ins.mnemonic(), Mn::Xchg);
-                let direct = direct_write || direct_read;
-                let mut vga = e.a.create_label();
+            Op::Native(h) if direct(ip) => {
+                // Accès direct par la vue protégée ; une faute reprend à la
+                // sortie de repli (drapeaux et registres intacts).
                 e.address(ins)?;
-                let size = ins.memory_size().size().max(1) as i32;
-                e.checked(ip, n, size, writes_memory(ins), live_here, (direct && e.bmi2).then_some(vga))?;
-                e.a.add_instruction(*h)?;
-                if direct && e.bmi2 {
-                    // Fenêtre VGA, venu du chemin rapide de `checked` (page
-                    // d'état 2, drapeaux intacts) : directement dans le plan,
-                    // ou chemin lent si la configuration ne le permet pas.
-                    let slow = e.exit(Some(ip), n, EXIT_SLOW, false);
-                    let a = &mut e.a;
-                    let mut done = a.create_label();
-                    let mut noptr = a.create_label();
-                    a.jmp(done)?;
-                    a.set_label(&mut vga)?;
-                    a.lea(r14d, ptr(r13 - 0xA0000))?;
-                    a.mov(r9, qword_ptr(r10 + if direct_write { OFF_VRAM } else { OFF_VRAM_READ }))?;
-                    a.mov(r11, rcx)?;
-                    a.mov(rcx, r9)?;
-                    a.jrcxz(noptr)?;
-                    a.mov(rcx, r11)?;
-                    a.mov(byte_ptr(r10 + OFF_VGA_WRITES), 1)?;
-                    if direct_read {
-                        // Latches : chargés par la carte depuis cette lecture.
-                        a.lea(r11d, ptr(r14 + 1))?;
-                        a.mov(qword_ptr(r10 + OFF_READ_AT), r11)?;
-                    }
-                    let mut w = *h;
-                    w.set_memory_base(Register::R9);
-                    w.set_memory_index(Register::R14);
-                    a.add_instruction(w)?;
-                    a.jmp(done)?;
-                    a.set_label(&mut noptr)?;
-                    a.mov(rcx, r11)?;
-                    a.jmp(slow)?;
-                    a.set_label(&mut done)?;
-                    a.nop()?;
-                }
+                e.exit(Some(ip), n, EXIT_FAULT, false);
+                // Indice de la sortie : `set_label` ne renseigne que
+                // l'exemplaire qu'on lui passe (celui de `exits`).
+                let stub = e.exits.len() - 1;
+                let mut site = e.a.create_label();
+                e.a.set_label(&mut site)?;
+                let mut w = *h;
+                w.set_memory_base(Register::R8);
+                e.a.add_instruction(w)?;
+                site_labels.push((site, SiteTarget::Exit(stub), ip));
             }
+            Op::Native(h) if vga.is_some_and(|v| v.contains(&ip)) && e.bmi2 && vga_direct(ins).is_some() => {
+                // Site de la fenêtre VGA : par la vue du plan écrit ou lu ;
+                // hors fenêtre ou sans plan direct, faute → chemin contrôlé.
+                let write = vga_direct(ins) == Some(true);
+                e.address(ins)?;
+                let a = &mut e.a;
+                let mut done = a.create_label();
+                let mut recover = a.create_label();
+                let mut site = a.create_label();
+                a.lea(r14d, ptr(r13 - 0xA0000))?;
+                a.mov(r9, qword_ptr(r10 + if write { OFF_VVIEW_W } else { OFF_VVIEW_R }))?;
+                a.set_label(&mut site)?;
+                let mut w = *h;
+                w.set_memory_base(Register::R9);
+                w.set_memory_index(Register::R14);
+                a.add_instruction(w)?;
+                a.mov(byte_ptr(r10 + OFF_VGA_WRITES), 1)?;
+                if !write {
+                    a.lea(r11d, ptr(r14 + 1))?;
+                    a.mov(qword_ptr(r10 + OFF_READ_AT), r11)?;
+                }
+                a.jmp(done)?;
+                a.set_label(&mut recover)?;
+                a.nop()?;
+                emit_native_checked(&mut e, ins, h, ip, n, live_here)?;
+                e.a.set_label(&mut done)?;
+                e.a.nop()?;
+                site_labels.push((site, SiteTarget::Label(recover), ip));
+            }
+            Op::HighLoad(full) if direct(ip) => {
+                // `mov r8h,[m]` direct : la lecture précède toute
+                // modification (registres, drapeaux) ; drapeaux sauvés
+                // autour de la fusion s'ils sont vivants.
+                if live_here {
+                    e.save()?;
+                }
+                e.address(ins)?;
+                e.exit(Some(ip), n, EXIT_FAULT, false);
+                let stub = e.exits.len() - 1;
+                let mut site = e.a.create_label();
+                e.a.set_label(&mut site)?;
+                let f = r32(*full);
+                e.a.movzx(r11d, byte_ptr(r8 + r13))?;
+                e.a.shl(r11d, 8)?;
+                e.a.and(f, 0xFFFF_00FFu32 as i32)?;
+                e.a.or(f, r11d)?;
+                if live_here {
+                    e.restore()?;
+                }
+                site_labels.push((site, SiteTarget::Exit(stub), ip));
+            }
+            Op::HighStore(full) if direct(ip) => {
+                // `mov [m],r8h` direct : drapeaux sauvés d'abord (le `shr`
+                // les écrase avant l'écriture qui peut fauter).
+                e.save()?;
+                e.address(ins)?;
+                e.exit(Some(ip), n, EXIT_FAULT, true);
+                let stub = e.exits.len() - 1;
+                e.a.mov(r11d, r32(*full))?;
+                e.a.shr(r11d, 8)?;
+                let mut site = e.a.create_label();
+                e.a.set_label(&mut site)?;
+                e.a.mov(byte_ptr(r8 + r13), r11b)?;
+                if live_here {
+                    e.restore()?;
+                }
+                site_labels.push((site, SiteTarget::Exit(stub), ip));
+            }
+            Op::Native(h) => emit_native_checked(&mut e, ins, h, ip, n, live_here)?,
             Op::Out(size) => emit_out(&mut e, *size, ip, n, live_here)?,
             Op::Div(signed) => emit_div(&mut e, ins, *signed, ip, n)?,
             _ => emit_stackish(&mut e, ins, op, ip, n, live_here)?,
@@ -1608,7 +1847,8 @@ fn emit_block(
             let ip = tail_ins.unwrap().ip32();
             e.a.mov(r13d, r12d)?;
             e.checked(ip, n, 4, false, true, None)?;
-            e.a.mov(r8d, dword_ptr(r15 + r13))?;
+            e.a.mov(r9d, dword_ptr(r15 + r13))?;
+            e.a.mov(dword_ptr(r10 + OFF_TARGET), r9d)?;
             e.a.lea(r12d, ptr(r12 + 4 + *extra as i32))?;
             let l = e.exit(None, n + 1, EXIT_NEXT, false);
             e.a.jmp(l)?;
@@ -1616,11 +1856,12 @@ fn emit_block(
         Tail::Indirect(t) => {
             let ip = t.ip32();
             if t.op0_kind() == OpKind::Register {
-                e.a.mov(r8d, r32(host_reg(t.op0_register()).unwrap()))?;
+                e.a.mov(dword_ptr(r10 + OFF_TARGET), r32(host_reg(t.op0_register()).unwrap()))?;
             } else {
                 e.address(t)?;
                 e.checked(ip, n, 4, false, true, None)?;
-                e.a.mov(r8d, dword_ptr(r15 + r13))?;
+                e.a.mov(r9d, dword_ptr(r15 + r13))?;
+                e.a.mov(dword_ptr(r10 + OFF_TARGET), r9d)?;
             }
             if t.flow_control() == FlowControl::IndirectCall {
                 e.a.lea(r13d, ptr(r12 - 4))?;
@@ -1674,21 +1915,23 @@ fn emit_block(
             a.mov(qword_ptr(r10 + OFF_LINK), r9)?;
             slots.push((slot, unlinked));
         } else if x.kind == EXIT_NEXT {
-            // Cible calculée (R8D) : table de répartition, sans toucher aux
-            // drapeaux (index par movzx, comparaison par lea + jrcxz).
+            // Cible calculée (`OFF_TARGET`, dans R13D) : table de
+            // répartition, sans toucher aux drapeaux (index par movzx,
+            // comparaison par lea + jrcxz).
             let mut miss = a.create_label();
             let hit = a.create_label();
+            a.mov(r13d, dword_ptr(r10 + OFF_TARGET))?;
             a.mov(r14, rcx)?;
             a.mov(rcx, qword_ptr(r10 + OFF_CHAIN))?;
             a.lea(rcx, ptr(rcx - 1))?;
             a.mov(qword_ptr(r10 + OFF_CHAIN), rcx)?;
             a.jrcxz(miss)?;
-            a.movzx(r11d, r8w)?;
+            a.movzx(r11d, r13w)?;
             a.lea(r11, ptr(r11 + r11))?;
             a.mov(r9, qword_ptr(r10 + OFF_TABLE))?;
             a.lea(r11, ptr(r9 + r11 * 8))?;
             a.mov(r9, qword_ptr(r10 + OFF_GEN_HI))?;
-            a.lea(r9, ptr(r9 + r8))?;
+            a.lea(r9, ptr(r9 + r13))?;
             a.not(r9)?;
             a.mov(rcx, qword_ptr(r11))?;
             a.lea(rcx, ptr(rcx + r9 + 1))?;
@@ -1702,7 +1945,7 @@ fn emit_block(
         }
         match x.eip {
             Some(v) => a.mov(dword_ptr(r10 + OFF_EIP), v)?,
-            None => a.mov(dword_ptr(r10 + OFF_EIP), r8d)?,
+            None => a.mov(dword_ptr(r10 + OFF_EIP), r13d)?,
         }
         a.mov(dword_ptr(r10 + OFF_EXIT), x.kind)?;
         if x.kind != EXIT_NEXT {
@@ -1736,11 +1979,20 @@ fn emit_block(
     // Chaque case vise d'abord sa sortie normale.
     let patches: Vec<(usize, u64)> =
         slots.iter().map(|(slot, unlinked)| Ok(((r.label_ip(slot)? - rip) as usize, r.label_ip(unlinked)?))).collect::<Result<_, IcedError>>()?;
+    let sites = site_labels
+        .iter()
+        .map(|(site, target, ip)| {
+            Ok(match target {
+                SiteTarget::Exit(i) => [r.label_ip(site)?, r.label_ip(&exits[*i].label)?, u64::from(*ip)],
+                SiteTarget::Label(l) => [r.label_ip(site)?, r.label_ip(l)?, u64::from(*ip) | fastmem::INLINE_BIT],
+            })
+        })
+        .collect::<Result<Vec<_>, IcedError>>()?;
     let mut code = r.inner.code_buffer;
     for (at, target) in patches {
         code[at..at + 8].copy_from_slice(&target.to_le_bytes());
     }
-    Ok(Some((code, guest_len, holes, body_off)))
+    Ok(Some((code, guest_len, holes, body_off, sites)))
 }
 
 fn jcc(a: &mut CodeAssembler, cc: ConditionCode, l: CodeLabel) -> Result<(), IcedError> {

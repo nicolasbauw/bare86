@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct GuestMem {
     pub(crate) ptr: *mut u8,
     size: usize,
+    /// memfd qui porte la mémoire : le traducteur dynamique la mappe une
+    /// seconde fois, avec ses propres protections (`jit::fastmem`).
+    fd: libc::c_int,
     /// Un bit par page de 4 Ko écrite par l'hôte (`write`…) : KVM ne voit
     /// pas ces écritures ; le traducteur dynamique en tient compte pour ses
     /// pages de code (`take_host_written`).
@@ -17,22 +20,30 @@ pub struct GuestMem {
 
 impl GuestMem {
     pub fn new(size: usize) -> std::io::Result<Self> {
-        // SAFETY: mappage anonyme privé, vérifié ci-dessous.
-        let ptr = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            )
+        // SAFETY: memfd créé et dimensionné ici, mappage partagé vérifié ;
+        // pages énormes demandées (THP de shmem en mode « advise ») : le
+        // code natif sous KVM y gagne comme avec la mémoire anonyme.
+        let (fd, ptr) = unsafe {
+            let fd = libc::memfd_create(c"bare86-ram".as_ptr(), libc::MFD_CLOEXEC);
+            if fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ftruncate(fd, size as libc::off_t) != 0 {
+                let e = std::io::Error::last_os_error();
+                libc::close(fd);
+                return Err(e);
+            }
+            let ptr = libc::mmap(ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED | libc::MAP_NORESERVE, fd, 0);
+            if ptr == libc::MAP_FAILED {
+                let e = std::io::Error::last_os_error();
+                libc::close(fd);
+                return Err(e);
+            }
+            libc::madvise(ptr, size, libc::MADV_HUGEPAGE);
+            (fd, ptr)
         };
-        if ptr == libc::MAP_FAILED {
-            return Err(std::io::Error::last_os_error());
-        }
         let host_written = (0..size.div_ceil(0x1000 * 64)).map(|_| AtomicU64::new(0)).collect();
-        Ok(Self { ptr: ptr.cast(), size, host_written })
+        Ok(Self { ptr: ptr.cast(), size, fd, host_written })
     }
 
     pub fn write(&self, addr: usize, data: &[u8]) {
@@ -48,6 +59,10 @@ impl GuestMem {
 
     pub fn host_addr(&self) -> u64 {
         self.ptr as u64
+    }
+
+    pub fn fd(&self) -> libc::c_int {
+        self.fd
     }
 
     pub fn size(&self) -> usize {
@@ -106,7 +121,10 @@ impl GuestMem {
 
 impl Drop for GuestMem {
     fn drop(&mut self) {
-        // SAFETY: ptr/size proviennent de notre mmap.
-        unsafe { libc::munmap(self.ptr.cast(), self.size) };
+        // SAFETY: ptr/size proviennent de notre mmap, fd de memfd_create.
+        unsafe {
+            libc::munmap(self.ptr.cast(), self.size);
+            libc::close(self.fd);
+        }
     }
 }
