@@ -4,7 +4,14 @@
 //! `$XDG_DATA_HOME/bare86`) : HX DOS Extender (Japheth, freeware, « may be
 //! used for any purpose », librement redistribuable), pour les programmes
 //! Win32. Téléchargé par `curl` au premier programme Windows lancé sans HX,
-//! version fixée et empreintes SHA-256 vérifiées.
+//! version fixée et empreintes SHA-256 vérifiées. Et DOS/32A (Narech K.,
+//! licence de type BSD), présenté sous le nom `DOS4GW.EXE` aux programmes
+//! liés à l'amorce de DOS/4GW qui ne fournissent pas l'extendeur (démos :
+//! Fukwit Daddy, 303) ; son site d'origine a disparu, il vient du dépôt
+//! figé de FreeDOS 1.3 (ibiblio). Sa licence demande, en cas de
+//! redistribution, la mention « This product uses DOS/32 Advanced DOS
+//! Extender technology. » : Bare86 ne le redistribue pas, mais la porte
+//! (README).
 
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -16,6 +23,10 @@ const HX_ARCHIVES: [(&str, &str); 2] = [
     ("HXRT223.zip", "20510cf66d6c8704f66f908f8fbf9783198195c1e043a6ca9fb6adeadf8785c9"),
     ("HXGUI223.zip", "d9f1962369d609c492ed534d886e697fc6bb0f3f94152674d64ab5f06e663b50"),
 ];
+
+/// DOS/32A 9.1.2 : paquet du dépôt de FreeDOS 1.3 et son empreinte.
+const DOS32A_URL: &str = "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/util/dos32a.zip";
+const DOS32A_SHA256: &str = "f9094975c61d03a5c3fffc778f49f46995d4a9ade0ec0c9b2e9750f987198f86";
 
 /// Répertoire de données de Bare86.
 fn data_dir() -> Option<PathBuf> {
@@ -110,6 +121,57 @@ fn install_hx(base: &Path) -> Result<(), String> {
     })();
     let _ = std::fs::remove_dir_all(&tmp);
     result
+}
+
+/// Contenu de DOS32A.EXE (servi sous le nom DOS4GW.EXE), téléchargé et
+/// installé dans `DOS32A/` au premier besoin ; `None` si c'est impossible
+/// (message affiché une fois).
+pub fn dos32a() -> Option<&'static [u8]> {
+    static EXE: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+    *EXE.get_or_init(|| match dos32a_load() {
+        Ok(data) => Some(Box::leak(data.into_boxed_slice())),
+        Err(e) => {
+            eprintln!("[dos4gw] DOS/32A: {e}");
+            None
+        }
+    })
+}
+
+fn dos32a_load() -> Result<Vec<u8>, String> {
+    let dir = data_dir().ok_or("no home directory")?.join("DOS32A");
+    let exe = dir.join("DOS32A.EXE");
+    if let Ok(data) = std::fs::read(&exe) {
+        return Ok(data);
+    }
+    eprintln!("[dos4gw] DOS4GW.EXE missing: downloading DOS/32A 9.1.2 (Narech K., BSD-style licence) from {DOS32A_URL} into {}", dir.display());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let zip = dir.join(format!("dos32a.zip.tmp{}", std::process::id()));
+    let status = std::process::Command::new("curl")
+        .args(["-fsSL", "--retry", "2", "-o"])
+        .arg(&zip)
+        .arg(DOS32A_URL)
+        .status()
+        .map_err(|e| format!("curl: {e}"))?;
+    let data = std::fs::read(&zip);
+    let _ = std::fs::remove_file(&zip);
+    if !status.success() {
+        return Err(format!("download failed ({status})"));
+    }
+    let data = data.map_err(|e| format!("{}: {e}", zip.display()))?;
+    let got = format!("{:x}", Sha256::digest(&data));
+    if got != DOS32A_SHA256 {
+        return Err(format!("unexpected SHA-256 {got}"));
+    }
+    let files = unzip(&data)?;
+    let get = |name: &str| files.iter().find(|(p, _)| p.to_string_lossy().eq_ignore_ascii_case(name)).map(|(_, d)| d.clone());
+    let bin = get("BIN/DOS32A.EXE").ok_or("BIN/DOS32A.EXE missing from the package")?;
+    if let Some(licence) = get("DOC/DOS32A/LICENSE") {
+        let _ = std::fs::write(dir.join("LICENSE"), licence);
+    }
+    let tmp = dir.join(format!("DOS32A.EXE.tmp{}", std::process::id()));
+    std::fs::write(&tmp, &bin).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    Ok(bin)
 }
 
 /// Fichiers d'une archive zip (stockés ou « deflate »), d'après son

@@ -74,8 +74,14 @@ const BUILTIN: &[(&str, &[u8])] = &[
 /// un répertoire existant).
 fn builtin(p: &Path) -> Option<&'static [u8]> {
     let name = p.file_name()?.to_str()?;
+    let absent = || !is_virtual(p) && fs::symlink_metadata(p).is_err() && p.parent().is_some_and(Path::is_dir);
+    // DOS/4GW n'est pas redistribuable : DOS/32A, compatible, sous son nom
+    // (téléchargé au premier besoin), pour les programmes liés à son amorce.
+    if name.eq_ignore_ascii_case("DOS4GW.EXE") {
+        return if absent() { crate::runtime::dos32a() } else { None };
+    }
     let (_, data) = BUILTIN.iter().find(|(n, _)| n.eq_ignore_ascii_case(name))?;
-    (!is_virtual(p) && fs::symlink_metadata(p).is_err() && p.parent().is_some_and(Path::is_dir)).then_some(*data)
+    absent().then_some(*data)
 }
 
 fn not_found() -> io::Error {

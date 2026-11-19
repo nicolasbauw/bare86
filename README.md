@@ -387,6 +387,13 @@ driver, EMS in a page frame at E000h. The environment holds
 `BLASTER=A220 I5 D1 H5 P330 T6` (`A220 I5 D1 T4` with a Sound Blaster Pro), so that
 games find the Sound Blaster and the MPU-401.
 
+Programs bound to the DOS/4GW stub that do not ship `DOS4GW.EXE` (it was
+expected in the user's `PATH`, and is not freely redistributable) get
+[DOS/32A](https://sourceforge.net/projects/dos32a/), a compatible extender,
+under that name: Bare86 downloads it from the FreeDOS 1.3 package repository
+the first time it is needed (fixed version, checked SHA-256) into
+`~/.local/share/bare86/DOS32A`.
+
 Programs built with Turbo Pascal 7 or Borland Pascal 7 and its CRT unit stop
 with "Runtime error 200" on any modern processor: the `Delay` calibration
 overflows. The built-in DOS fixes it in memory when such a program starts, as
@@ -586,5 +593,9 @@ later, see `LICENSE`. It includes in `third_party/` Nuked-OPL3 (LGPL 2.1 or
 later) and a subset of libADLMIDI (LGPL 2.1 or later, GPL 3, MIT: see its
 license files; its embedded FM banks carry their own terms), and the Terminus
 font (SIL Open Font License 1.1) in `fonts/`.
+
+When needed, Bare86 downloads third-party software that it does not include:
+HX DOS Extender (freeware) and DOS/32A. This product uses DOS/32 Advanced DOS
+Extender technology.
 
 Bare86 is by Nicolas BAUW, developed with [Claude Code](https://claude.com/claude-code).
