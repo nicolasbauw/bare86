@@ -401,6 +401,9 @@ pub struct Stats {
     /// celles rendues à l'interpréteur ; engagements et retraits.
     pub jit_bursts: u64,
     pub jit_instructions: u64,
+    /// Instructions des rafales du traducteur engagé passées à
+    /// l'interpréteur (code qu'il ne traduit pas : mode réel, 16 bits).
+    pub jit_interpreted: u64,
     pub jit_fallbacks: u64,
     pub jit_engagements: u64,
     pub jit_retreats: u64,
@@ -449,6 +452,7 @@ impl std::fmt::Debug for Stats {
             .field("plane_exits", &self.plane_exits)
             .field("jit_bursts", &self.jit_bursts)
             .field("jit_instructions", &self.jit_instructions)
+            .field("jit_interpreted", &self.jit_interpreted)
             .field("jit_fallbacks", &self.jit_fallbacks)
             .field("jit_engagements", &self.jit_engagements)
             .field("jit_retreats", &self.jit_retreats)
@@ -1523,9 +1527,14 @@ impl<B: Backend> Pc<B> {
                         self.jit = Some(j);
                     }
                     let jit = self.jit.as_mut().unwrap();
-                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, JIT_BUDGET, JIT_IDLE)?;
+                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, JIT_BUDGET, JIT_IDLE, BURST_BUDGET)?;
                     self.stats.jit_bursts += 1;
-                    self.stats.jit_instructions += b.instructions;
+                    if b.interpreted {
+                        self.stats.interpreted += b.instructions;
+                        self.stats.jit_interpreted += b.instructions;
+                    } else {
+                        self.stats.jit_instructions += b.instructions;
+                    }
                     self.stats.jit_fallbacks = jit.stats.interp_steps;
                     if b.instructions == 0 && b.reason == interp::StopReason::Unsupported {
                         self.jit_backoff = 256;
@@ -1647,7 +1656,8 @@ impl<B: Backend> Pc<B> {
             crate::jit::policy::Sample {
                 vga_exits: self.stats.plane_exits + self.stats.mmio_exits,
                 interpreted: self.stats.interpreted,
-                jit_instructions: self.stats.jit_instructions,
+                // Rafales interprétées comprises : elles ne sont pas « vides ».
+                jit_instructions: self.stats.jit_instructions + self.stats.jit_interpreted,
                 jit_fallbacks: self.stats.jit_fallbacks,
                 jit_bursts: self.stats.jit_bursts,
             },

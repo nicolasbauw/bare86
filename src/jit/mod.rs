@@ -2203,6 +2203,7 @@ pub fn continue_in_host<B: crate::backend::Backend, M: Mmio>(
     mmio: &mut M,
     budget: u64,
     idle: u64,
+    interp_budget: u64,
 ) -> crate::backend::Result<interp::Burst> {
     vm.complete_pending(&mut |addr, data, write| {
         for (i, b) in data.iter_mut().enumerate() {
@@ -2227,13 +2228,22 @@ pub fn continue_in_host<B: crate::backend::Backend, M: Mmio>(
         jit.touch();
     }
     let mut cpu = vm.state()?;
+    // Code que le traducteur ne sert pas (mode réel, 16 bits, pagination) :
+    // la rafale passe à l'interpréteur, avec le même seuil d'inactivité
+    // (Second Reality, ville en 3D : un `out 3C5h` puis des écritures sur
+    // plusieurs plans par segment ; sans cela, deux sorties de VM chacun).
+    if !eligible(&cpu) {
+        let burst = interp::run_burst(&mut cpu, vm.mem(), mmio, idle, interp_budget);
+        vm.set_state(&cpu)?;
+        return Ok(burst);
+    }
     let (instructions, reason) = jit.run(&mut cpu, vm.mem(), mmio, budget, idle);
     vm.set_state(&cpu)?;
     let new = std::mem::take(&mut jit.new_pages);
     if !new.is_empty() && vm.watch_pages(&new)? {
         jit.watched.extend(new);
     }
-    Ok(interp::Burst { instructions, mmio_accesses: 0, reason })
+    Ok(interp::Burst { instructions, mmio_accesses: 0, reason, interpreted: false })
 }
 
 /// Forme de l'hôte d'une instruction à immédiat volatil : l'immédiat est lu

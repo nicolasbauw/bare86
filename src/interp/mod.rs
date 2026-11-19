@@ -150,6 +150,8 @@ pub struct Burst {
     pub instructions: u64,
     pub mmio_accesses: u64,
     pub reason: StopReason,
+    /// Rafale servie par l'interpréteur (et non par le traducteur).
+    pub interpreted: bool,
 }
 
 impl Cpu {
@@ -372,7 +374,7 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
             break StopReason::Stopped;
         }
     };
-    Burst { instructions, mmio_accesses, reason }
+    Burst { instructions, mmio_accesses, reason, interpreted: true }
 }
 
 /// Attente active pure à partir de `start` ? L'interpréteur exécute à blanc
