@@ -63,6 +63,14 @@ const HBLANK_NS: u128 = 6_356;
 
 /// Mémoire vidéo dans un memfd, avec une vue complète pour le modèle et une
 /// vue de 64 Ko pour la fenêtre de l'invité.
+/// Voir `Vga::plane_mask_fast`.
+pub struct PlaneMaskFast {
+    pub seq2: *mut u8,
+    pub read_intent: *mut u8,
+    pub epoch: *mut u64,
+    pub planes: [u64; 16],
+}
+
 struct Vram {
     fd: i32,
     all: *mut u8,
@@ -338,6 +346,25 @@ impl Vga {
     /// faire directement (mode d'écriture 0 sans logique, un seul plan
     /// écrit) : le plan écrit, là où il se trouve (scène comprise). Pour le
     /// traducteur dynamique.
+    /// Écriture du masque de plans (3C5h, index 2) faite par le traducteur
+    /// dynamique sans passer par `port_write` : adresses des champs qu'elle
+    /// modifie (comme `port_write` : `seq[2]`, `read_intent`, `epoch` ;
+    /// `chain4` n'en dépend pas) et plan d'écriture direct de chacun des 16
+    /// masques (0 : aucun). `None` si l'index courant n'est pas 2.
+    pub fn plane_mask_fast(&mut self) -> Option<PlaneMaskFast> {
+        if self.seq_index & 7 != 2 {
+            return None;
+        }
+        let saved = self.seq[2];
+        let mut planes = [0u64; 16];
+        for (mask, p) in planes.iter_mut().enumerate() {
+            self.seq[2] = mask as u8;
+            *p = self.direct_write_window().map_or(0, |p| p as u64);
+        }
+        self.seq[2] = saved;
+        Some(PlaneMaskFast { seq2: &mut self.seq[2], read_intent: &mut self.read_intent as *mut bool as *mut u8, epoch: &mut self.epoch, planes })
+    }
+
     /// memfd de la VRAM, adresse de son mappage complet, régions des plans
     /// (planes, linéaire, scène) que `direct_*_window` peuvent rendre.
     pub fn vram_mapping(&self) -> (i32, u64, usize) {

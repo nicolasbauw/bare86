@@ -101,9 +101,55 @@ pub struct State {
     /// Opposé de `view` : RSI/RDI de l'hôte → ESI/EDI sans toucher aux
     /// drapeaux (`lea`) après un `movs`.
     neg_view: u64,
+    /// `MaskFast` à jour (0 : `out 3C5h` par `out_trampoline`), et celui du
+    /// traducteur.
+    mask_fast: u64,
+    mask_box: u64,
 }
 
+/// `out 3C5h,al` (masque de plans, index 2) servi par le code traduit :
+/// champs de la carte à écrire (`Vga::plane_mask_fast`), plan direct et vue
+/// d'écriture de chacun des 16 masques. Rafraîchi avec les fenêtres directes.
+#[repr(C)]
+struct MaskFast {
+    seq2: u64,
+    read_intent: u64,
+    epoch: u64,
+    vram: [u64; 16],
+    view: [u64; 16],
+}
+const MF_VRAM: i32 = 24;
+const MF_VIEW: i32 = 24 + 16 * 8;
+
 impl State {
+    /// Fenêtres directes, vues des plans et masque de plans rapide, d'après
+    /// la configuration courante de la carte.
+    fn refresh_direct<M: Mmio>(&mut self, m: &mut M) {
+        self.vram = m.direct_write_window();
+        self.vram_read = m.direct_read_window();
+        self.set_vga_views();
+        self.mask_fast = 0;
+        if self.mask_box != 0
+            && let Some(f) = m.plane_mask_fast()
+        {
+            // SAFETY: boîte possédée par le `Jit` de la rafale en cours.
+            let mf = unsafe { &mut *(self.mask_box as *mut MaskFast) };
+            mf.seq2 = f.seq2 as u64;
+            mf.read_intent = f.read_intent as u64;
+            mf.epoch = f.epoch as u64;
+            mf.vram = f.planes;
+            for i in 0..16 {
+                mf.view[i] = if self.vga_views != 0 {
+                    // SAFETY: vues possédées par le `Jit` de la rafale.
+                    unsafe { &*(self.vga_views as *const fastmem::VgaViews) }.view_of(f.planes[i])
+                } else {
+                    0
+                };
+            }
+            self.mask_fast = self.mask_box;
+        }
+    }
+
     /// Vues des plans écrit et lu d'après `vram` et `vram_read`.
     fn set_vga_views(&mut self) {
         if self.vga_views != 0 {
@@ -141,6 +187,7 @@ const OFF_TARGET: i32 = 200;
 const OFF_VVIEW_W: i32 = 208;
 const OFF_VVIEW_R: i32 = 216;
 const OFF_NEG_VIEW: i32 = 232;
+const OFF_MASK_FAST: i32 = 240;
 /// Entrées de la table de répartition (index : 16 bits bas de l'EIP).
 const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
@@ -306,6 +353,8 @@ pub struct Jit {
     vga_sites: std::collections::HashSet<u32>,
     /// Reprises en ligne par site VGA : au-delà de `INLINE_MAX`, contrôlé.
     inline_faults: Map<u32>,
+    /// Masque de plans rapide (adresse stable, désignée par `State`).
+    mask: Box<MaskFast>,
     /// Pages de la vue mises en lecture seule (code traduit).
     readonly: Vec<u32>,
     mem_size: usize,
@@ -353,6 +402,7 @@ impl Jit {
             vga_views: None,
             vga_sites: Default::default(),
             inline_faults: Map::default(),
+            mask: Box::new(MaskFast { seq2: 0, read_intent: 0, epoch: 0, vram: [0; 16], view: [0; 16] }),
             readonly: Vec::new(),
             mem_size: mem.size(),
             epoch: 1,
@@ -444,15 +494,14 @@ impl Jit {
         }
         let mut st = State {
             membase: mem.ptr as u64,
-            vram: mmio.direct_write_window(),
+            mask_box: &mut *self.mask as *mut MaskFast as u64,
             out_fn: out_trampoline::<M> as *const () as u64,
             out_ctx: mmio as *mut M as u64,
-            vram_read: mmio.direct_read_window(),
             view: self.view.as_ref().map_or(0, |v| v.base()),
             vga_views: self.vga_views.as_ref().map_or(0, |v| v as *const fastmem::VgaViews as u64),
             ..Default::default()
         };
-        st.set_vga_views();
+        st.refresh_direct(mmio);
         st.neg_view = st.view.wrapping_neg();
         let mut done = 0u64;
         let (mut activity, mut active_at) = (mmio.activity(), 0u64);
@@ -617,9 +666,7 @@ impl Jit {
                 if writes {
                     self.touch();
                 }
-                st.vram = mmio.direct_write_window();
-                st.vram_read = mmio.direct_read_window();
-                st.set_vga_views();
+                st.refresh_direct(mmio);
             }
         }
     }
@@ -1463,6 +1510,33 @@ fn emit_out(e: &mut Emit, size: u32, ip: u32, n: u32, live: bool) -> Result<(), 
     e.save()?;
     let slow = e.exit(Some(ip), n, EXIT_SLOW, true);
     let a = &mut e.a;
+    let mut call = a.create_label();
+    let mut done = a.create_label();
+    if size == 1 {
+        // `out 3C5h,al` avec l'index 2 (masque de plans : une écriture par
+        // colonne dans Doom) : fait ici, comme `Vga::port_write`, sans appel
+        // à Rust (drapeaux sauvés ci-dessus).
+        a.cmp(dx, 0x3C5)?;
+        a.jne(call)?;
+        a.mov(r9, qword_ptr(r10 + OFF_MASK_FAST))?;
+        a.test(r9, r9)?;
+        a.jz(call)?;
+        a.mov(r11, qword_ptr(r9))?;
+        a.mov(byte_ptr(r11), al)?;
+        a.mov(r11, qword_ptr(r9 + 8))?;
+        a.mov(byte_ptr(r11), 0)?;
+        a.mov(r11, qword_ptr(r9 + 16))?;
+        a.inc(qword_ptr(r11))?;
+        a.movzx(r11d, al)?;
+        a.and(r11d, 15)?;
+        a.mov(r14, qword_ptr(r9 + r11 * 8 + MF_VRAM))?;
+        a.mov(qword_ptr(r10 + OFF_VRAM), r14)?;
+        a.mov(r14, qword_ptr(r9 + r11 * 8 + MF_VIEW))?;
+        a.mov(qword_ptr(r10 + OFF_VVIEW_W), r14)?;
+        a.mov(byte_ptr(r10 + OFF_VGA_WRITES), 1)?;
+        a.jmp(done)?;
+    }
+    a.set_label(&mut call)?;
     // R8 (base de la vue) compris ; pile alignée sur 16 au moment de
     // l'appel (entrée du bloc : 8 ; prologue et sauvegardes : 13 mots).
     for r in [rax, rcx, rdx, rsi, rdi, r8, r10] {
@@ -1480,6 +1554,8 @@ fn emit_out(e: &mut Emit, size: u32, ip: u32, n: u32, live: bool) -> Result<(), 
     }
     a.test(r11, r11)?;
     a.jz(slow)?;
+    a.set_label(&mut done)?;
+    a.nop()?;
     if live {
         e.restore()?;
     }
@@ -1502,9 +1578,7 @@ extern "sysv64" fn out_trampoline<M: Mmio>(ctx: *mut M, port: u32, size: u32, va
         st.read_at = 0;
     }
     m.port_out(port, size as u8, if size == 1 { value & 0xFF } else { value & 0xFFFF });
-    st.vram = m.direct_write_window();
-    st.vram_read = m.direct_read_window();
-    st.set_vga_views();
+    st.refresh_direct(m);
     1
 }
 

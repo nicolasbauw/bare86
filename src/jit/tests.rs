@@ -158,10 +158,19 @@ fn jit_matches_interpreter() {
                 }
                 // mov esi,a ; mov edi,b ; mov ecx,n ; [std] ; [rep] movs
                 5..=7 => {
-                    let addr = |rng: &mut Rng| -> u32 {
+                    // Destination sur le code qui suit : copie montante
+                    // seulement (descendante, elle réécrit le `rep movs`
+                    // lui-même en cours d'exécution ; un processeur garde
+                    // l'instruction décodée, l'interpréteur de référence la
+                    // redécode à chaque itération : pas de référence fiable).
+                    let mut on_code = false;
+                    let mut addr = |rng: &mut Rng| -> u32 {
                         match rng.below(8) {
                             0 => 0x9_FF00 + rng.below(0x200) as u32, // bord de la fenêtre VGA
-                            1 => here + rng.below(64) as u32,       // code qui suit
+                            1 => {
+                                on_code = true;
+                                here + rng.below(64) as u32 // code qui suit
+                            }
                             2 => rng.below(0x100) as u32,           // près de 0 (DF = 1 : sous la vue)
                             3 => MEM_SIZE as u32 - rng.below(0x100) as u32, // fin de la RAM
                             _ => 0x4000 + rng.below(0x20_0000) as u32,
@@ -173,7 +182,7 @@ fn jit_matches_interpreter() {
                     code.extend(addr(&mut rng).to_le_bytes());
                     code.push(0xB9);
                     code.extend((rng.below(80) as u32).to_le_bytes());
-                    if rng.chance(25) {
+                    if rng.chance(25) && !on_code {
                         code.push(0xFD);
                     }
                     match rng.below(3) {

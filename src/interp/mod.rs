@@ -60,6 +60,11 @@ pub trait Mmio {
     fn vram_mapping(&self) -> Option<(i32, u64, usize)> {
         None
     }
+    /// Écriture du masque de plans servie par le code traduit
+    /// (`Vga::plane_mask_fast`) ; `None` si ce bus ne sert pas 3C5h.
+    fn plane_mask_fast(&mut self) -> Option<crate::vga::PlaneMaskFast> {
+        None
+    }
     /// Vrai si la rafale doit s'arrêter après l'instruction courante.
     fn stop(&self) -> bool {
         false

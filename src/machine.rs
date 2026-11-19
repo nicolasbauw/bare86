@@ -328,6 +328,9 @@ impl Mmio for MmioBus<'_> {
     fn vram_mapping(&self) -> Option<(i32, u64, usize)> {
         Some(self.vga.vram_mapping())
     }
+    fn plane_mask_fast(&mut self) -> Option<crate::vga::PlaneMaskFast> {
+        if self.serves_vga(0x3C5) { self.vga.plane_mask_fast() } else { None }
+    }
     fn activity(&self) -> u64 {
         self.accesses + self.port_accesses
     }
