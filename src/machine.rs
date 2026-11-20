@@ -91,6 +91,12 @@ const FRAME_PERIOD: Duration = Duration::from_micros(14_286);
 /// `PRESENT_AFTER` (et au plus `PRESENT_BEFORE` : pas pendant celui-ci).
 const PRESENT_AFTER: Duration = Duration::from_millis(4);
 const PRESENT_BEFORE: Duration = Duration::from_millis(12);
+/// Rendu de l'image seulement si la prochaine interruption d'horloge (PIT,
+/// RTC, GUS) est à au moins `RENDER_CLEAR` : le rendu (≈ 1 ms) la
+/// retarderait d'autant. Au-delà de `FRAME_PERIOD / 4` de retard, l'image
+/// est rendue sans cette condition (horloge trop rapide pour laisser un
+/// créneau libre).
+const RENDER_CLEAR: Duration = Duration::from_millis(2);
 /// Période de rafraîchissement de l'écran du terminal.
 const TERM_FRAME: Duration = Duration::from_millis(33);
 
@@ -1753,15 +1759,14 @@ impl<B: Backend> Pc<B> {
         if self.host.wants_frames {
             self.present_frame();
         }
-        // Image de la vidéo : rendue, comme celle de l'affichage, pendant la
-        // partie visible de la trame (voir `present_frame`), sauf retard de
-        // deux images. Rendue n'importe quand, elle retardait l'IRQ 0 que
-        // Verses règle 0,25 ms avant le blanc vertical : impulsion de
-        // synchronisation manquée, trame perdue, et la démo enregistrée
-        // tournait au quart de sa vitesse (15 IRQ par seconde au lieu de 60).
+        // Image de la vidéo : rendue, comme celle de l'affichage, au moment
+        // choisi par `render_now`. Rendue n'importe quand, elle retardait
+        // l'IRQ 0 que Verses règle 0,25 ms avant le blanc vertical :
+        // impulsion de synchronisation manquée, trame perdue, et la démo
+        // enregistrée tournait au quart de sa vitesse (15 IRQ par seconde au
+        // lieu de 60).
         let now = Instant::now();
-        let until = self.vga.borrow().until_vblank();
-        if self.video.as_ref().is_some_and(|v| v.due(now) && ((PRESENT_AFTER..=PRESENT_BEFORE).contains(&until) || v.late(now) >= 2 * FRAME_PERIOD)) {
+        if self.video.as_ref().is_some_and(|v| v.due(now) && self.render_now(now, v.late(now))) {
             let frame = self.frame();
             if let Some(v) = &mut self.video {
                 v.push(frame.as_ref().map(|(w, h, px)| (*w, *h, &px[..])), Instant::now());
@@ -2139,19 +2144,35 @@ impl<B: Backend> Pc<B> {
         self.font = Some(font);
     }
 
+    /// Moment propice au rendu d'une image (≈ 1 ms en 320×400, dans ce
+    /// thread) en retard de `late` sur son échéance : pendant la partie
+    /// visible de la trame, loin du blanc vertical, et loin de la prochaine
+    /// interruption d'horloge. Les programmes qui règlent l'IRQ 0 juste
+    /// avant le blanc vertical pour l'attendre (Second Reality) le
+    /// manquaient, et perdaient une trame ; Unreal relance le PIT en mode 0
+    /// à chaque synchronisation verticale et compte ses trames dans
+    /// l'interruption : une IRQ retardée par le rendu lui faisait perdre
+    /// ≈ 4 s à sa transition de 70 s. Sans plus attendre au-delà de deux
+    /// périodes.
+    fn render_now(&self, now: Instant, late: Duration) -> bool {
+        if late >= 2 * FRAME_PERIOD {
+            return true;
+        }
+        if !(PRESENT_AFTER..=PRESENT_BEFORE).contains(&self.vga.borrow().until_vblank()) {
+            return false;
+        }
+        late >= FRAME_PERIOD / 4 || self.next_timer_irq().is_none_or(|t| t.saturating_duration_since(now) >= RENDER_CLEAR)
+    }
+
     /// Image envoyée à l'affichage de l'hôte, à 70 Hz.
     fn present_frame(&mut self) {
         let since = self.last_frame.map(|t| t.elapsed());
         if since.is_some_and(|d| d < FRAME_PERIOD) {
             return;
         }
-        // Rendu (≈ 1 ms en 320×400, dans ce thread) pendant la partie
-        // visible de la trame, loin du blanc vertical : les programmes qui
-        // règlent l'IRQ 0 juste avant celui-ci pour l'attendre (Second
-        // Reality) le manquaient, et perdaient une trame. Sans plus attendre
-        // au-delà de deux périodes.
-        let until = self.vga.borrow().until_vblank();
-        if !(PRESENT_AFTER..=PRESENT_BEFORE).contains(&until) && since.is_some_and(|d| d < 2 * FRAME_PERIOD) {
+        if let Some(d) = since
+            && !self.render_now(Instant::now(), d - FRAME_PERIOD)
+        {
             return;
         }
         self.last_frame = Some(Instant::now());
