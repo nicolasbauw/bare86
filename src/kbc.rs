@@ -37,9 +37,15 @@ enum Pending {
     KeyboardParam,
 }
 
+/// Dernier octet lu au port 60h avant toute frappe : le relâchement
+/// d'Entrée qui a validé la ligne de commande, comme sur un vrai PC. Avec
+/// 00h (code d'appui, bit 7 à zéro), les démos qui guettent une touche au
+/// port 60h quittaient aussitôt (Fukwit Daddy).
+const ENTER_RELEASED: u8 = 0x9C;
+
 impl Kbc {
     pub fn new() -> Self {
-        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCD, pending: None, irq: false, last: 0, reset: false }
+        Self { out: VecDeque::new(), command_byte: 0x45, output_port: 0xCD, pending: None, irq: false, last: ENTER_RELEASED, reset: false }
     }
 
     pub fn shared(self) -> Rc<RefCell<Self>> {
