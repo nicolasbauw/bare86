@@ -227,7 +227,7 @@ sound need the window (or `--shot` and `--wav`).
 | Option | Effect |
 |---|---|
 | `--window` | SDL3 window, with sound |
-| `--window-auto` | Window shown at the first graphics mode (VGA, VESA, Glide, OpenGL); until then, and for programs that stay in text mode, the terminal |
+| `--window-auto` | Window shown at the first graphics mode (VGA, VESA, Glide, OpenGL) or at the first text screen the program draws itself (menus, setup screens); until then, and for programs that only print, the terminal |
 | `--fullscreen` | Window, full screen from the start |
 | `--menu-key L` | Letter of the menu shortcut, Ctrl+Alt+L (default M) |
 | `--launcher [DIR]` | List the games of DIR (default: the current directory) and run the chosen one, see [Launcher](#launcher) |
@@ -338,8 +338,9 @@ back to Mono. A program started this way gets:
   also gets the profile's `args`;
 - when a graphical display is available and its output goes to a terminal,
   `--window-auto`: the program starts in the terminal, and a window opens at
-  its first graphics mode (VGA, VESA, Glide or OpenGL), taking over the
-  keyboard; a text-mode utility never opens one. Otherwise
+  its first graphics mode (VGA, VESA, Glide or OpenGL), or at the first
+  text screen it draws itself in video memory (a menu, a setup screen),
+  taking over the keyboard; a utility that only prints never opens one. Otherwise
   (`./PKZIP.EXE | less`, or `--term` in the profile) it runs in the
   terminal, and its DOS output goes to the pipe or file;
 - its exit code, returned to the shell.

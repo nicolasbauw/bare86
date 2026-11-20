@@ -113,8 +113,9 @@ usage: bare86 [options] [program [arguments…]]
                  ffmpeg), for comparisons with a reference (tools/compare.py)
   --window       SDL3 window (vCPU on its own thread)
   --window-auto  window shown at the first graphics mode (VGA, VESA, Glide,
-                 OpenGL); until then, and for text-mode programs, the
-                 terminal
+                 OpenGL) or at the first text screen the program draws
+                 itself (menus, setup screens); until then, and for
+                 programs that only print, the terminal
   --fullscreen   window, full screen from the start
   --stats        machine counters at the end (exits, emulated VRAM…)
   --vbe1         VESA 1.2 card: banked windows only, no linear framebuffer

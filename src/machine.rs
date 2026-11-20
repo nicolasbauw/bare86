@@ -531,6 +531,13 @@ pub struct Pc<B: Backend = KvmVm> {
     started: Instant,
     limit: Option<Duration>,
     last_frame: Option<Instant>,
+    /// Page texte telle que l'ont laissée les services de l'hôte (BIOS,
+    /// DOS : toute la sortie texte passe par eux) ; `None` une fois un
+    /// écran texte écrit directement par le programme repéré.
+    text_shadow: Option<Vec<u8>>,
+    /// Le programme écrit lui-même son écran texte (menu, installateur) :
+    /// la fenêtre de `--window-auto` est montrée comme pour un mode graphique.
+    text_ui: bool,
     /// Enregistrement vidéo (`--video`).
     video: Option<crate::video::VideoOut>,
     /// Dernier rafraîchissement de l'écran du terminal.
@@ -780,6 +787,8 @@ impl<B: Backend> Pc<B> {
             started: Instant::now(),
             limit: cfg.limit,
             last_frame: None,
+            text_shadow: None,
+            text_ui: false,
             video: None,
             input_paused_until: None,
             until_text: None,
@@ -1660,8 +1669,13 @@ impl<B: Backend> Pc<B> {
             if opengl_call {
                 self.opengl_call()?;
             }
-            if host_call && let Some(code) = self.host_call()? {
-                return Ok(Event::Exit(code));
+            if host_call {
+                self.check_text_ui();
+                let r = self.host_call()?;
+                self.refresh_text_shadow();
+                if let Some(code) = r {
+                    return Ok(Event::Exit(code));
+                }
             }
         }
     }
@@ -2123,10 +2137,59 @@ impl<B: Backend> Pc<B> {
             return;
         }
         self.last_frame = Some(Instant::now());
+        self.check_text_ui();
         if let Some((width, height, pixels)) = self.frame() {
-            let graphics = self.graphics_shown();
+            let graphics = self.text_ui || self.graphics_shown();
             self.host.display.present(&crate::host::Frame { width, height, pixels: &pixels, graphics });
         }
+    }
+
+    /// Page texte active (mode texte couleur seulement) : adresse et taille.
+    fn text_page(&self) -> Option<std::ops::Range<usize>> {
+        let mem = self.vm.mem();
+        if !matches!(mem.read_u8(0x449), 0..=3) || crate::render::is_graphics(&self.vga.borrow(), mem) {
+            return None;
+        }
+        let cols = usize::from(mem.read_u16(0x44A)).clamp(40, 132);
+        let rows = (usize::from(mem.read_u8(0x484)) + 1).clamp(25, 60);
+        let start = 0xB8000 + usize::from(mem.read_u16(0x44E)).min(0x7000);
+        Some(start..(start + cols * rows * 2).min(0xC0000))
+    }
+
+    /// Écran texte écrit par le programme lui-même depuis le dernier
+    /// service de l'hôte : `text_ui` levé (seulement quand une fenêtre
+    /// reçoit les images, c'est-à-dire pour `--window-auto`).
+    fn check_text_ui(&mut self) {
+        if self.text_ui || !self.host.wants_frames {
+            return;
+        }
+        let (Some(shadow), Some(page)) = (&self.text_shadow, self.text_page()) else { return };
+        let mem = self.vm.mem();
+        let mut buf = [0u8; 512];
+        let changed = shadow.len() != page.len()
+            || shadow.chunks(buf.len()).enumerate().any(|(i, old)| {
+                let now = &mut buf[..old.len()];
+                mem.read(page.start + i * 512, now);
+                now != old
+            });
+        if changed && shadow.len() == page.len() {
+            self.text_ui = true;
+            self.text_shadow = None;
+        }
+    }
+
+    fn refresh_text_shadow(&mut self) {
+        if self.text_ui || !self.host.wants_frames {
+            return;
+        }
+        let Some(page) = self.text_page() else {
+            self.text_shadow = None;
+            return;
+        };
+        let mem = self.vm.mem();
+        let shadow = self.text_shadow.get_or_insert_with(Vec::new);
+        shadow.resize(page.len(), 0);
+        mem.read(page.start, shadow);
     }
 
     /// Texte de la page active de l'écran.
