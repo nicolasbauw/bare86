@@ -318,7 +318,13 @@ impl Mmio for MmioBus<'_> {
         }
     }
     fn stop(&self) -> bool {
-        self.plane_read && !matches!(self.vga.access(), Access::PlaneRead(_))
+        // Signal du battement (échéance d'une IRQ) : rendre la main comme
+        // le code traduit. Sinon l'IRQ attend la fin de la rafale (jusqu'à
+        // 100 000 instructions, plusieurs ms), et un programme qui
+        // reprogramme le PIT à chaque IRQ (copper de Second Reality, trois
+        // par trame) accumule ces retards : sa musique ralentissait de 10 à
+        // 20 % dans les scènes en 16 bits à rafales interprétées.
+        crate::timer::kick_pending() || self.plane_read && !matches!(self.vga.access(), Access::PlaneRead(_))
     }
     fn direct_write_window(&mut self) -> u64 {
         self.vga.direct_write_window().map_or(0, |p| p as u64)
