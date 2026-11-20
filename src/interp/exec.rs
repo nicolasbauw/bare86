@@ -156,6 +156,103 @@ fn is_cmovcc(m: Mn) -> bool {
     )
 }
 
+/// Formes fréquentes exécutées sans le chemin général de `Exec::step`
+/// (prologue, mnémonique, opérandes par `Loc`) : classées une fois au
+/// décodage (`classify`, gardé dans le cache de décodage), mêmes primitives
+/// (`rd`, `wr`, `push_all`, `jump`, ALU), donc mêmes contrôles et même
+/// ordre « vérifier avant d'écrire ». Registres entiers seulement.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(super) enum Fast {
+    #[default]
+    Generic,
+    MovRR,
+    MovRI,
+    MovRM,
+    MovMR,
+    MovMI,
+    Alu(AluOp, Form),
+    IncR,
+    DecR,
+    Jcc,
+    Jmp,
+    PushR,
+    PopR,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum AluOp {
+    Add,
+    Adc,
+    Sub,
+    Sbb,
+    Cmp,
+    And,
+    Or,
+    Xor,
+    Test,
+}
+
+/// Opérandes (destination, source) : registre, immédiat, mémoire.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Form {
+    RR,
+    RI,
+    RM,
+    MR,
+    MI,
+}
+
+fn gpr(r: R) -> bool {
+    r.is_gpr8() || r.is_gpr16() || r.is_gpr32()
+}
+
+fn is_imm(k: OpKind) -> bool {
+    matches!(k, OpKind::Immediate8 | OpKind::Immediate16 | OpKind::Immediate32 | OpKind::Immediate8to16 | OpKind::Immediate8to32)
+}
+
+/// Forme rapide de l'instruction, ou `Generic`.
+pub(super) fn classify(ins: &Instruction) -> Fast {
+    if ins.has_lock_prefix() || ins.has_rep_prefix() || ins.has_repne_prefix() {
+        return Fast::Generic;
+    }
+    let form = || match (ins.op0_kind(), ins.op1_kind()) {
+        (OpKind::Register, OpKind::Register) if gpr(ins.op0_register()) && gpr(ins.op1_register()) => Some(Form::RR),
+        (OpKind::Register, k) if gpr(ins.op0_register()) && is_imm(k) => Some(Form::RI),
+        (OpKind::Register, OpKind::Memory) if gpr(ins.op0_register()) => Some(Form::RM),
+        (OpKind::Memory, OpKind::Register) if gpr(ins.op1_register()) => Some(Form::MR),
+        (OpKind::Memory, k) if is_imm(k) => Some(Form::MI),
+        _ => None,
+    };
+    let reg0 = ins.op_count() == 1 && ins.op0_kind() == OpKind::Register && gpr(ins.op0_register());
+    let alu = |op| form().map_or(Fast::Generic, |f| Fast::Alu(op, f));
+    match ins.mnemonic() {
+        Mn::Mov if ins.op_count() == 2 => match form() {
+            Some(Form::RR) => Fast::MovRR,
+            Some(Form::RI) => Fast::MovRI,
+            Some(Form::RM) => Fast::MovRM,
+            Some(Form::MR) => Fast::MovMR,
+            Some(Form::MI) => Fast::MovMI,
+            None => Fast::Generic,
+        },
+        Mn::Add => alu(AluOp::Add),
+        Mn::Adc => alu(AluOp::Adc),
+        Mn::Sub => alu(AluOp::Sub),
+        Mn::Sbb => alu(AluOp::Sbb),
+        Mn::Cmp => alu(AluOp::Cmp),
+        Mn::And => alu(AluOp::And),
+        Mn::Or => alu(AluOp::Or),
+        Mn::Xor => alu(AluOp::Xor),
+        Mn::Test => alu(AluOp::Test),
+        Mn::Inc if reg0 => Fast::IncR,
+        Mn::Dec if reg0 => Fast::DecR,
+        Mn::Push if reg0 => Fast::PushR,
+        Mn::Pop if reg0 => Fast::PopR,
+        Mn::Jmp if matches!(ins.op0_kind(), OpKind::NearBranch16 | OpKind::NearBranch32) => Fast::Jmp,
+        _ if ins.is_jcc_short_or_near() => Fast::Jcc,
+        _ => Fast::Generic,
+    }
+}
+
 pub(super) struct Exec<'a, B: Mmio> {
     pub cpu: &'a mut Cpu,
     pub mem: &'a GuestMem,
@@ -453,6 +550,107 @@ impl<B: Mmio> Exec<'_, B> {
     }
 
     // --- Exécution -----------------------------------------------------
+
+    /// Exécute l'instruction, par sa forme rapide si elle en a une.
+    pub fn run(&mut self, ins: &Instruction, fast: Fast) -> X {
+        if fast == Fast::Generic { self.step(ins) } else { self.fast(ins, fast) }
+    }
+
+    fn fast(&mut self, ins: &Instruction, f: Fast) -> X {
+        let next = if self.cpu.code32() { ins.next_ip() as u32 } else { ins.next_ip() as u32 & 0xFFFF };
+        let mem = |ex: &Self| (ins.memory_segment(), ex.ea(ins));
+        match f {
+            Fast::MovRR => {
+                let v = self.cpu.reg(ins.op1_register());
+                self.cpu.set_reg(ins.op0_register(), v);
+            }
+            Fast::MovRI => self.cpu.set_reg(ins.op0_register(), ins.immediate(1) as u32),
+            Fast::MovRM => {
+                let r = ins.op0_register();
+                let (seg, off) = mem(self);
+                let v = self.rd(seg, off, r.size() as u32)?;
+                self.cpu.set_reg(r, v);
+            }
+            Fast::MovMR => {
+                let r = ins.op1_register();
+                let (seg, off) = mem(self);
+                self.wr(seg, off, r.size() as u32, self.cpu.reg(r))?;
+            }
+            Fast::MovMI => {
+                let size = ins.memory_size().size() as u32;
+                let (seg, off) = mem(self);
+                self.wr(seg, off, size, ins.immediate(1) as u32 & mask(size))?;
+            }
+            Fast::Alu(op, form) => {
+                let size = match form {
+                    Form::RR | Form::RI | Form::RM => ins.op0_register().size() as u32,
+                    Form::MR | Form::MI => ins.memory_size().size() as u32,
+                };
+                let (a, b) = match form {
+                    Form::RR => (self.cpu.reg(ins.op0_register()), self.cpu.reg(ins.op1_register())),
+                    Form::RI => (self.cpu.reg(ins.op0_register()), ins.immediate(1) as u32 & mask(size)),
+                    Form::RM => {
+                        let (seg, off) = mem(self);
+                        (self.cpu.reg(ins.op0_register()), self.rd(seg, off, size)?)
+                    }
+                    Form::MR => {
+                        let (seg, off) = mem(self);
+                        (self.rd(seg, off, size)?, self.cpu.reg(ins.op1_register()))
+                    }
+                    Form::MI => {
+                        let (seg, off) = mem(self);
+                        (self.rd(seg, off, size)?, ins.immediate(1) as u32 & mask(size))
+                    }
+                };
+                let carry = self.cpu.flags & CF;
+                let (res, flags) = match op {
+                    AluOp::Add => add(a, b, 0, size),
+                    AluOp::Adc => add(a, b, carry, size),
+                    AluOp::Sub | AluOp::Cmp => sub(a, b, 0, size),
+                    AluOp::Sbb => sub(a, b, carry, size),
+                    AluOp::And | AluOp::Test => logic(a & b, size),
+                    AluOp::Or => logic(a | b, size),
+                    AluOp::Xor => logic(a ^ b, size),
+                };
+                if !matches!(op, AluOp::Cmp | AluOp::Test) {
+                    match form {
+                        Form::RR | Form::RI | Form::RM => self.cpu.set_reg(ins.op0_register(), res),
+                        Form::MR | Form::MI => {
+                            let (seg, off) = mem(self);
+                            self.wr(seg, off, size, res)?;
+                        }
+                    }
+                }
+                self.cpu.set_flags(ARITH, flags);
+            }
+            Fast::IncR | Fast::DecR => {
+                let r = ins.op0_register();
+                let (size, a) = (r.size() as u32, self.cpu.reg(r));
+                let (res, flags) = if f == Fast::IncR { add(a, 1, 0, size) } else { sub(a, 1, 0, size) };
+                self.cpu.set_reg(r, res);
+                self.cpu.set_flags(ARITH & !CF, flags);
+            }
+            Fast::Jmp => return self.jump(ins.near_branch_target() as u32),
+            Fast::Jcc => {
+                if self.cpu.condition(ins.condition_code()) {
+                    return self.jump(ins.near_branch_target() as u32);
+                }
+            }
+            Fast::PushR => {
+                let n = (-ins.stack_pointer_increment()) as u32;
+                self.push_all(&[(self.cpu.reg(ins.op0_register()), n)])?;
+            }
+            Fast::PopR => {
+                let n = ins.stack_pointer_increment() as u32;
+                let v = self.peek(0, n)?;
+                self.drop_stack(n);
+                self.cpu.set_reg(ins.op0_register(), v);
+            }
+            Fast::Generic => return self.step(ins),
+        }
+        self.cpu.ip = next;
+        Ok(())
+    }
 
     pub fn step(&mut self, ins: &Instruction) -> X {
         let next = if self.cpu.code32() { ins.next_ip() as u32 } else { ins.next_ip() as u32 & 0xFFFF };

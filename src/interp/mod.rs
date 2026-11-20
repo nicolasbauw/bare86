@@ -18,7 +18,7 @@ use kvm_bindings::{kvm_regs, kvm_segment, kvm_sregs};
 
 use crate::backend::Backend;
 use crate::mem::GuestMem;
-use exec::{Bail, Exec};
+use exec::{Bail, Exec, Fast};
 
 /// Accès à la mémoire non mappée (fenêtre VGA) depuis l'interpréteur.
 pub trait Mmio {
@@ -279,7 +279,7 @@ pub fn write_linear(cpu: &Cpu, mem: &GuestMem, lin: u32, data: &[u8]) -> bool {
 
 /// Instruction décodée à CS:IP, avec l'indicateur d'adressage 32 bits
 /// (taille par défaut du segment de code, inversée par 67h).
-fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
+fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool, Fast)> {
     DECODED.with(|c| fetch_with(cpu, mem, &mut c.borrow_mut()))
 }
 
@@ -291,7 +291,7 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
 /// les octets mêmes de l'instruction sont identiques (le code modifié est
 /// donc redécodé). Les octets sont lus d'un bloc de 16 et comparés sous
 /// masque : la consultation coûtait autant que l'exécution.
-fn fetch_with(cpu: &Cpu, mem: &GuestMem, cache: &mut [Decoded]) -> Option<(Instruction, bool)> {
+fn fetch_with(cpu: &Cpu, mem: &GuestMem, cache: &mut [Decoded]) -> Option<(Instruction, bool, Fast)> {
     let code32 = cpu.code32();
     let ip = if code32 { cpu.ip } else { cpu.ip & 0xFFFF };
     let at = cpu.seg[1].base.wrapping_add(ip);
@@ -306,19 +306,19 @@ fn fetch_with(cpu: &Cpu, mem: &GuestMem, cache: &mut [Decoded]) -> Option<(Instr
     let slot = (phys as usize ^ (phys as usize >> 12)) & (DECODE_CACHE - 1);
     let e = &cache[slot];
     if e.valid && e.phys == phys && e.ip == ip && e.code32 == code32 && raw & e.mask == e.key {
-        return Some((e.ins, e.addr32));
+        return Some((e.ins, e.addr32, e.fast));
     }
     let bytes = raw.to_le_bytes();
-    let (ins, addr32) = decode(&bytes[..15], ip, code32)?;
+    let (ins, addr32, fast) = decode(&bytes[..15], ip, code32)?;
     let mask = if ins.len() >= 16 { u128::MAX } else { (1u128 << (8 * ins.len())) - 1 };
-    cache[slot] = Decoded { valid: true, phys, ip, code32, mask, key: raw & mask, ins, addr32 };
-    Some((ins, addr32))
+    cache[slot] = Decoded { valid: true, phys, ip, code32, mask, key: raw & mask, ins, addr32, fast };
+    Some((ins, addr32, fast))
 }
 
 /// Lecture page par page (instruction à cheval sur deux pages paginées, ou
 /// en fin de mémoire), sans cache : on s'arrête à la première page absente ;
 /// le décodage échoue si l'instruction la franchit.
-fn fetch_slow(cpu: &Cpu, mem: &GuestMem, at: u32, ip: u32, code32: bool) -> Option<(Instruction, bool)> {
+fn fetch_slow(cpu: &Cpu, mem: &GuestMem, at: u32, ip: u32, code32: bool) -> Option<(Instruction, bool, Fast)> {
     let mut bytes = [0u8; 15];
     let mut n = 0;
     while n < bytes.len() {
@@ -335,7 +335,7 @@ fn fetch_slow(cpu: &Cpu, mem: &GuestMem, at: u32, ip: u32, code32: bool) -> Opti
     decode(&bytes[..n], ip, code32)
 }
 
-fn decode(bytes: &[u8], ip: u32, code32: bool) -> Option<(Instruction, bool)> {
+fn decode(bytes: &[u8], ip: u32, code32: bool) -> Option<(Instruction, bool, Fast)> {
     let bitness = if code32 { 32 } else { 16 };
     let ins = Decoder::with_ip(bitness, bytes, u64::from(ip), DecoderOptions::NONE).decode();
     if ins.is_invalid() {
@@ -345,7 +345,7 @@ fn decode(bytes: &[u8], ip: u32, code32: bool) -> Option<(Instruction, bool)> {
         .iter()
         .take_while(|b| matches!(b, 0x26 | 0x2E | 0x36 | 0x3E | 0x64 | 0x65 | 0x66 | 0x67 | 0xF0 | 0xF2 | 0xF3))
         .any(|&b| b == 0x67);
-    Some((ins, code32 != prefix67))
+    Some((ins, code32 != prefix67, exec::classify(&ins)))
 }
 
 /// Entrées du cache de décodage (puissance de 2).
@@ -362,6 +362,7 @@ struct Decoded {
     key: u128,
     ins: Instruction,
     addr32: bool,
+    fast: Fast,
 }
 
 thread_local! {
@@ -387,16 +388,16 @@ pub(crate) fn step_once<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M) ->
     if unsupported_mode(cpu) {
         return None;
     }
-    let (ins, addr32) = fetch(cpu, mem)?;
+    let (ins, addr32, fast) = fetch(cpu, mem)?;
     let mut ex = Exec { cpu, mem, mmio, mmio_hits: 0, rep_budget: 1, flags_push: None, addr32, dry: None };
-    ex.step(&ins).ok()?;
+    ex.run(&ins, fast).ok()?;
     Some(Stepped { ins, flags_push: ex.flags_push })
 }
 
 /// Instruction à CS:EIP (sonde BARE86_JITPROBE).
 pub fn describe_at(cpu: &Cpu, mem: &GuestMem) -> String {
     match fetch(cpu, mem) {
-        Some((ins, _)) => format!("{:08X} {ins}", cpu.seg[1].base.wrapping_add(cpu.ip)),
+        Some((ins, ..)) => format!("{:08X} {ins}", cpu.seg[1].base.wrapping_add(cpu.ip)),
         None => format!("{:08X} (fetch failed, mode?)", cpu.seg[1].base.wrapping_add(cpu.ip)),
     }
 }
@@ -423,10 +424,10 @@ fn run_burst_with<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_lim
         if unsupported_mode(cpu) {
             break StopReason::Unsupported;
         }
-        let Some((ins, addr32)) = fetch_with(cpu, mem, cache) else { break StopReason::Unsupported };
+        let Some((ins, addr32, fast)) = fetch_with(cpu, mem, cache) else { break StopReason::Unsupported };
         let rep_budget = budget - instructions;
         let mut ex = Exec { cpu: &mut *cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget, flags_push: None, addr32, dry: None };
-        let result = ex.step(&ins);
+        let result = ex.run(&ins, fast);
         let (hits, used) = (ex.mmio_hits, rep_budget - ex.rep_budget);
         mmio_accesses += hits;
         // Une par itération d'un `rep` (au moins une : ECX = 0, ou
@@ -463,7 +464,7 @@ pub fn probe_spin<M: Mmio>(start: &Cpu, mem: &GuestMem, mmio: &mut M, max: u64) 
     let mut lap: Option<(Cpu, std::collections::HashMap<u32, u8>)> = None;
     let mut laps = 0;
     for _ in 0..max {
-        let Some((ins, addr32)) = fetch(&cpu, mem) else { return false };
+        let Some((ins, addr32, _)) = fetch(&cpu, mem) else { return false };
         let mut ex = Exec { cpu: &mut cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget: 1, flags_push: None, addr32, dry: Some(&mut overlay) };
         if ex.step(&ins).is_err() || ex.mmio_hits > 0 {
             return false;
