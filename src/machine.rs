@@ -566,7 +566,7 @@ pub struct Pc<B: Backend = KvmVm> {
     /// de la série et dernier appel.
     idle_polls: Option<(Instant, Instant)>,
     /// Scrutation du compteur du PIT : début de la série et dernière lecture.
-    pit_polls: Option<(Instant, Instant)>,
+    pit_polls: Option<(Instant, Instant, u16)>,
     /// Scrutation du registre d'état VGA sans autre écriture sur un port :
     /// début de la série et dernière lecture.
     vga_polls: Option<(Instant, Instant)>,
@@ -1530,7 +1530,7 @@ impl<B: Backend> Pc<B> {
                 }
                 Exit::IoIn { port, size, data } => {
                     self.stats.io_ports.add(port);
-                    if matches!(port, 0x40..=0x42) && Self::pit_poll(&mut self.pit_polls) {
+                    if matches!(port, 0x40..=0x42) && Self::pit_poll(&mut self.pit_polls, port) {
                         self.stats.pit_yields += 1;
                     }
                     if matches!(port, 0x3BA | 0x3DA)
@@ -1753,7 +1753,15 @@ impl<B: Backend> Pc<B> {
         if self.host.wants_frames {
             self.present_frame();
         }
-        if self.video.as_ref().is_some_and(|v| v.due(Instant::now())) {
+        // Image de la vidéo : rendue, comme celle de l'affichage, pendant la
+        // partie visible de la trame (voir `present_frame`), sauf retard de
+        // deux images. Rendue n'importe quand, elle retardait l'IRQ 0 que
+        // Verses règle 0,25 ms avant le blanc vertical : impulsion de
+        // synchronisation manquée, trame perdue, et la démo enregistrée
+        // tournait au quart de sa vitesse (15 IRQ par seconde au lieu de 60).
+        let now = Instant::now();
+        let until = self.vga.borrow().until_vblank();
+        if self.video.as_ref().is_some_and(|v| v.due(now) && ((PRESENT_AFTER..=PRESENT_BEFORE).contains(&until) || v.late(now) >= 2 * FRAME_PERIOD)) {
             let frame = self.frame();
             if let Some(v) = &mut self.video {
                 v.push(frame.as_ref().map(|(w, h, px)| (*w, *h, &px[..])), Instant::now());
@@ -2017,18 +2025,22 @@ impl<B: Backend> Pc<B> {
     /// de `PIT_POLL_AFTER` de lectures rapprochées, chaque lecture cède
     /// `PIT_POLL_SLEEP` à l'hôte. Le compteur suit le temps réel : le
     /// programme voit simplement le temps passer. Les temporisations courtes
-    /// (pilotes, détection AdLib) ne sont pas touchées.
-    fn pit_poll(polls: &mut Option<(Instant, Instant)>) -> bool {
+    /// (pilotes, détection AdLib) ne sont pas touchées. Une attente relit
+    /// toujours le même canal : un changement de canal recommence la série
+    /// (Verses tire ses nombres aléatoires des canaux 0, 1 et 2 à la suite,
+    /// des milliers de fois par image ; cédé à chaque lecture, son fondu en
+    /// étoile durait quatre fois trop).
+    fn pit_poll(polls: &mut Option<(Instant, Instant, u16)>, port: u16) -> bool {
         let now = Instant::now();
         let start = match *polls {
-            Some((start, last)) if now - last < PIT_POLL_GAP => start,
+            Some((start, last, p)) if now - last < PIT_POLL_GAP && p == port => start,
             _ => now,
         };
         let yields = now - start > PIT_POLL_AFTER;
         if yields {
             std::thread::sleep(PIT_POLL_SLEEP);
         }
-        *polls = Some((start, Instant::now()));
+        *polls = Some((start, Instant::now(), port));
         yields
     }
 

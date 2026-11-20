@@ -58,6 +58,11 @@ impl VideoOut {
         now >= self.time_of(self.frames)
     }
 
+    /// Retard de l'image due (nul si aucune ne l'est).
+    pub fn late(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.time_of(self.frames))
+    }
+
     /// Image courante de la machine (`None` : la précédente reste), à écrire
     /// autant de fois qu'il faut pour rattraper l'horloge.
     pub fn push(&mut self, frame: Option<(usize, usize, &[u32])>, now: Instant) {

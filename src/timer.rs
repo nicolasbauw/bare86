@@ -69,6 +69,13 @@ impl Heartbeat {
     pub fn new(period: Duration) -> io::Result<Self> {
         let sig = signal();
         install_handler()?;
+        // Sommeils du vCPU (attentes actives, scrutations) à l'heure : la
+        // tolérance par défaut des minuteries (50 µs, « timer slack ») plus
+        // le réveil retardaient les IRQ 0 de ≈ 150 µs, et les démos qui
+        // calent leur minuterie sur le balayage n'ont que ≈ 300 µs de marge
+        // (Verses : impulsion de synchronisation manquée, une trame perdue).
+        // SAFETY: réglage du thread appelant, sans pointeur.
+        unsafe { libc::prctl(libc::PR_SET_TIMERSLACK, 1 as libc::c_ulong) };
         // SAFETY: sigevent entièrement initialisé.
         unsafe {
             let mut ev: libc::sigevent = std::mem::zeroed();
