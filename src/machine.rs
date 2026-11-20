@@ -92,7 +92,7 @@ const FRAME_PERIOD: Duration = Duration::from_micros(14_286);
 const PRESENT_AFTER: Duration = Duration::from_millis(4);
 const PRESENT_BEFORE: Duration = Duration::from_millis(12);
 /// Rendu de l'image seulement si la prochaine interruption d'horloge (PIT,
-/// RTC, GUS) est à au moins `RENDER_CLEAR` : le rendu (≈ 1 ms) la
+/// RTC, GUS) est à au moins `RENDER_CLEAR` : le rendu (0,05 à 0,4 ms) la
 /// retarderait d'autant. Au-delà de `FRAME_PERIOD / 4` de retard, l'image
 /// est rendue sans cette condition (horloge trop rapide pour laisser un
 /// créneau libre).
@@ -2153,8 +2153,9 @@ impl<B: Backend> Pc<B> {
         self.font = Some(font);
     }
 
-    /// Moment propice au rendu d'une image (≈ 1 ms en 320×400, dans ce
-    /// thread) en retard de `late` sur son échéance : pendant la partie
+    /// Moment propice au rendu d'une image (dans ce thread ; mesuré le
+    /// 2026-11-20 : ≈ 50 µs en 320×200 à 256 couleurs, ≈ 110 µs en 320×400,
+    /// en EGA ou en VBE, ≈ 0,4 ms en mode texte) en retard de `late` sur son échéance : pendant la partie
     /// visible de la trame, loin du blanc vertical, et loin de la prochaine
     /// interruption d'horloge. Les programmes qui règlent l'IRQ 0 juste
     /// avant le blanc vertical pour l'attendre (Second Reality) le
