@@ -141,7 +141,17 @@ impl Exe<'_> {
             let top = (u32::from(paras) * 16).min(0x1_0000) - 2;
             // Mot nul en sommet de pile : un RET final saute en PSP:0 (INT 20h).
             mem.write_u16((usize::from(psp) << 4) + top as usize, 0);
-            return Cpu::real_mode(psp, 0x100, top as u16);
+            // Registres au départ comme sous MS-DOS (et FreeDOS) : les intros
+            // de 256 octets à 4 Ko s'en servent comme constantes gratuites
+            // (Mesha : son décompacteur part de ces valeurs). AX (validité
+            // des lecteurs des FCB) est posé par l'appelant.
+            let mut cpu = Cpu::real_mode(psp, 0x100, top as u16);
+            cpu.gpr[1] = 0x00FF; // CX
+            cpu.gpr[2] = psp.into(); // DX
+            cpu.gpr[5] = 0x091C; // BP
+            cpu.gpr[6] = 0x0100; // SI
+            cpu.gpr[7] = top; // DI = SP
+            return cpu;
         }
         // Programme « chargé en haut » (min = max = 0) : module en fin de bloc.
         let high = self.min_extra == 0 && self.max_extra == 0;
