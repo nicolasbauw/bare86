@@ -358,6 +358,71 @@ impl Bios {
         Flow::Continue
     }
 
+    /// INT 10h AH=10h : registres de palette du contrôleur d'attributs et
+    /// DAC, comme un BIOS VGA. L'index de départ du DAC (BX) passe par le
+    /// port 3C8h, qui n'en garde que l'octet bas, et l'index avance modulo
+    /// 256 (Mesha appelle AX=1012h avec BX=0100h pour toute la palette).
+    fn palette(&mut self, cpu: &mut Cpu, mem: &GuestMem, al: u8) {
+        let mut vga = self.vga.borrow_mut();
+        let table = lin(cpu.sreg(ES), cpu.w(DX));
+        let first = usize::from(cpu.lo(BX));
+        let count = usize::from(cpu.w(CX));
+        match al {
+            // Registre de palette BL ← BH ; bordure ; les 16 et la bordure.
+            0x00 => vga.attr[first & 0x0F] = cpu.hi(BX) & 0x3F,
+            0x01 => vga.attr[0x11] = cpu.hi(BX),
+            0x02 => {
+                for i in 0..16 {
+                    vga.attr[i] = mem.read_u8(table + i) & 0x3F;
+                }
+                vga.attr[0x11] = mem.read_u8(table + 16);
+            }
+            // Clignotement (BL = 1) ou intensité (BL = 0).
+            0x03 => {
+                let blink = cpu.lo(BX) & 1 != 0;
+                vga.attr[0x10] = (vga.attr[0x10] & !0x08) | if blink { 0x08 } else { 0 };
+            }
+            0x07 => cpu.set_hi(BX, vga.attr[first & 0x1F]),
+            0x08 => cpu.set_hi(BX, vga.attr[0x11]),
+            0x09 => {
+                for i in 0..16 {
+                    mem.write_u8(table + i, vga.attr[i]);
+                }
+                mem.write_u8(table + 16, vga.attr[0x11]);
+            }
+            0x10 => vga.dac[first] = [cpu.hi(DX) & 0x3F, cpu.hi(CX) & 0x3F, cpu.lo(CX) & 0x3F],
+            0x12 => {
+                for i in 0..count {
+                    let rgb = [0, 1, 2].map(|c| mem.read_u8(table + 3 * i + c) & 0x3F);
+                    vga.dac[(first + i) & 0xFF] = rgb;
+                }
+            }
+            0x15 => {
+                let [r, g, b] = vga.dac[first];
+                cpu.set_hi(DX, r);
+                cpu.set_w(CX, u16::from(g) << 8 | u16::from(b));
+            }
+            0x17 => {
+                for i in 0..count {
+                    mem.write(table + 3 * i, &vga.dac[(first + i) & 0xFF]);
+                }
+            }
+            0x18 => vga.dac_mask = cpu.lo(BX),
+            0x19 => cpu.set_lo(BX, vga.dac_mask),
+            // Page de couleurs : une seule (mode de sélection 0, page 0).
+            0x1A => cpu.set_w(BX, 0),
+            // Niveaux de gris : 30 % rouge, 59 % vert, 11 % bleu (IBM).
+            0x1B => {
+                for i in 0..count {
+                    let [r, g, b] = vga.dac[(first + i) & 0xFF].map(u32::from);
+                    let y = ((30 * r + 59 * g + 11 * b + 50) / 100).min(63) as u8;
+                    vga.dac[(first + i) & 0xFF] = [y; 3];
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn int10(&mut self, cpu: &mut Cpu, mem: &GuestMem, out: &mut dyn TextSink) -> Flow {
         let ah = cpu.hi(AX);
         let al = cpu.lo(AX);
@@ -412,8 +477,7 @@ impl Bios {
                 cpu.set_hi(AX, mem.read_u16(bda::COLS) as u8);
                 cpu.set_hi(BX, mem.read_u8(bda::PAGE));
             }
-            // Palette, DAC : écritures acceptées, gérées à l'étape 5.
-            0x10 if matches!(al, 0x00..=0x03 | 0x10 | 0x12) => {}
+            0x10 => self.palette(cpu, mem, al),
             // Police ROM 8×16 dans un bloc (AL=04h, 14h) : c'est déjà celle
             // du rendu texte. Les polices chargées par le programme (plan 2)
             // ne sont pas encore affichées.

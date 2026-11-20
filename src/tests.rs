@@ -48,6 +48,11 @@ fn exit_code() {
 }
 
 #[test]
+fn com_start_registers_and_bios_palette() {
+    assert_eq!(run(program!("startregs")).0, 0, "n° du contrôle en échec (voir asm/tests/startregs.S)");
+}
+
+#[test]
 fn ret_reaches_int20() {
     let (code, text, _) = run(program!("ret"));
     assert_eq!((code, text.as_str()), (0, "R"));
