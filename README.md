@@ -365,7 +365,7 @@ built-in DOS directly.
 
 | Keys | Action |
 |---|---|
-| Enter | Run the game, in a window, with its configuration file (other command-line options still apply) |
+| Enter | Run the game, in a window, with its configuration file (other command-line options still apply); when it ends, the launcher comes back, with the game's error if it failed |
 | E or F2 | Edit the game's profile |
 | Enter on "+ New game..." | Choose the game's program (.EXE, .COM, .BAT) in a file browser; the profile goes into the game's directory (the subdirectory of the games directory that holds the program), then the editor opens |
 | Escape | Quit |

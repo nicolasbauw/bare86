@@ -594,7 +594,9 @@ where
 
 /// Lanceur dans une fenêtre (`launcher::Ui`) : rend le profil à lancer, ou
 /// `None` (Échap, fenêtre fermée).
-pub fn launcher(ui: &mut crate::launcher::Ui) -> Result<Option<std::path::PathBuf>, String> {
+/// Lanceur : `run` exécute le jeu choisi (fenêtre du lanceur cachée
+/// pendant ce temps) et rend son erreur éventuelle ; puis retour à la liste.
+pub fn launcher(ui: &mut crate::launcher::Ui, run: &mut dyn FnMut(&std::path::Path) -> Option<String>) -> Result<(), String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     let window = video.window("Bare86", 960, 720).position_centered().resizable().high_pixel_density().build().map_err(|e| e.to_string())?;
@@ -606,13 +608,22 @@ pub fn launcher(ui: &mut crate::launcher::Ui) -> Result<Option<std::path::PathBu
     loop {
         while let Some(ev) = events.poll_event() {
             match ev {
-                Event::Quit { .. } => return Ok(None),
+                Event::Quit { .. } => return Ok(()),
                 Event::KeyDown { scancode: Some(sc), .. } => {
                     if let Some(key) = menu_key(sc) {
                         match ui.key(key) {
                             crate::launcher::UiAction::None => {}
-                            crate::launcher::UiAction::Quit => return Ok(None),
-                            crate::launcher::UiAction::Launch(conf) => return Ok(Some(conf)),
+                            crate::launcher::UiAction::Quit => return Ok(()),
+                            crate::launcher::UiAction::Launch(conf) => {
+                                canvas.window_mut().hide();
+                                let error = run(&conf);
+                                ui.finished(&conf, error);
+                                // Touches tapées pendant la fermeture : pas pour la liste.
+                                events.pump_events();
+                                for _ in events.poll_iter() {}
+                                canvas.window_mut().show();
+                                canvas.window_mut().raise();
+                            }
                         }
                     }
                     redraw = true;

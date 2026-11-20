@@ -366,6 +366,14 @@ impl Ui {
         self.sel = self.sel.min(self.profiles.len());
     }
 
+    /// Retour d'un jeu lancé (`UiAction::Launch`) : liste relue, jeu
+    /// sélectionné, erreur éventuelle de la session affichée.
+    pub fn finished(&mut self, conf: &Path, error: Option<String>) {
+        self.page = Page::List;
+        self.refresh(Some(conf));
+        self.message = error;
+    }
+
     pub fn key(&mut self, key: Key) -> UiAction {
         self.message = None;
         match &mut self.page {

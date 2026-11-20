@@ -148,6 +148,36 @@ usage: bare86 [options] [program [arguments…]]
                  the text screen, {mouse:DX,DY,BUTTONS} mouse motion
   --bench | --throttle | --remap   step 0 measurement benches";
 
+/// Jeu lancé depuis le lanceur, dans un processus enfant ; sa sortie
+/// d'erreur est recopiée, et sa dernière ligne « error: » rendue pour être
+/// affichée dans le lanceur. (Le code de sortie est celui du programme DOS :
+/// il ne dit pas à lui seul si la session a échoué.)
+fn run_from_launcher(args: &[String]) -> Option<String> {
+    use std::io::BufRead;
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => return Some(format!("cannot find bare86 itself: {e}")),
+    };
+    let mut child = match std::process::Command::new(exe).args(args).stderr(std::process::Stdio::piped()).spawn() {
+        Ok(c) => c,
+        Err(e) => return Some(format!("cannot start the game: {e}")),
+    };
+    let mut error = None;
+    if let Some(err) = child.stderr.take() {
+        for line in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+            eprintln!("{line}");
+            if let Some(e) = line.strip_prefix("error: ") {
+                error = Some(e.to_string());
+            }
+        }
+    }
+    match child.wait() {
+        Ok(status) if status.code().is_none() => Some(format!("the game stopped abnormally ({status})")),
+        Ok(_) => error,
+        Err(e) => Some(e.to_string()),
+    }
+}
+
 fn main() -> ExitCode {
     let mut cfg = Config::default();
     let mut debug = false;
@@ -202,18 +232,19 @@ fn main() -> ExitCode {
         }
         cli.splice(0..0, options);
     }
-    // Lanceur, seulement sur demande : le profil choisi devient
-    // `--config PROFIL --window`, le reste de la ligne de commande est gardé.
+    // Lanceur, seulement sur demande : chaque jeu choisi tourne dans un
+    // processus à part (`--config PROFIL --window` + le reste de la ligne
+    // de commande), puis on revient à la liste.
     if let Some(root) = launcher::root_of(&cli) {
         let mut ui = launcher::Ui::new(root);
-        match sdl::launcher(&mut ui) {
-            Ok(Some(conf)) => cli = launcher::command_line(&cli, &conf),
-            Ok(None) => return ExitCode::SUCCESS,
+        let mut run = |conf: &std::path::Path| run_from_launcher(&launcher::command_line(&cli, conf));
+        return match sdl::launcher(&mut ui, &mut run) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("launcher: {e}");
-                return ExitCode::FAILURE;
+                ExitCode::FAILURE
             }
-        }
+        };
     }
     let conf = match config::load(&cli) {
         Ok(c) => c,
