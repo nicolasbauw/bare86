@@ -284,15 +284,38 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
     let code32 = cpu.code32();
     let ip = if code32 { cpu.ip } else { cpu.ip & 0xFFFF };
     let at = cpu.seg[1].base.wrapping_add(ip);
-    // Octet par octet à travers la pagination : on s'arrête à la première
-    // page absente ; le décodage échoue si l'instruction la franchit.
+    // Une traduction et une lecture par page (au plus deux) : on s'arrête à
+    // la première page absente ; le décodage échoue si l'instruction la
+    // franchit.
     let mut n = 0;
+    let mut phys = None;
     while n < bytes.len() {
-        match exec::translate(cpu, mem, at.wrapping_add(n as u32), false, false) {
-            Some(p) if (p as usize) < mem.size() => bytes[n] = mem.read_u8(p as usize),
-            _ => break,
+        let lin = at.wrapping_add(n as u32);
+        let Some(p) = exec::translate(cpu, mem, lin, false, false) else { break };
+        phys.get_or_insert(p);
+        let p = p as usize;
+        let len = (bytes.len() - n).min(0x1000 - (lin as usize & 0xFFF)).min(mem.size().saturating_sub(p));
+        if len == 0 {
+            break;
         }
-        n += 1;
+        mem.read(p, &mut bytes[n..n + len]);
+        n += len;
+    }
+    let phys = phys?;
+    // Cache de décodage (le décodeur coûtait ≈ 15 % du temps de
+    // l'interpréteur dans les scènes en 16 bits de Second Reality) : entrée
+    // valable si l'adresse physique, l'IP (les cibles de saut en dépendent),
+    // la taille du code et les octets mêmes de l'instruction sont identiques
+    // (le code modifié est donc redécodé).
+    let slot = (phys as usize ^ (phys as usize >> 12)) & (DECODE_CACHE - 1);
+    let hit = DECODED.with(|c| {
+        let c = c.borrow();
+        let e = &c[slot];
+        let len = e.ins.len();
+        (e.valid && e.phys == phys && e.ip == ip && e.code32 == code32 && len <= n && e.bytes[..len] == bytes[..len]).then(|| (e.ins, e.addr32))
+    });
+    if hit.is_some() {
+        return hit;
     }
     let bitness = if code32 { 32 } else { 16 };
     let ins = Decoder::with_ip(bitness, &bytes[..n], u64::from(ip), DecoderOptions::NONE).decode();
@@ -303,7 +326,27 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
         .iter()
         .take_while(|b| matches!(b, 0x26 | 0x2E | 0x36 | 0x3E | 0x64 | 0x65 | 0x66 | 0x67 | 0xF0 | 0xF2 | 0xF3))
         .any(|&b| b == 0x67);
-    Some((ins, code32 != prefix67))
+    let addr32 = code32 != prefix67;
+    DECODED.with(|c| c.borrow_mut()[slot] = Decoded { valid: true, phys, ip, code32, bytes, ins, addr32 });
+    Some((ins, addr32))
+}
+
+/// Entrées du cache de décodage (puissance de 2).
+const DECODE_CACHE: usize = 4096;
+
+#[derive(Clone, Copy, Default)]
+struct Decoded {
+    valid: bool,
+    phys: u32,
+    ip: u32,
+    code32: bool,
+    bytes: [u8; 15],
+    ins: Instruction,
+    addr32: bool,
+}
+
+thread_local! {
+    static DECODED: std::cell::RefCell<Box<[Decoded]>> = std::cell::RefCell::new(vec![Decoded::default(); DECODE_CACHE].into_boxed_slice());
 }
 
 /// États que l'interpréteur laisse entièrement au processeur : pas à pas.
