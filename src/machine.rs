@@ -388,6 +388,9 @@ pub struct Stats {
     pub exits: u64,
     pub mmio_exits: u64,
     pub interpreted: u64,
+    /// Temps passé dans les rafales interprétées (ns) : avec `interpreted`,
+    /// le coût moyen d'une instruction interprétée.
+    pub interp_ns: u64,
     pub host_calls: u64,
     pub irqs: u64,
     /// Accès à la VRAM passés par la logique des plans (MMIO, interpréteur).
@@ -450,6 +453,8 @@ impl std::fmt::Debug for Stats {
             .field("exits", &self.exits)
             .field("mmio_exits", &self.mmio_exits)
             .field("interpreted", &self.interpreted)
+            .field("interp_ns", &self.interp_ns)
+            .field("interp_ns_per_instruction", &format_args!("{:.1}", self.interp_ns as f64 / self.interpreted.max(1) as f64))
             .field("host_calls", &self.host_calls)
             .field("irqs", &self.irqs)
             .field("vram_emulated", &self.vram_emulated)
@@ -1602,6 +1607,7 @@ impl<B: Backend> Pc<B> {
                 let mut bus = MmioBus { vga: &mut vga, accesses: 0, reads: 0, io: Some(&mut self.io), port_accesses: 0, plane_read, probe: probe_burst, plane_outs: 0 };
                 let idle = if probe_burst { 1_000_000 } else { IDLE_LIMIT };
                 bus.probe |= use_jit;
+                let burst_start = Instant::now();
                 let burst = if use_jit {
                     if self.jit.is_none() {
                         let mut j = crate::jit::Jit::new(self.vm.mem())?;
@@ -1662,6 +1668,9 @@ impl<B: Backend> Pc<B> {
                     p.outs += outs;
                     p.by_outs[match outs { 0 => 0, 1 => 1, 2..=9 => 2, 10..=99 => 3, _ => 4 }] += 1;
                     *p.reasons.entry(why).or_default() += 1;
+                }
+                if burst.interpreted {
+                    self.stats.interp_ns += burst_start.elapsed().as_nanos() as u64;
                 }
                 self.stats.burst_ports += bus.port_accesses;
                 self.window.emulated_in_epoch += bus.accesses;

@@ -280,19 +280,50 @@ pub fn write_linear(cpu: &Cpu, mem: &GuestMem, lin: u32, data: &[u8]) -> bool {
 /// Instruction décodée à CS:IP, avec l'indicateur d'adressage 32 bits
 /// (taille par défaut du segment de code, inversée par 67h).
 fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
-    let mut bytes = [0u8; 15];
+    DECODED.with(|c| fetch_with(cpu, mem, &mut c.borrow_mut()))
+}
+
+/// `fetch` avec le cache de décodage déjà emprunté (une fois par rafale).
+///
+/// Cache (le décodeur coûtait ≈ 15 % du temps de l'interpréteur dans les
+/// scènes en 16 bits de Second Reality) : entrée valable si l'adresse
+/// physique, l'IP (les cibles de saut en dépendent), la taille du code et
+/// les octets mêmes de l'instruction sont identiques (le code modifié est
+/// donc redécodé). Les octets sont lus d'un bloc de 16 et comparés sous
+/// masque : la consultation coûtait autant que l'exécution.
+fn fetch_with(cpu: &Cpu, mem: &GuestMem, cache: &mut [Decoded]) -> Option<(Instruction, bool)> {
     let code32 = cpu.code32();
     let ip = if code32 { cpu.ip } else { cpu.ip & 0xFFFF };
     let at = cpu.seg[1].base.wrapping_add(ip);
-    // Une traduction et une lecture par page (au plus deux) : on s'arrête à
-    // la première page absente ; le décodage échoue si l'instruction la
-    // franchit.
+    let phys = exec::translate(cpu, mem, at, false, false)?;
+    // 16 octets d'un tenant en mémoire physique : sans pagination, ou sans
+    // franchir la page.
+    let contiguous = cpu.cr0 & (1 << 31) == 0 || at & 0xFFF <= 0x1000 - 16;
+    if !contiguous || phys as usize + 16 > mem.size() {
+        return fetch_slow(cpu, mem, at, ip, code32);
+    }
+    let raw = mem.read_u128(phys as usize);
+    let slot = (phys as usize ^ (phys as usize >> 12)) & (DECODE_CACHE - 1);
+    let e = &cache[slot];
+    if e.valid && e.phys == phys && e.ip == ip && e.code32 == code32 && raw & e.mask == e.key {
+        return Some((e.ins, e.addr32));
+    }
+    let bytes = raw.to_le_bytes();
+    let (ins, addr32) = decode(&bytes[..15], ip, code32)?;
+    let mask = if ins.len() >= 16 { u128::MAX } else { (1u128 << (8 * ins.len())) - 1 };
+    cache[slot] = Decoded { valid: true, phys, ip, code32, mask, key: raw & mask, ins, addr32 };
+    Some((ins, addr32))
+}
+
+/// Lecture page par page (instruction à cheval sur deux pages paginées, ou
+/// en fin de mémoire), sans cache : on s'arrête à la première page absente ;
+/// le décodage échoue si l'instruction la franchit.
+fn fetch_slow(cpu: &Cpu, mem: &GuestMem, at: u32, ip: u32, code32: bool) -> Option<(Instruction, bool)> {
+    let mut bytes = [0u8; 15];
     let mut n = 0;
-    let mut phys = None;
     while n < bytes.len() {
         let lin = at.wrapping_add(n as u32);
         let Some(p) = exec::translate(cpu, mem, lin, false, false) else { break };
-        phys.get_or_insert(p);
         let p = p as usize;
         let len = (bytes.len() - n).min(0x1000 - (lin as usize & 0xFFF)).min(mem.size().saturating_sub(p));
         if len == 0 {
@@ -301,24 +332,12 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
         mem.read(p, &mut bytes[n..n + len]);
         n += len;
     }
-    let phys = phys?;
-    // Cache de décodage (le décodeur coûtait ≈ 15 % du temps de
-    // l'interpréteur dans les scènes en 16 bits de Second Reality) : entrée
-    // valable si l'adresse physique, l'IP (les cibles de saut en dépendent),
-    // la taille du code et les octets mêmes de l'instruction sont identiques
-    // (le code modifié est donc redécodé).
-    let slot = (phys as usize ^ (phys as usize >> 12)) & (DECODE_CACHE - 1);
-    let hit = DECODED.with(|c| {
-        let c = c.borrow();
-        let e = &c[slot];
-        let len = e.ins.len();
-        (e.valid && e.phys == phys && e.ip == ip && e.code32 == code32 && len <= n && e.bytes[..len] == bytes[..len]).then(|| (e.ins, e.addr32))
-    });
-    if hit.is_some() {
-        return hit;
-    }
+    decode(&bytes[..n], ip, code32)
+}
+
+fn decode(bytes: &[u8], ip: u32, code32: bool) -> Option<(Instruction, bool)> {
     let bitness = if code32 { 32 } else { 16 };
-    let ins = Decoder::with_ip(bitness, &bytes[..n], u64::from(ip), DecoderOptions::NONE).decode();
+    let ins = Decoder::with_ip(bitness, bytes, u64::from(ip), DecoderOptions::NONE).decode();
     if ins.is_invalid() {
         return None;
     }
@@ -326,9 +345,7 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool)> {
         .iter()
         .take_while(|b| matches!(b, 0x26 | 0x2E | 0x36 | 0x3E | 0x64 | 0x65 | 0x66 | 0x67 | 0xF0 | 0xF2 | 0xF3))
         .any(|&b| b == 0x67);
-    let addr32 = code32 != prefix67;
-    DECODED.with(|c| c.borrow_mut()[slot] = Decoded { valid: true, phys, ip, code32, bytes, ins, addr32 });
-    Some((ins, addr32))
+    Some((ins, code32 != prefix67))
 }
 
 /// Entrées du cache de décodage (puissance de 2).
@@ -340,7 +357,9 @@ struct Decoded {
     phys: u32,
     ip: u32,
     code32: bool,
-    bytes: [u8; 15],
+    /// Octets de l'instruction (sous `mask`, sa longueur).
+    mask: u128,
+    key: u128,
     ins: Instruction,
     addr32: bool,
 }
@@ -386,6 +405,10 @@ pub fn describe_at(cpu: &Cpu, mem: &GuestMem) -> String {
 /// `idle_limit` : instructions de suite sans MMIO avant de rendre la main ;
 /// `budget` : plafond d'instructions (et d'itérations de REP) de la rafale.
 pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limit: u64, budget: u64) -> Burst {
+    DECODED.with(|c| run_burst_with(cpu, mem, mmio, idle_limit, budget, &mut c.borrow_mut()))
+}
+
+fn run_burst_with<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limit: u64, budget: u64, cache: &mut [Decoded]) -> Burst {
     let mut instructions = 0;
     let mut mmio_accesses = 0;
     let mut idle = 0;
@@ -400,7 +423,7 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
         if unsupported_mode(cpu) {
             break StopReason::Unsupported;
         }
-        let Some((ins, addr32)) = fetch(cpu, mem) else { break StopReason::Unsupported };
+        let Some((ins, addr32)) = fetch_with(cpu, mem, cache) else { break StopReason::Unsupported };
         let rep_budget = budget - instructions;
         let mut ex = Exec { cpu: &mut *cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget, flags_push: None, addr32, dry: None };
         let result = ex.step(&ins);

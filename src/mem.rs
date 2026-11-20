@@ -50,7 +50,12 @@ impl GuestMem {
         assert!(addr + data.len() <= self.size, "write outside guest memory");
         if !data.is_empty() {
             for p in addr >> 12..=(addr + data.len() - 1) >> 12 {
-                self.host_written[p / 64].fetch_or(1 << (p % 64), Ordering::Relaxed);
+                // Lecture d'abord : l'interpréteur écrit sans cesse dans les
+                // mêmes pages, et l'opération atomique coûte bien plus.
+                let (w, bit) = (&self.host_written[p / 64], 1u64 << (p % 64));
+                if w.load(Ordering::Relaxed) & bit == 0 {
+                    w.fetch_or(bit, Ordering::Relaxed);
+                }
             }
         }
         // SAFETY: bornes vérifiées ; le vCPU est arrêté pendant les accès hôte.
@@ -73,6 +78,14 @@ impl GuestMem {
         assert!(addr + buf.len() <= self.size, "read outside guest memory");
         // SAFETY: bornes vérifiées ; le vCPU est arrêté pendant les accès hôte.
         unsafe { ptr::copy_nonoverlapping(self.ptr.add(addr), buf.as_mut_ptr(), buf.len()) }
+    }
+
+    /// 16 octets à `addr` (petit-boutiste) : lecture des instructions par
+    /// l'interpréteur.
+    pub fn read_u128(&self, addr: usize) -> u128 {
+        assert!(addr + 16 <= self.size, "read outside guest memory");
+        // SAFETY: bornes vérifiées ; lecture non alignée explicite.
+        u128::from_le(unsafe { ptr::read_unaligned(self.ptr.add(addr).cast::<u128>()) })
     }
 
     pub fn read_u8(&self, addr: usize) -> u8 {

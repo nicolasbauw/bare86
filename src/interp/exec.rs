@@ -255,11 +255,33 @@ impl<B: Mmio> Exec<'_, B> {
         }
     }
 
+    /// Adresse physique d'un accès de `size` octets (au plus 4) qui se fait
+    /// d'un seul tenant en RAM : dans une page, hors des zones du bus (VGA,
+    /// ROM), hors exécution à blanc. `None` : octet par octet.
+    fn ram_phys(&self, addr: u32, size: u32, write: bool) -> Option<usize> {
+        if self.dry.is_some() || (self.cpu.cr0 & (1 << 31) != 0 && (addr & 0xFFF) + size > 0x1000) {
+            return None;
+        }
+        let p = self.phys(addr, write)?;
+        let last = p.checked_add(size - 1)?;
+        // Zones du bus d'au moins 4 octets : contrôler les deux bouts suffit.
+        ((last as usize) < self.mem.size() && !self.mmio.claims(p, write) && !self.mmio.claims(last, write)).then_some(p as usize)
+    }
+
     fn read_lin(&mut self, addr: u32, size: u32) -> u32 {
+        if let Some(p) = self.ram_phys(addr, size, false) {
+            let mut b = [0u8; 4];
+            self.mem.read(p, &mut b[..size as usize]);
+            return u32::from_le_bytes(b);
+        }
         (0..size).fold(0, |acc, i| acc | u32::from(self.read8(addr.wrapping_add(i))) << (8 * i))
     }
 
     fn write_lin(&mut self, addr: u32, size: u32, v: u32) {
+        if let Some(p) = self.ram_phys(addr, size, true) {
+            self.mem.write(p, &v.to_le_bytes()[..size as usize]);
+            return;
+        }
         for i in 0..size {
             self.write8(addr.wrapping_add(i), (v >> (8 * i)) as u8);
         }
