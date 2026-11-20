@@ -22,6 +22,9 @@ difference is under the hood, and shows with demanding late-90s games.
 - [CD-ROM](#cd-rom)
 - [Network](#network)
 - [Scripted and windowless sessions](#scripted-and-windowless-sessions)
+- [Developer corner](#developer-corner)
+  - [Writing DOS programs in assembly (GNU as)](#writing-dos-programs-in-assembly-gnu-as)
+  - [Writing DOS programs in C (gcc)](#writing-dos-programs-in-c-gcc)
 - [Status and limits](#status-and-limits)
 - [License](#license)
 
@@ -578,6 +581,258 @@ writes the game's memory; `src/opengl/mod.rs` handles them by hand.
 | `is5x.py CABDIR DEST` | Extract InstallShield 5 cabinets that `unshield` cannot (some game demos) |
 | `compare.py --ref REF --video OURS --out DIR` | Compare a session recorded with `--video` with a reference video of the same demo or game (a real PC, DOSBox, a downloaded video): each 20-second window is found in the reference by its pictures, giving the drift (the program running slower or faster than in the reference), distinct frames per second on both sides, and side-by-side sheets at the same moments |
 | `terminus_cp437.py` | Rebuild the built-in font `fonts/terminus-cp437-8x16.bin` from Terminus |
+
+### Writing DOS programs in assembly (GNU as)
+
+Small DOS programs can be written with the GNU assembler of any Linux
+distribution (binutils), in Intel syntax, and run at once by Bare86: no DOS
+toolchain to install. A `.COM` program is the simplest format: raw code and
+data, loaded at offset 100h of a single 64 KB segment, with CS = DS = ES =
+SS. `.code16` makes the assembler produce 16-bit real-mode code (32-bit
+registers and instructions remain usable, the guest is a 386 and up).
+
+`hello.S`, a string printed through DOS:
+
+```asm
+# hello.S: a DOS .COM program in GNU as (Intel syntax, 16-bit real mode).
+    .code16
+    .intel_syntax noprefix
+    .text
+    mov dx, offset msg      # DS:DX = "$"-terminated string
+    mov ah, 0x09            # DOS: print string
+    int 0x21
+    mov ax, 0x4C00          # DOS: exit with code 0
+    int 0x21
+msg: .ascii "Hello, DOS!\r\n$"
+```
+
+`bars.S`, mode 13h graphics: the palette is loaded through the VGA DAC
+ports and the 256 colours are drawn straight into video memory at A000h:
+
+```asm
+# bars.S: mode 13h (320x200, 256 colours), the 256 colours side by side
+# with a blue gradient loaded into the palette; any key returns to DOS.
+    .code16
+    .intel_syntax noprefix
+    .text
+    mov ax, 0x0013          # BIOS: set video mode 13h
+    int 0x10
+
+    mov dx, 0x3C8           # VGA DAC: start writing at colour 0
+    xor al, al
+    out dx, al
+    inc dx                  # 3C9h: red, green, blue (0-63) per colour
+    xor cx, cx
+palette:
+    mov al, cl
+    shr al, 3               # red and green: 0-31
+    out dx, al
+    out dx, al
+    mov al, cl
+    shr al, 2               # blue: 0-63
+    out dx, al
+    inc cl
+    jnz palette             # 256 colours
+
+    mov ax, 0xA000          # ES:DI = video memory, row after row
+    mov es, ax
+    xor di, di
+    cld
+    mov bx, 200             # rows
+row:
+    xor si, si              # x
+column:
+    imul ax, si, 205        # colour = x * 205 / 256: 0-255 across the row
+    mov al, ah
+    stosb                   # ES:[DI++] = AL
+    inc si
+    cmp si, 320
+    jb column
+    dec bx
+    jnz row
+
+    xor ah, ah              # BIOS: wait for a key
+    int 0x16
+    mov ax, 0x0003          # back to 80x25 text mode
+    int 0x10
+    mov ax, 0x4C00
+    int 0x21
+```
+
+Assemble, link at 100h into a flat binary, run:
+
+```sh
+as --32 -mx86-used-note=no -o hello.o hello.S
+ld -m elf_i386 -Ttext=0x100 -e 0x100 --oformat=binary -o HELLO.COM hello.o
+bare86 HELLO.COM
+
+as --32 -mx86-used-note=no -o bars.o bars.S
+ld -m elf_i386 -Ttext=0x100 -e 0x100 --oformat=binary -o BARS.COM bars.o
+bare86 --window BARS.COM
+```
+
+`-mx86-used-note=no` keeps out a property note that some distributions'
+assemblers add by default, which would otherwise end up in the binary.
+With the [binfmt rules](#running-programs-directly) installed,
+`./HELLO.COM` works too. Drive C: is the program's directory, so it can
+open the files next to it.
+
+### Writing DOS programs in C (gcc)
+
+The host's gcc can also produce real-mode code: `-m16` emits 32-bit code
+with the prefixes that make it run in a 16-bit segment (a 386 or later is
+required, which the guest is). There is no C library: the program calls DOS
+and the BIOS through inline assembly. Four small files make a `.COM`
+program.
+
+`crt0.S`, the entry point:
+
+```asm
+# crt0.S: entry point of a .COM program written in C (gcc -m16).
+# DOS loads the program at CS:0100h with CS = DS = ES = SS; clear the
+# upper half of ESP (gcc's code uses 32-bit addresses), zero the .bss,
+# call main(), then exit with its return value as the exit code.
+    .code16
+    .intel_syntax noprefix
+    .section .startup, "ax"
+    .globl _start
+_start:
+    movzx esp, sp
+    cld
+    mov di, offset __bss_start
+    mov cx, offset __bss_end
+    sub cx, di
+    xor al, al
+    rep stosb
+    call main
+    mov ah, 0x4C
+    int 0x21
+```
+
+`com.ld`, the linker script (one segment from 100h, flat binary):
+
+```ld
+/* com.ld: link a .COM program (one 64 KB segment, loaded at 100h). */
+OUTPUT_FORMAT(binary)
+ENTRY(_start)
+SECTIONS
+{
+    . = 0x100;
+    .text   : { *(.startup) *(.text*) }
+    .rodata : { *(.rodata*) }
+    .data   : { *(.data*) }
+    .bss    : { __bss_start = .; *(.bss*) *(COMMON) __bss_end = .; }
+    /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
+}
+```
+
+`dos.h`, a few services:
+
+```c
+/* dos.h: a few DOS and BIOS services for gcc -m16 programs. */
+#pragma once
+
+static inline void dos_putc(char c)
+{
+    __asm__ volatile("int $0x21" : : "a"(0x0200), "d"(c));
+}
+
+static inline void dos_puts(const char *s)
+{
+    while (*s)
+        dos_putc(*s++);
+}
+
+/* BIOS: wait for a key; returns its ASCII code. */
+static inline unsigned char bios_getkey(void)
+{
+    unsigned short ax = 0;
+    __asm__ volatile("int $0x16" : "+a"(ax));
+    return ax & 0xFF;
+}
+
+static inline void bios_set_mode(unsigned char mode)
+{
+    __asm__ volatile("int $0x10" : : "a"((unsigned short)mode) : "memory"); /* AH = 0 */
+}
+
+static inline void outb(unsigned short port, unsigned char v)
+{
+    __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port));
+}
+```
+
+`hello.c`:
+
+```c
+/* hello.c: a DOS .COM program in C. */
+#include "dos.h"
+
+int main(void)
+{
+    dos_puts("Hello from C! Press a key...\r\n");
+    unsigned char k = bios_getkey();
+    dos_puts("You pressed: ");
+    dos_putc(k);
+    dos_puts("\r\n");
+    return 0;
+}
+```
+
+`xor.c`, mode 13h graphics. gcc has no far pointers, but its `__seg_gs`
+address space puts a `GS:` prefix on every access through such a pointer:
+with GS = A000h, the pointer addresses video memory:
+
+```c
+/* xor.c: mode 13h, an XOR pattern drawn in video memory (A000h), any key
+   returns to DOS. Video memory is reached through GS: gcc's __seg_gs
+   address space adds the GS: prefix to every access through the pointer. */
+#include "dos.h"
+
+static unsigned char __seg_gs *const vga = 0;
+
+int main(void)
+{
+    bios_set_mode(0x13);
+    __asm__ volatile("mov %0, %%gs" : : "r"((unsigned short)0xA000));
+
+    outb(0x3C8, 0);                     /* palette: colour 0 onwards */
+    for (int i = 0; i < 256; i++) {
+        outb(0x3C9, i >> 2);            /* red   0-63 */
+        outb(0x3C9, (i >> 3) ^ 0x1F);   /* green 31-0 */
+        outb(0x3C9, 63 - (i >> 2));     /* blue  63-0 */
+    }
+
+    for (int y = 0; y < 200; y++)
+        for (int x = 0; x < 320; x++)
+            vga[y * 320 + x] = (x * 4 / 5) ^ y; /* 0-255 across */
+
+    bios_getkey();
+    bios_set_mode(0x03);
+    return 0;
+}
+```
+
+Build and run:
+
+```sh
+gcc -m16 -march=i386 -Os -Wall -ffreestanding -fno-pic -fno-stack-protector \
+    -fno-asynchronous-unwind-tables -nostdlib -static -Wl,--build-id=none \
+    -Wa,-mx86-used-note=no -T com.ld -o HELLO.COM crt0.S hello.c
+bare86 HELLO.COM
+
+gcc -m16 -march=i386 -Os -Wall -ffreestanding -fno-pic -fno-stack-protector \
+    -fno-asynchronous-unwind-tables -nostdlib -static -Wl,--build-id=none \
+    -Wa,-mx86-used-note=no -T com.ld -o XOR.COM crt0.S xor.c
+bare86 --window XOR.COM
+```
+
+Limits of this setup: code, data and stack share 64 KB, and gcc may call
+`memcpy`, `memset` or `memcmp` for structure copies or large
+initializations, which then have to be written too. For bigger programs, a
+DOS toolchain with a C library is the usual way: DJGPP (32-bit, DPMI) or
+Open Watcom (16 and 32-bit), whose programs Bare86 runs. `--trace-int` shows
+the DOS and BIOS calls a program makes, and `--debug` steps through it.
 
 ## Status and limits
 
