@@ -16,6 +16,8 @@ difference is under the hood, and shows with demanding late-90s games.
 - [Command-line options](#command-line-options)
 - [Configuration file](#configuration-file)
 - [Window, keys and menu](#window-keys-and-menu)
+- [Game music: FM or General MIDI](#game-music-fm-or-general-midi)
+- [Running programs directly](#running-programs-directly)
 - [Launcher](#launcher)
 - [The built-in DOS](#the-built-in-dos)
 - [Booting a real DOS](#booting-a-real-dos)
