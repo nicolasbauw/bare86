@@ -1588,7 +1588,10 @@ impl<B: Backend> Pc<B> {
                         self.jit = Some(j);
                     }
                     let jit = self.jit.as_mut().unwrap();
-                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, JIT_BUDGET, JIT_IDLE, BURST_BUDGET)?;
+                    // Bridé : rafales d'une tranche (sinon jusqu'à 10 M
+                    // d'instructions d'affilée, puis une longue attente).
+                    let budget = self.throttle.as_ref().map_or(JIT_BUDGET, |t| t.slice().min(JIT_BUDGET));
+                    let b = crate::jit::continue_in_host(jit, &mut self.vm, &mut bus, budget, JIT_IDLE, BURST_BUDGET)?;
                     self.stats.jit_bursts += 1;
                     if b.interpreted {
                         self.stats.interpreted += b.instructions;

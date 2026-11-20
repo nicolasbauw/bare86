@@ -113,8 +113,13 @@ pub struct Throttle {
     counter: InstrCounter,
     rate: f64,
     start: std::time::Instant,
-    /// Instructions exécutées hors VM (interpréteur), à décompter aussi.
+    /// Instructions exécutées hors VM (interpréteur, traducteur), à décompter aussi.
     credited: u64,
+    /// Instructions d'une tranche (période du compteur).
+    period: u64,
+    /// `credited` au dernier `pace` : le compteur matériel ne voit pas les
+    /// rafales hors VM, qui doivent déclencher le bridage elles-mêmes.
+    credited_at_pace: u64,
 }
 
 /// Message pour un compteur d'instructions refusé : le bridage compte aussi
@@ -140,20 +145,29 @@ impl Throttle {
     pub fn new(mips: f64) -> io::Result<Self> {
         let rate = mips * 1e6;
         let period = ((rate * SLICE.as_secs_f64()) as u64).max(1000);
-        Ok(Self { counter: InstrCounter::new(period)?, rate, start: std::time::Instant::now(), credited: 0 })
+        Ok(Self { counter: InstrCounter::new(period)?, rate, start: std::time::Instant::now(), credited: 0, period, credited_at_pace: 0 })
+    }
+
+    /// Plafond d'une rafale hors VM : une tranche, pour que l'attente qui
+    /// suit reste de l'ordre de la milliseconde.
+    pub fn slice(&self) -> u64 {
+        self.period
     }
 
     pub fn credit(&mut self, instructions: u64) {
         self.credited += instructions;
     }
 
-    /// Débordement du compteur à traiter (`pace`) ; remet le drapeau à zéro.
+    /// Bridage à servir (`pace`) : débordement du compteur, ou une tranche
+    /// d'instructions créditées depuis le dernier ; remet le drapeau à zéro.
     pub fn take_overflow(&self) -> bool {
         OVERFLOWED.swap(false, std::sync::atomic::Ordering::Relaxed)
+            | (self.credited - self.credited_at_pace >= self.period)
     }
 
     /// Appelé après un débordement du compteur (`take_overflow`).
     pub fn pace(&mut self) -> io::Result<()> {
+        self.credited_at_pace = self.credited;
         let executed = self.counter.read()? + self.credited;
         let due = std::time::Duration::from_secs_f64(executed as f64 / self.rate);
         let now = self.start.elapsed();
