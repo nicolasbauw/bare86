@@ -192,6 +192,11 @@ def main():
         po, pr = os.path.join(tmp, f"o{t:07.1f}.png"), os.path.join(tmp, f"r{t:07.1f}.png")
         frame(a.video, t, po, 320, 240)
         frame(a.ref, t + o, pr, 320, 240)
+        # Au-delà de la fin d'une des vidéos (enregistrement plus long que
+        # la référence) : pas d'image, la paire est omise.
+        if not (os.path.exists(po) and os.path.exists(pr)):
+            t += a.step
+            continue
         fo = rate_at(ours_c, t - 2.5, t + 2.5, a.threshold)
         fr = rate_at(ref_c, t + o - 2.5, t + o + 2.5, a.threshold)
         pairs.append((po, f"Bare86 {t:.0f} s, {fo:.0f} i/s"))
