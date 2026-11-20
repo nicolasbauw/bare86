@@ -280,7 +280,7 @@ pub fn write_linear(cpu: &Cpu, mem: &GuestMem, lin: u32, data: &[u8]) -> bool {
 /// Instruction décodée à CS:IP, avec l'indicateur d'adressage 32 bits
 /// (taille par défaut du segment de code, inversée par 67h).
 fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool, Fast)> {
-    DECODED.with(|c| fetch_with(cpu, mem, &mut c.borrow_mut()))
+    DECODED.with(|c| fetch_with(cpu, mem, &mut c.borrow_mut()).map(|e| (e.ins, e.addr32, e.fast)))
 }
 
 /// `fetch` avec le cache de décodage déjà emprunté (une fois par rafale).
@@ -290,8 +290,9 @@ fn fetch(cpu: &Cpu, mem: &GuestMem) -> Option<(Instruction, bool, Fast)> {
 /// physique, l'IP (les cibles de saut en dépendent), la taille du code et
 /// les octets mêmes de l'instruction sont identiques (le code modifié est
 /// donc redécodé). Les octets sont lus d'un bloc de 16 et comparés sous
-/// masque : la consultation coûtait autant que l'exécution.
-fn fetch_with(cpu: &Cpu, mem: &GuestMem, cache: &mut [Decoded]) -> Option<(Instruction, bool, Fast)> {
+/// masque : la consultation coûtait autant que l'exécution. Rend l'entrée
+/// elle-même (la dernière case, hors cache, pour une lecture lente).
+fn fetch_with<'c>(cpu: &Cpu, mem: &GuestMem, cache: &'c mut [Decoded]) -> Option<&'c Decoded> {
     let code32 = cpu.code32();
     let ip = if code32 { cpu.ip } else { cpu.ip & 0xFFFF };
     let at = cpu.seg[1].base.wrapping_add(ip);
@@ -300,19 +301,24 @@ fn fetch_with(cpu: &Cpu, mem: &GuestMem, cache: &mut [Decoded]) -> Option<(Instr
     // franchir la page.
     let contiguous = cpu.cr0 & (1 << 31) == 0 || at & 0xFFF <= 0x1000 - 16;
     if !contiguous || phys as usize + 16 > mem.size() {
-        return fetch_slow(cpu, mem, at, ip, code32);
+        let (ins, addr32, fast) = fetch_slow(cpu, mem, at, ip, code32)?;
+        let e = &mut cache[DECODE_CACHE];
+        *e = Decoded { valid: false, ins, addr32, fast, ..Decoded::default() };
+        return Some(e);
     }
     let raw = mem.read_u128(phys as usize);
     let slot = (phys as usize ^ (phys as usize >> 12)) & (DECODE_CACHE - 1);
-    let e = &cache[slot];
-    if e.valid && e.phys == phys && e.ip == ip && e.code32 == code32 && raw & e.mask == e.key {
-        return Some((e.ins, e.addr32, e.fast));
+    if {
+        let e = &cache[slot];
+        e.valid && e.phys == phys && e.ip == ip && e.code32 == code32 && raw & e.mask == e.key
+    } {
+        return Some(&cache[slot]);
     }
     let bytes = raw.to_le_bytes();
     let (ins, addr32, fast) = decode(&bytes[..15], ip, code32)?;
     let mask = if ins.len() >= 16 { u128::MAX } else { (1u128 << (8 * ins.len())) - 1 };
     cache[slot] = Decoded { valid: true, phys, ip, code32, mask, key: raw & mask, ins, addr32, fast };
-    Some((ins, addr32, fast))
+    Some(&cache[slot])
 }
 
 /// Lecture page par page (instruction à cheval sur deux pages paginées, ou
@@ -348,7 +354,8 @@ fn decode(bytes: &[u8], ip: u32, code32: bool) -> Option<(Instruction, bool, Fas
     Some((ins, code32 != prefix67, exec::classify(&ins)))
 }
 
-/// Entrées du cache de décodage (puissance de 2).
+/// Entrées du cache de décodage (puissance de 2), plus une case pour les
+/// lectures lentes.
 const DECODE_CACHE: usize = 4096;
 
 #[derive(Clone, Copy, Default)]
@@ -366,7 +373,7 @@ struct Decoded {
 }
 
 thread_local! {
-    static DECODED: std::cell::RefCell<Box<[Decoded]>> = std::cell::RefCell::new(vec![Decoded::default(); DECODE_CACHE].into_boxed_slice());
+    static DECODED: std::cell::RefCell<Box<[Decoded]>> = std::cell::RefCell::new(vec![Decoded::default(); DECODE_CACHE + 1].into_boxed_slice());
 }
 
 /// États que l'interpréteur laisse entièrement au processeur : pas à pas.
@@ -411,6 +418,7 @@ pub fn run_burst<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limi
 
 fn run_burst_with<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_limit: u64, budget: u64, cache: &mut [Decoded]) -> Burst {
     let mut instructions = 0;
+    let mut steps = 0u32;
     let mut mmio_accesses = 0;
     let mut idle = 0;
     let reason = loop {
@@ -424,10 +432,10 @@ fn run_burst_with<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_lim
         if unsupported_mode(cpu) {
             break StopReason::Unsupported;
         }
-        let Some((ins, addr32, fast)) = fetch_with(cpu, mem, cache) else { break StopReason::Unsupported };
+        let Some(e) = fetch_with(cpu, mem, cache) else { break StopReason::Unsupported };
         let rep_budget = budget - instructions;
-        let mut ex = Exec { cpu: &mut *cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget, flags_push: None, addr32, dry: None };
-        let result = ex.run(&ins, fast);
+        let mut ex = Exec { cpu: &mut *cpu, mem, mmio: &mut *mmio, mmio_hits: 0, rep_budget, flags_push: None, addr32: e.addr32, dry: None };
+        let result = ex.run(&e.ins, e.fast);
         let (hits, used) = (ex.mmio_hits, rep_budget - ex.rep_budget);
         mmio_accesses += hits;
         // Une par itération d'un `rep` (au moins une : ECX = 0, ou
@@ -437,7 +445,11 @@ fn run_burst_with<M: Mmio>(cpu: &mut Cpu, mem: &GuestMem, mmio: &mut M, idle_lim
         if let Err(Bail) = result {
             break StopReason::Unsupported;
         }
-        if mmio.stop() {
+        // Arrêt demandé par le bus (battement, changement de configuration
+        // de la carte) : une affaire de politique, pas d'exactitude ;
+        // consulté toutes les 16 instructions (il évalue la configuration VGA).
+        steps = steps.wrapping_add(1);
+        if steps & 15 == 0 && mmio.stop() {
             break StopReason::Stopped;
         }
     };

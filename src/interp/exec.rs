@@ -279,13 +279,17 @@ pub struct Overlay {
 /// Traduction linéaire → physique par la table de pages de l'invité (pages
 /// de 4 Ko, de 4 Mo avec CR4.PSE) ; `None` : faute de page, laissée au
 /// processeur. Avec `mark`, pose les bits A (et D en écriture) comme lui.
+#[inline]
 pub(crate) fn translate(cpu: &Cpu, mem: &GuestMem, lin: u32, write: bool, mark: bool) -> Option<u32> {
-    const PG: u32 = 1 << 31;
+    // Sans pagination (mode réel, la plupart des cas) : en ligne chez l'appelant.
+    if cpu.cr0 & (1 << 31) == 0 { Some(lin) } else { walk(cpu, mem, lin, write, mark) }
+}
+
+/// Parcours des tables de pages (`translate` avec CR0.PG).
+#[inline(never)]
+fn walk(cpu: &Cpu, mem: &GuestMem, lin: u32, write: bool, mark: bool) -> Option<u32> {
     const WP: u32 = 1 << 16;
     const PSE: u32 = 1 << 4;
-    if cpu.cr0 & PG == 0 {
-        return Some(lin);
-    }
     let user = cpu.cpl() == 3;
     let entry = |a: u32| ((a as usize) + 4 <= mem.size()).then(|| mem.read_u32(a as usize));
     let allowed = |e: u32| e & 1 != 0 && (!user || e & 4 != 0) && (!write || e & 2 != 0 || (!user && cpu.cr0 & WP == 0));
