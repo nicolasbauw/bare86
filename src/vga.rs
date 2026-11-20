@@ -51,10 +51,12 @@ pub struct Vbe {
     pub lfb: bool,
 }
 
-/// Balayage à 70 Hz pour le registre d'état : 449 lignes de 31,778 µs, dont
-/// 400 affichées ; blanc vertical sur les 49 autres, impulsion de
-/// synchronisation verticale (bit 3) sur 2 lignes à l'intérieur ; blanc de
-/// ligne sur les 20 derniers % de chaque ligne.
+/// Balayage pour le registre d'état : lignes de 31,778 µs (≈ 31,5 kHz, tous
+/// les modes VGA standard), blanc de ligne sur les 20 derniers % de chacune.
+/// Géométrie verticale lue dans le CRTC (`Vga::vertical`) ; à défaut (CRTC
+/// pas encore programmé, valeurs incohérentes), celle des modes à 400
+/// lignes, 70 Hz : 449 lignes dont 400 affichées, synchronisation verticale
+/// (bit 3) sur les lignes 412 et 413.
 const LINES: u128 = 449;
 const VISIBLE_LINES: u128 = 400;
 const VSYNC_LINES: std::ops::Range<u128> = 412..414;
@@ -541,12 +543,37 @@ impl Vga {
 
     // ---- Ports ----
 
+    /// Géométrie verticale programmée dans le CRTC : lignes au total,
+    /// lignes affichées, lignes de la synchronisation verticale. Les modes à
+    /// 480 lignes (525 au total, 59,94 Hz) ne battent pas au rythme des
+    /// modes à 400 lignes (449, 70 Hz) : Verses (EMF) cale son minuteur sur
+    /// la trame et attend chaque blanc vertical, et ses scènes en 60 Hz
+    /// tournaient à moitié de cadence avec une trame fixe à 70 Hz.
+    fn vertical(&self) -> (u128, u128, std::ops::Range<u128>) {
+        let c = &self.crtc;
+        let ovf = u16::from(c[7]);
+        let bits = |low: u8, b8: u16, b9: u16| u16::from(low) | (ovf >> b8 & 1) << 8 | (ovf >> b9 & 1) << 9;
+        let total = bits(c[6], 0, 5) + 2;
+        let visible = bits(c[0x12], 1, 6) + 1;
+        let sync = bits(c[0x10], 2, 7);
+        // Fin : 4 bits bas de la ligne qui suit la dernière de l'impulsion.
+        let mut end = (sync & !0xF) | u16::from(c[0x11] & 0xF);
+        if end <= sync {
+            end += 16;
+        }
+        if !(200..=1024).contains(&total) || !(100..total).contains(&visible) || !(visible..total).contains(&sync) {
+            return (LINES, VISIBLE_LINES, VSYNC_LINES);
+        }
+        (u128::from(total), u128::from(visible), u128::from(sync)..u128::from(end.min(total)))
+    }
+
     fn status(&mut self) -> u8 {
         self.attr_data = false;
+        let (lines, visible, vsync) = self.vertical();
         let t = self.start.elapsed().as_nanos();
-        let line = t / LINE_NS % LINES;
-        let vblank = line >= VISIBLE_LINES;
-        let vsync = VSYNC_LINES.contains(&line);
+        let line = t / LINE_NS % lines;
+        let vblank = line >= visible;
+        let vsync = vsync.contains(&line);
         let hblank = t % LINE_NS >= LINE_NS - HBLANK_NS;
         // Bit 0 : affichage inactif (blanc de ligne ou vertical) ; bit 3 : synchronisation verticale.
         u8::from(vblank || hblank) | if vsync { 0x08 } else { 0 }
@@ -554,8 +581,9 @@ impl Vga {
 
     /// Temps restant avant le prochain blanc vertical (nul pendant celui-ci).
     pub fn until_vblank(&self) -> std::time::Duration {
-        let t = self.start.elapsed().as_nanos() % (LINES * LINE_NS);
-        let start = VISIBLE_LINES * LINE_NS;
+        let (lines, visible, _) = self.vertical();
+        let t = self.start.elapsed().as_nanos() % (lines * LINE_NS);
+        let start = visible * LINE_NS;
         std::time::Duration::from_nanos(start.saturating_sub(t) as u64)
     }
 
@@ -881,6 +909,23 @@ mod tests {
     fn set(v: &mut Vga, port: u16, idx: u8, val: u8) {
         v.port_write(port, idx);
         v.port_write(port + 1, val);
+    }
+
+    #[test]
+    fn vertical_timing_follows_crtc() {
+        let mut v = Vga::new().unwrap();
+        // CRTC pas encore programmé : 70 Hz par défaut.
+        assert_eq!(v.vertical(), (449, 400, 412..414));
+        // Mode 13h : 400 lignes, 70 Hz.
+        v.set_mode(0x13, true);
+        assert_eq!(v.vertical(), (449, 400, 412..414));
+        // Mode 12h : 480 lignes affichées sur 525, 59,94 Hz.
+        v.set_mode(0x12, true);
+        assert_eq!(v.vertical(), (525, 480, 490..492));
+        // Incohérent (fin d'affichage au-delà du total) : retour au défaut.
+        set(&mut v, 0x3D4, 0x12, 0xFF);
+        set(&mut v, 0x3D4, 0x07, 0xFF);
+        assert_eq!(v.vertical(), (449, 400, 412..414));
     }
 
     #[test]
