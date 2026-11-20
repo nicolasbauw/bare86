@@ -6,6 +6,7 @@
 //! Lists. Le reste (SFT, recherches en cours, lecteurs) est tenu par l'hôte.
 //! Les fichiers sont ceux de répertoires hôtes montés comme lecteurs.
 
+mod alkufix;
 mod crtfix;
 mod fcb;
 mod fs;
@@ -1003,9 +1004,11 @@ impl Dos {
                 mem.write_u16(at, dx);
                 mem.write_u16(at + 2, ds);
                 // Gestionnaire d'INT 0 du runtime de Turbo Pascal, installé
-                // avant l'initialisation de CRT : étalonnage corrigé.
+                // avant l'initialisation de CRT : étalonnage corrigé. Celui
+                // de Borland C aussi : boucle de fin d'ALKU (Second Reality).
                 if al == 0 {
                     crtfix::patch(mem, self.current_psp);
+                    alkufix::patch(mem, self.current_psp);
                 }
                 Out::Keep
             }

@@ -59,14 +59,21 @@ pub fn patch(mem: &GuestMem, seg: u16) -> usize {
     let mut call = [0x9A, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90];
     call[1..3].copy_from_slice(&FIX_OFF.to_le_bytes());
     call[3..5].copy_from_slice(&FIX_SEG.to_le_bytes());
-    let mut n = 0;
-    for (i, w) in image.windows(PATTERN.len()).enumerate() {
-        if w.iter().zip(&PATTERN).all(|(&v, p)| p.is_none_or(|p| p == v)) {
-            mem.write(start + i + PATCH_AT, &call);
-            n += 1;
-        }
+    let found = find(&image, &PATTERN);
+    for &i in &found {
+        mem.write(start + i + PATCH_AT, &call);
     }
-    n
+    found.len()
+}
+
+/// Positions de `pattern` dans `image` (`None` = octet quelconque).
+pub(super) fn find(image: &[u8], pattern: &[Option<u8>]) -> Vec<usize> {
+    image
+        .windows(pattern.len())
+        .enumerate()
+        .filter(|(_, w)| w.iter().zip(pattern).all(|(&v, p)| p.is_none_or(|p| p == v)))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 #[cfg(test)]
