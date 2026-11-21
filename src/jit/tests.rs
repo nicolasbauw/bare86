@@ -139,6 +139,7 @@ fn jit_matches_interpreter() {
     let mut translated_total = 0;
     let mut skipped = 0;
     let mut straddled = 0;
+    let mut at_end = 0;
     'cases: for case in 0..cases {
         let fill = rng.next();
         fill_memory(&mem_jit, fill);
@@ -245,8 +246,12 @@ fn jit_matches_interpreter() {
         let mut steps = 0;
         loop {
             let at = reference.ip.wrapping_add(base) as usize;
+            // Fin de la RAM (code arrivé dans les données, par un saut ou
+            // après une réécriture) : la référence ne lit plus une
+            // instruction entière, le traducteur continue ; cas écarté.
             if at + 15 > MEM_SIZE {
-                break;
+                at_end += 1;
+                continue 'cases;
             }
             let mut bytes = [0u8; 15];
             mem_ref.read(at, &mut bytes);
@@ -331,7 +336,7 @@ fn jit_matches_interpreter() {
             }
         }
     }
-    println!("{cases} cases ({skipped} skipped: undefined flag read; {straddled}: 4 GB limit straddled), {translated_total} instructions run by translated code, stats {:?}", jit.stats);
+    println!("{cases} cases ({skipped} skipped: undefined flag read; {straddled}: 4 GB limit straddled; {at_end}: end of RAM), {translated_total} instructions run by translated code, stats {:?}", jit.stats);
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n\n"));
     assert_eq!(jit.stats.assembly_errors, 0, "blocks refused by the assembler");
 }
@@ -537,6 +542,10 @@ fn divisions_match_interpreter() {
         jit.run(&mut o, &mem_jit, &mut NoMmio, u64::MAX, u64::MAX);
         native += jit.stats.jit_instructions - before;
         assert_eq!((o.gpr, o.ip), (r.gpr, r.ip), "case {case}: {:02X?} eax {lo:08X} edx {hi:08X} divisor {b:08X}", code);
+        // Division qui fait une faute (arrêt dessus) : drapeaux d'avant.
+        if r.ip == CODE_AT {
+            assert_eq!(o.flags, r.flags, "case {case}: {:02X?} faulting division, flags", code);
+        }
     }
     // La plupart des divisions ont été faites par le code traduit.
     assert!(native > 10_000, "{native}");

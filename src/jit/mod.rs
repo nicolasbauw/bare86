@@ -1651,21 +1651,27 @@ fn r32(r: Register) -> AsmRegister32 {
 
 /// Pile et registres hauts : contrôle de l'accès (drapeaux sauvés autour
 /// s'ils sont vivants), puis l'opération.
-/// `div`/`idiv r/m32` (drapeaux indéfinis après : rien à préserver). Le
+/// `div`/`idiv r/m32` (drapeaux indéfinis après, mais gardés sur les sorties
+/// lentes : la division peut y faire une faute). Le
 /// diviseur dans R11D ; non signée : chemin lent si nul ou si EDX ≥ diviseur
 /// (quotient trop grand) ; signée : chemin lent si 0 ou −1, sinon division
 /// 64 bits sur l'hôte (sans faute possible) et quotient vérifié sur 32 bits,
 /// registres rétablis s'il déborde.
 fn emit_div(e: &mut Emit, ins: &Instruction, signed: bool, ip: u32, n: u32) -> Result<(), IcedError> {
+    // Drapeaux de l'invité sauvés d'abord et rétablis par toute sortie
+    // lente : les contrôles qui suivent les écrasent, et une division qui
+    // fait une faute (#DE) la fait avec les drapeaux d'avant l'instruction
+    // (empilés pour le gestionnaire d'exception).
+    e.save()?;
     if ins.op0_kind() == OpKind::Memory {
         e.address(ins)?;
-        e.checked(ip, n, 4, false, false, None)?;
+        e.checked(ip, n, 4, false, true, None)?;
         e.a.mov(r11d, dword_ptr(r15 + r13))?;
     } else {
         let r = host_reg(ins.op0_register()).unwrap();
         e.a.add_instruction(Instruction::with2(Code::Mov_r32_rm32, Register::R11D, r)?)?;
     }
-    let slow = e.exit(Some(ip), n, EXIT_SLOW, false);
+    let slow = e.exit(Some(ip), n, EXIT_SLOW, true);
     let a = &mut e.a;
     a.test(r11d, r11d)?;
     a.jz(slow)?;
