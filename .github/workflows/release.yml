@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Binaire Linux x86-64 « brut » : construit sur une étiquette v* et joint à
+# une release en brouillon (à relire et publier à la main). Lançable aussi à
+# la main (workflow_dispatch) : l'archive est alors un artefact du job.
+#
+# Ubuntu 22.04 : glibc 2.35, pour que le binaire tourne sur les
+# distributions un peu anciennes. SDL 3 y est compilée depuis ses sources et
+# liée statiquement (`static-sdl`) : seules libslirp, la GLib, la
+# bibliothèque C++ et la glibc restent à fournir par le système.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential binutils cmake ninja-build pkg-config libslirp-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev \
+            libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libdecor-0-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libdrm-dev \
+            libgbm-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev \
+            libdbus-1-dev
+
+      - name: Build
+        run: cargo build --release --locked --features static-sdl
+
+      # Les tests lancent des machines KVM : les runners Linux de GitHub
+      # exposent /dev/kvm, qu'une règle udev rend accessible.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test
+        run: |
+          if [ -w /dev/kvm ]; then
+            cargo test --release --locked --features static-sdl
+          else
+            echo "::warning::/dev/kvm not available: tests skipped"
+          fi
+
+      - name: Package
+        run: |
+          name="bare86-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir "$name"
+          cp target/release/bare86 README.md LICENSE docs/THIRD-PARTY.md "$name/"
+          strip "$name/bare86"
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bare86-linux-x86_64
+          path: bare86-*.tar.gz*
+
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "Bare86 $GITHUB_REF_NAME" \
+            --notes "Linux x86-64 binary. Needs KVM (/dev/kvm), libslirp and a recent glibc (2.35 or later). See README.md." \
+            "$ARCHIVE" "$ARCHIVE.sha256"

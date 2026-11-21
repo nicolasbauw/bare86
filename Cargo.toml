@@ -38,6 +38,16 @@ libc = "0.2.191"
 sha2 = "0.10.9"
 perf-event-open-sys = "7.1.0"
 sdl3 = "0.22.1"
+# Seulement pour `static-sdl` (la même version que celle de `sdl3`) : la
+# fonctionnalité `build-from-source-static` de `sdl3` 0.22.1 exige une
+# `sdl3-ttf-sys` 0.7.1 absente de crates.io.
+sdl3-sys = { version = "0.7.3", optional = true }
+
+[features]
+# Binaire de release : SDL3 compilée depuis ses sources et liée statiquement
+# (pas de dépendance à la SDL3 du système ; demande cmake et les en-têtes de
+# développement de X11/Wayland, ALSA/PulseAudio/PipeWire…).
+static-sdl = ["dep:sdl3-sys", "sdl3-sys/build-from-source-static"]
 
 [build-dependencies]
 cc = "1"
