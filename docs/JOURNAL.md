@@ -636,7 +636,7 @@ Un jeu DOS attend souvent en boucle : il occupait un cœur entier même plafonn�
 
 ### Point de reprise (mis à jour le 2026-11-21, après réouverture de session)
 
-**REPRISE (2026-11-21)** — `--realtime` mesuré (point 8, fin du paragraphe « Glissement de la ville élucidé ») : la ville de Second Reality tient exactement 140,2 IRQ 0/s, sans IRQ en retard, dans 4 passes sur 5 ; Doom sans coût. Restent : réactivité du bureau à faire constater en fenêtre par le propriétaire du projet, et sa décision (activer d'office quand le droit est présent, ou garder l'option). `--realtime` n'est pas poussé.
+**REPRISE (2026-11-21)** — `--realtime` mesuré (point 8, fin du paragraphe « Glissement de la ville élucidé ») : la ville de Second Reality tient exactement 140,2 IRQ 0/s, sans IRQ en retard, dans 4 passes sur 5 ; Doom sans coût. **Décision du propriétaire du projet : priorité temps réel d'office** quand le droit est présent, en silence sinon ; `--no-realtime` ou `realtime = off` dans un profil la coupent (`--realtime` reste accepté). Activée dans `main` seulement : les tests gardent la priorité normale. Reste : réactivité du bureau à faire constater en fenêtre par le propriétaire du projet. Non poussé.
 
 ### Point de reprise (2026-11-21, 6 h)
 

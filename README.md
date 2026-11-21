@@ -256,7 +256,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--trace-int` | Log the interrupts serviced by the host |
 | `--trace-io` | Report I/O ports with no device |
 | `--no-jit` | No dynamic translator (by default it takes over, when the statistics show a gain, the flat 32-bit code of games that lose time on planar VGA, such as Doom); `jit = off` in a profile |
-| `--realtime` | Real-time priority (SCHED_RR, priority 10) for the emulated CPU thread, so that other host tasks cannot preempt it and delay timer interrupts (demos synchronised to the vertical retrace lose frames otherwise); needs the `rtprio` limit (on Arch: package `realtime-privileges` and membership of the `realtime` group); `realtime = on` in a profile |
+| `--no-realtime` | Normal priority for the emulated CPU thread. By default it runs at real-time priority (SCHED_RR, priority 10) when the `rtprio` limit allows it (on Arch: package `realtime-privileges` and membership of the `realtime` group; silently skipped otherwise), so that other host tasks cannot preempt it and delay timer interrupts (demos synchronised to the vertical retrace lose frames otherwise); `realtime = off` in a profile |
 | `--jit` | Dynamic translator always engaged, whatever the statistics (measurements) |
 | `--no-interp` | No interpreter bursts: one VM exit per emulated video memory access (to measure what the interpreter brings) |
 | `-h`, `--help` | Print the options |

@@ -156,7 +156,8 @@ pub struct Config {
     /// Traducteur dynamique pour le code 32 bits plat : automatique par
     /// défaut, forcé (`--jit`) ou coupé (`--no-jit`).
     pub jit: crate::jit::policy::Mode,
-    /// Thread du vCPU en priorité temps réel (`--realtime`).
+    /// Thread du vCPU en priorité temps réel quand le droit est présent
+    /// (d'office ; `--no-realtime` le coupe).
     pub realtime: bool,
     /// VBE 2.0 avec framebuffer linéaire (sinon VBE 1.2, `--vbe1`).
     pub vbe2: bool,

@@ -1,4 +1,4 @@
-//! Priorité temps réel du thread du vCPU (`--realtime`).
+//! Priorité temps réel du thread du vCPU (d'office, `--no-realtime` la coupe).
 //!
 //! Sous l'ordonnanceur ordinaire, une autre tâche de l'hôte peut préempter
 //! le thread du vCPU pendant plusieurs millisecondes : le signal d'une
@@ -13,22 +13,13 @@
 /// temps réel du système (audio de PipeWire, IRQ en threads).
 const PRIORITY: i32 = 10;
 
-/// Passe le thread appelant en SCHED_RR ; les processus qu'il lancerait
-/// reviennent à l'ordonnanceur ordinaire (SCHED_RESET_ON_FORK).
+/// Passe le thread appelant en SCHED_RR si le droit le permet ; les
+/// processus qu'il lancerait reviennent à l'ordonnanceur ordinaire (SCHED_RESET_ON_FORK).
 pub fn enable() {
     let param = libc::sched_param { sched_priority: PRIORITY };
     // SAFETY: appel système sur le thread appelant (pid 0), paramètre valide.
-    let r = unsafe { libc::sched_setscheduler(0, libc::SCHED_RR | libc::SCHED_RESET_ON_FORK, &param) };
-    if r != 0 {
-        let e = std::io::Error::last_os_error();
-        let limit = rtprio_limit();
-        eprintln!("--realtime: {e} (RLIMIT_RTPRIO = {limit}, {PRIORITY} needed); running at normal priority");
-    }
-}
-
-fn rtprio_limit() -> u64 {
-    let mut r = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
-    // SAFETY: lecture d'une limite dans une structure locale.
-    unsafe { libc::getrlimit(libc::RLIMIT_RTPRIO, &mut r) };
-    r.rlim_cur
+    // Sans le droit (`RLIMIT_RTPRIO` trop bas), l'appel échoue et le thread
+    // garde la priorité normale, en silence : c'est le cas ordinaire d'un
+    // système non réglé, pas une erreur.
+    unsafe { libc::sched_setscheduler(0, libc::SCHED_RR | libc::SCHED_RESET_ON_FORK, &param) };
 }

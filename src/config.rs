@@ -56,6 +56,8 @@ pub fn parse(text: &str, dir: &Path) -> Result<Config, String> {
             "program" => c.program = Some(value),
             // Le traducteur est actif par défaut : « jit = off » le coupe.
             "jit" if matches!(value.to_ascii_lowercase().as_str(), "false" | "no" | "off") => c.options.push("--no-jit".into()),
+            // Priorité temps réel d'office aussi : « realtime = off » la coupe.
+            "realtime" if matches!(value.to_ascii_lowercase().as_str(), "false" | "no" | "off") => c.options.push("--no-realtime".into()),
             "args" => c.args = Some(value),
             _ => match value.to_ascii_lowercase().as_str() {
                 "true" | "yes" | "on" => c.options.push(format!("--{key}")),
