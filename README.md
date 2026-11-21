@@ -242,6 +242,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--mem MB` | Total memory in MB (default 64, as a late-1990s PC; demos of 1997–1999 need 32 or more) |
 | `--ems MB` | EMS memory in MB, in addition (default 4, 0 to 32) |
 | `--dpmi` | Load a DPMI host (HDPMI32, from HX) resident before the program, for programs that need one (the 4k intro Void 3); HX is downloaded on first use; `dpmi = on` in a profile |
+| `--shot-every S` | With `--shot F.png`: also `F-SSSS.png` every S seconds (seconds since the start), rendered at the same safe moments as `--video`; for unattended surveys (`tools/survey.py`) |
 | `--mips N` | Throttle to N million instructions per second (default: full speed; many period programs, demos especially, need a limit, 200 being a good start); needs `kernel.perf_event_paranoid` at 1 or less, see [Requirements](#requirements) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
 | `--set NAME=VALUE` | Environment variable for the built-in DOS (repeatable; in a profile, one `set = NAME=VALUE` line each), e.g. `DPMILDR=16` for Heretic II under HX |

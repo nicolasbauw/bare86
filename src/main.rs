@@ -112,6 +112,8 @@ usage: bare86 [options] [program [arguments…]]
   --screen       print the text screen when the program ends
   --term         show the text screen live in the terminal
   --shot F.png   screenshot when the program ends
+  --shot-every S with --shot F.png: also F-SSSS.png every S seconds
+                 (SSSS: seconds since the start), for unattended surveys
   --wav F.wav    record the sound to a file (without a window)
   --video F.mkv  record the screen at 70 frames per second, 640×480 (needs
                  ffmpeg), for comparisons with a reference (tools/compare.py)
@@ -200,6 +202,7 @@ fn main() -> ExitCode {
     let mut video: Option<String> = None;
     let mut stats = false;
     let mut dpmi = false;
+    let mut shot_every: Option<f64> = None;
     let mut font: Option<std::path::PathBuf> = None;
     let mut keys = None;
     let mut program = None;
@@ -304,6 +307,10 @@ fn main() -> ExitCode {
                 _ => return ExitCode::from(2),
             },
             "--trace-int" => cfg.trace_int = true,
+            "--shot-every" => match value("--shot-every") {
+                Some(v) if v > 0.0 => shot_every = Some(v),
+                _ => return ExitCode::from(2),
+            },
             "--limit" => match value("--limit") {
                 Some(v) if v > 0.0 => cfg.limit = Some(std::time::Duration::from_secs_f64(v)),
                 _ => return ExitCode::from(2),
@@ -502,7 +509,7 @@ fn main() -> ExitCode {
     cfg.opl = opl_choice.unwrap_or(card_opl);
     // Arguments à traduire : ceux de la ligne de commande seulement.
     let program_args = if host_paths { Some(program_args) } else { None };
-    let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, video, font, stats, boot, dpmi };
+    let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, video, font, stats, boot, dpmi, shot_every };
     let result = if window {
         let host_keys = keys;
         let menu = menu::State {
@@ -546,6 +553,8 @@ fn main() -> ExitCode {
 
 /// Ce qu'il faut pour construire et lancer la machine (sur le thread du vCPU).
 struct RunOptions {
+    /// `--shot-every` : période des captures (avec `--shot`).
+    shot_every: Option<f64>,
     cfg: Config,
     program: Option<String>,
     mount: Option<std::path::PathBuf>,
@@ -572,6 +581,9 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
     });
     if let Some(v) = &o.video {
         pc.record_video(v)?;
+    }
+    if let (Some(every), Some(shot)) = (o.shot_every, &o.shot) {
+        pc.shot_every(shot.strip_suffix(".png").unwrap_or(shot), std::time::Duration::from_secs_f64(every));
     }
     match &o.program {
         _ if o.boot => {

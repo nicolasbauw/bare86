@@ -560,6 +560,9 @@ pub struct Pc<B: Backend = KvmVm> {
     text_ui: bool,
     /// Enregistrement vidéo (`--video`).
     video: Option<crate::video::VideoOut>,
+    /// Captures périodiques (`--shot-every`) : base du nom (sans `.png`),
+    /// période, prochaine échéance.
+    shots: Option<(String, Duration, Instant)>,
     /// Dernier rafraîchissement de l'écran du terminal.
     last_render: Option<Instant>,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
@@ -814,6 +817,7 @@ impl<B: Backend> Pc<B> {
             text_shadow: None,
             text_ui: false,
             video: None,
+            shots: None,
             input_paused_until: None,
             until_text: None,
             stepping: false,
@@ -1799,7 +1803,25 @@ impl<B: Backend> Pc<B> {
             let frame = self.frame();
             if let Some(v) = &mut self.video {
                 v.push(frame.as_ref().map(|(w, h, px)| (*w, *h, &px[..])), Instant::now());
-            }        }
+            }
+        }
+        // Captures périodiques, rendues au même moment sûr que la vidéo.
+        if let Some((_, every, next)) = &self.shots
+            && now >= *next
+            && self.render_now(now, now - *next)
+        {
+            let (every, next) = (*every, *next);
+            let secs = next.saturating_duration_since(self.started).as_secs();
+            if let (Some((w, h, px)), Some((base, ..))) = (self.frame(), &self.shots) {
+                let path = format!("{base}-{secs:04}.png");
+                if let Err(e) = std::fs::write(&path, crate::render::png(w, h, &px)) {
+                    eprintln!("{path}: {e}");
+                }
+            }
+            if let Some(s) = &mut self.shots {
+                s.2 = next + every;
+            }
+        }
         if self.input_finished() {
             return Err("end of input: session stopped".into());
         }
@@ -2163,6 +2185,12 @@ impl<B: Backend> Pc<B> {
     }
 
     /// Police du mode texte (rendu en image : fenêtre, captures).
+    /// Captures toutes les `every` (`--shot-every`), nommées `base-SSSS.png`
+    /// d'après le temps écoulé depuis le début de la session.
+    pub fn shot_every(&mut self, base: &str, every: Duration) {
+        self.shots = Some((base.to_string(), every, self.started + every));
+    }
+
     /// Enregistre la session en vidéo (`--video`).
     pub fn record_video(&mut self, path: &str) -> std::result::Result<(), String> {
         self.video = Some(crate::video::VideoOut::start(path)?);
