@@ -34,8 +34,8 @@ use std::collections::HashMap;
 
 use iced_x86::code_asm::*;
 use iced_x86::{
-    BlockEncoderOptions, Code, ConditionCode, Decoder, DecoderOptions, Encoder, FlowControl, Instruction, MemoryOperand, Mnemonic as Mn, OpKind,
-    Register,
+    BlockEncoderOptions, Code, ConditionCode, Decoder, DecoderOptions, Encoder, FlowControl, Instruction, InstructionInfoFactory, MemoryOperand,
+    Mnemonic as Mn, OpAccess, OpKind, Register,
 };
 
 use crate::interp::{self, Cpu, Mmio, StopReason};
@@ -117,6 +117,12 @@ pub struct State {
     mask_box: u64,
     /// Opposé de `es_base` sur 32 bits : EDI linéaire → décalage (`lea`).
     es_neg: u64,
+    /// Accès émulé à la fenêtre VGA sans quitter le code traduit
+    /// (`vga_trampoline`, même bus que `out_fn`).
+    vga_fn: u64,
+    /// Case où l'instruction d'origine s'exécute pour un accès émulé : la
+    /// valeur lue par la carte y est déposée, la valeur écrite y est prise.
+    scratch: u64,
 }
 
 /// `out 3C5h,al` (masque de plans, index 2) servi par le code traduit :
@@ -202,6 +208,14 @@ const OFF_VVIEW_R: i32 = 216;
 const OFF_NEG_VIEW: i32 = 232;
 const OFF_MASK_FAST: i32 = 240;
 const OFF_ES_NEG: i32 = 256;
+const OFF_VGA_FN: i32 = 264;
+const OFF_SCRATCH: i32 = 272;
+const _: () = {
+    assert!(std::mem::offset_of!(State, es_base) == OFF_ES_BASE as usize);
+    assert!(std::mem::offset_of!(State, es_neg) == OFF_ES_NEG as usize);
+    assert!(std::mem::offset_of!(State, vga_fn) == OFF_VGA_FN as usize);
+    assert!(std::mem::offset_of!(State, scratch) == OFF_SCRATCH as usize);
+};
 /// Entrées de la table de répartition (index : 16 bits bas de l'EIP).
 const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
@@ -542,6 +556,7 @@ impl Jit {
             membase: mem.ptr as u64,
             mask_box: &mut *self.mask as *mut MaskFast as u64,
             out_fn: out_trampoline::<M> as *const () as u64,
+            vga_fn: vga_trampoline::<M> as *const () as u64,
             out_ctx: mmio as *mut M as u64,
             view: self.view.as_ref().map_or(0, |v| v.base()),
             vga_views: self.vga_views.as_ref().map_or(0, |v| v as *const fastmem::VgaViews as u64),
@@ -1210,6 +1225,14 @@ enum Op {
     Native(Instruction),
     /// Immédiat volatil lu dans la mémoire de l'invité.
     Volatile(Instruction),
+    /// `op [m],imm32` à immédiat volatil : l'immédiat chargé dans R11D
+    /// depuis le code de l'invité (décalage dans l'instruction), puis
+    /// `op [m],r11d` (forme de l'hôte), mêmes drapeaux.
+    VolatileMem(Instruction, u32),
+    /// `op r8h,[m]` (add, or, adc, sbb, and, sub, xor, cmp) : les registres
+    /// hauts ne s'encodent pas avec R13/R15 ; le registre complet pivote
+    /// pour que l'opération porte sur son octet bas.
+    HighAlu(Register),
     /// Adresse de l'invité calculée directement dans la destination.
     Lea,
     Push(Option<Register>, u32),
@@ -1241,6 +1264,40 @@ enum Tail {
     Ret(u32),
     /// `jmp`/`call` vers une cible en registre ou en mémoire.
     Indirect(Instruction),
+}
+
+/// Octet bas d'un registre 32 bits (EAX → AL…).
+fn low_byte(r: Register) -> Register {
+    match r {
+        Register::EAX => Register::AL,
+        Register::ECX => Register::CL,
+        Register::EDX => Register::DL,
+        _ => Register::BL,
+    }
+}
+
+/// Forme de l'hôte d'un `op [m],imm32` à immédiat volatil : `op [m],r11d`
+/// sur `[r15+r13]`. Formes 32 bits seules.
+fn volatile_mem_form(ins: &Instruction) -> Option<Instruction> {
+    if ins.op0_kind() != OpKind::Memory || !flat_memory(ins) {
+        return None;
+    }
+    let code = match ins.code() {
+        Code::Add_rm32_imm32 => Code::Add_rm32_r32,
+        Code::Or_rm32_imm32 => Code::Or_rm32_r32,
+        Code::Adc_rm32_imm32 => Code::Adc_rm32_r32,
+        Code::Sbb_rm32_imm32 => Code::Sbb_rm32_r32,
+        Code::And_rm32_imm32 => Code::And_rm32_r32,
+        Code::Sub_rm32_imm32 => Code::Sub_rm32_r32,
+        Code::Xor_rm32_imm32 => Code::Xor_rm32_r32,
+        Code::Cmp_rm32_imm32 => Code::Cmp_rm32_r32,
+        Code::Mov_rm32_imm32 => Code::Mov_rm32_r32,
+        _ => return None,
+    };
+    let m = MemoryOperand::new(Register::R15, Register::R13, 1, 0, 0, false, Register::None);
+    let h = Instruction::with2(code, m, Register::R11D).ok()?;
+    Encoder::new(64).encode(&h, 0).ok()?;
+    Some(h)
 }
 
 /// Registre 32 bits d'un registre haut (AH → EAX…).
@@ -1291,6 +1348,20 @@ fn classify(ins: &Instruction, imm: Imm, volatile: &std::collections::HashSet<u3
                 return Some(Op::HighStore(full));
             }
         }
+        Code::Add_r8_rm8
+        | Code::Or_r8_rm8
+        | Code::Adc_r8_rm8
+        | Code::Sbb_r8_rm8
+        | Code::And_r8_rm8
+        | Code::Sub_r8_rm8
+        | Code::Xor_r8_rm8
+        | Code::Cmp_r8_rm8
+            if ins.op1_kind() == OpKind::Memory && flat_memory(ins) =>
+        {
+            if let Some(full) = high_full(ins.op0_register()) {
+                return Some(Op::HighAlu(full));
+            }
+        }
         _ => {}
     }
     if !native_ok(ins) {
@@ -1298,7 +1369,10 @@ fn classify(ins: &Instruction, imm: Imm, volatile: &std::collections::HashSet<u3
     }
     if volatile.contains(&ins.ip32()) {
         let (off, _) = imm?;
-        return volatile_form(ins, off).map(Op::Volatile);
+        if let Some(h) = volatile_form(ins, off) {
+            return Some(Op::Volatile(h));
+        }
+        return volatile_mem_form(ins).map(|h| Op::VolatileMem(h, off as u32));
     }
     if ins.mnemonic() == Mn::Lea {
         let ok = ins.op0_kind() == OpKind::Register && ins.op0_register().is_gpr32() && guest_address(ins).is_some();
@@ -1704,6 +1778,81 @@ extern "sysv64" fn out_trampoline<M: Mmio>(ctx: *mut M, port: u32, size: u32, va
     1
 }
 
+/// Appelée par le code traduit pour un accès de `size` octets à la fenêtre
+/// VGA que la carte doit émuler (plusieurs plans, chain-4, opérations
+/// logiques…) : écrit `value` si `write`, sinon rend la valeur lue.
+extern "sysv64" fn vga_trampoline<M: Mmio>(ctx: *mut M, addr: u32, size: u32, write: u32, value: u64, st: *mut State) -> u64 {
+    // SAFETY: bus et état passés par `Jit::run`, vivants pendant toute la
+    // rafale ; le code traduit ne l'appelle que depuis cette rafale.
+    let (m, st) = unsafe { (&mut *ctx, &mut *st) };
+    if st.read_at != 0 {
+        m.direct_read_at(st.read_at as u32 - 1);
+        st.read_at = 0;
+    }
+    if write != 0 {
+        for i in 0..size {
+            m.write8(addr + i, (value >> (8 * i)) as u8);
+        }
+        0
+    } else {
+        (0..size).fold(0, |v, i| v | u64::from(m.read8(addr + i)) << (8 * i))
+    }
+}
+
+/// Accès mémoire de `ins` qu'un passage par `scratch` sait émuler : un seul
+/// opérande mémoire de 1, 2 ou 4 octets, lu, écrit ou les deux, sans
+/// condition. `(lit, écrit)`.
+fn bounce_access(ins: &Instruction) -> Option<(bool, bool)> {
+    if !matches!(ins.memory_size().size(), 1 | 2 | 4) {
+        return None;
+    }
+    let mut f = InstructionInfoFactory::new();
+    let used = f.info(ins).used_memory();
+    if used.len() != 1 {
+        return None;
+    }
+    match used[0].access() {
+        OpAccess::Read => Some((true, false)),
+        OpAccess::Write => Some((false, true)),
+        OpAccess::ReadWrite => Some((true, true)),
+        _ => None,
+    }
+}
+
+/// Appel de `vga_trampoline` depuis le code traduit (adresse dans R13D) :
+/// registres de l'invité préservés, pile alignée sur 16 comme pour `out`
+/// (R8, base de la vue, compris) ; écriture de la valeur de `scratch`, ou
+/// lecture déposée dans `scratch`. Écrase R9, R11 et les drapeaux.
+fn emit_vga_call(a: &mut CodeAssembler, size: u32, write: bool) -> Result<(), IcedError> {
+    for r in [rax, rcx, rdx, rsi, rdi, r8, r10] {
+        a.push(r)?;
+    }
+    a.mov(rdi, qword_ptr(r10 + OFF_OUT_CTX))?;
+    a.mov(esi, r13d)?;
+    a.mov(edx, size)?;
+    a.mov(ecx, u32::from(write))?;
+    a.mov(r8, qword_ptr(r10 + OFF_SCRATCH))?;
+    a.mov(r9, r10)?;
+    a.call(qword_ptr(r10 + OFF_VGA_FN))?;
+    // R10 n'est rétabli qu'au dépilage : la valeur lue attend dans R11.
+    a.mov(r11, rax)?;
+    for r in [r10, r8, rdi, rsi, rdx, rcx, rax] {
+        a.pop(r)?;
+    }
+    if !write {
+        a.mov(qword_ptr(r10 + OFF_SCRATCH), r11)?;
+    }
+    Ok(())
+}
+
+/// Venu de l'étiquette VGA de `guard` (A0000–FFFFF, drapeaux sauvés ou
+/// morts) : hors de la fenêtre A0000–AFFFF (texte, ROM), chemin lent.
+fn vga_window_only(a: &mut CodeAssembler, slow: CodeLabel) -> Result<(), IcedError> {
+    a.lea(r14d, ptr(r13 - 0xA0000))?;
+    a.cmp(r14d, 0x10000)?;
+    a.jae(slow)
+}
+
 fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live: bool) -> Result<(), IcedError> {
     // Registres hauts : la fusion dans le registre complet touche aux
     // drapeaux, sauvés autour s'ils sont vivants.
@@ -1754,10 +1903,20 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
             e.a.mov(ebp, r11d)?;
         }
         Op::HighLoad(full) => {
+            // Fenêtre VGA : lecture émulée par la carte (`vga_trampoline`).
+            let mut vga = e.a.create_label();
+            let mut merge = e.a.create_label();
+            let slow = e.exit(Some(ip), n, EXIT_SLOW, live);
             e.address(ins)?;
-            e.guard(ip, n, 1, false, live, None)?;
+            e.guard(ip, n, 1, false, live, Some(vga))?;
             let f = r32(full);
             e.a.movzx(r11d, byte_ptr(r15 + r13))?;
+            e.a.jmp(merge)?;
+            e.a.set_label(&mut vga)?;
+            vga_window_only(&mut e.a, slow)?;
+            emit_vga_call(&mut e.a, 1, false)?;
+            e.a.movzx(r11d, byte_ptr(r10 + OFF_SCRATCH))?;
+            e.a.set_label(&mut merge)?;
             e.a.shl(r11d, 8)?;
             e.a.and(f, 0xFFFF_00FFu32 as i32)?;
             e.a.or(f, r11d)?;
@@ -1766,11 +1925,24 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
             if !live {
                 e.save()?;
             }
+            let mut vga = e.a.create_label();
+            let mut done = e.a.create_label();
+            let slow = e.exit(Some(ip), n, EXIT_SLOW, true);
             e.address(ins)?;
-            e.guard(ip, n, 1, true, true, None)?;
+            e.guard(ip, n, 1, true, true, Some(vga))?;
             e.a.mov(r11d, r32(full))?;
             e.a.shr(r11d, 8)?;
             e.a.mov(byte_ptr(r15 + r13), r11b)?;
+            e.a.jmp(done)?;
+            // Fenêtre VGA : écriture émulée par la carte.
+            e.a.set_label(&mut vga)?;
+            vga_window_only(&mut e.a, slow)?;
+            e.a.mov(r11d, r32(full))?;
+            e.a.shr(r11d, 8)?;
+            e.a.mov(qword_ptr(r10 + OFF_SCRATCH), r11)?;
+            emit_vga_call(&mut e.a, 1, true)?;
+            e.a.set_label(&mut done)?;
+            e.a.nop()?;
         }
         _ => unreachable!(),
     }
@@ -1827,21 +1999,27 @@ fn emit_native_checked(e: &mut Emit, ins: &Instruction, h: &Instruction, ip: u32
     let direct_write = ins.mnemonic() == Mn::Mov && ins.op0_kind() == OpKind::Memory;
     let direct_read = !writes_memory(ins) && !matches!(ins.mnemonic(), Mn::Xchg);
     let direct = direct_write || direct_read;
+    // Sinon, ou sans plan direct : accès émulé par la carte, l'instruction
+    // s'exécutant sur `scratch` (registres et drapeaux par le processeur).
+    let bounce = bounce_access(ins);
     let mut vga = e.a.create_label();
     e.address(ins)?;
     let size = ins.memory_size().size().max(1) as i32;
-    e.checked(ip, n, size, writes_memory(ins), live_here, (direct && e.bmi2).then_some(vga))?;
+    e.checked(ip, n, size, writes_memory(ins), live_here, ((direct || bounce.is_some()) && e.bmi2).then_some(vga))?;
     e.a.add_instruction(*h)?;
-    if direct && e.bmi2 {
+    if (direct || bounce.is_some()) && e.bmi2 {
         // Fenêtre VGA, venu du chemin rapide de `checked` (page
-        // d'état 2, drapeaux intacts) : directement dans le plan,
-        // ou chemin lent si la configuration ne le permet pas.
+        // d'état 2, drapeaux intacts) : directement dans le plan, sinon
+        // accès émulé, ou chemin lent pour ce qu'on ne sait pas émuler.
         let slow = e.exit(Some(ip), n, EXIT_SLOW, false);
         let a = &mut e.a;
         let mut done = a.create_label();
         let mut noptr = a.create_label();
         a.jmp(done)?;
         a.set_label(&mut vga)?;
+        if !direct {
+            a.jmp(noptr)?;
+        }
         a.lea(r14d, ptr(r13 - 0xA0000))?;
         a.mov(r9, qword_ptr(r10 + if direct_write { OFF_VRAM } else { OFF_VRAM_READ }))?;
         a.mov(r11, rcx)?;
@@ -1860,10 +2038,34 @@ fn emit_native_checked(e: &mut Emit, ins: &Instruction, h: &Instruction, ip: u32
         a.add_instruction(w)?;
         a.jmp(done)?;
         a.set_label(&mut noptr)?;
-        a.mov(rcx, r11)?;
-        a.jmp(slow)?;
-        a.set_label(&mut done)?;
-        a.nop()?;
+        if direct {
+            a.mov(rcx, r11)?;
+        }
+        match bounce {
+            None => a.jmp(slow)?,
+            Some((reads, writes)) => {
+                // Drapeaux de l'invité gardés autour des appels.
+                e.save()?;
+                if reads {
+                    emit_vga_call(&mut e.a, size as u32, false)?;
+                }
+                e.restore()?;
+                let mut b = *h;
+                b.set_memory_base(Register::R10);
+                b.set_memory_index(Register::None);
+                b.set_memory_displacement64(OFF_SCRATCH as u64);
+                b.set_memory_displ_size(8);
+                e.a.add_instruction(b)?;
+                if writes {
+                    e.save()?;
+                    emit_vga_call(&mut e.a, size as u32, true)?;
+                    e.restore()?;
+                }
+                e.a.jmp(done)?;
+            }
+        }
+        e.a.set_label(&mut done)?;
+        e.a.nop()?;
     }
     Ok(())
 }
@@ -1898,7 +2100,7 @@ fn emit_block(
             }
             match classify(ins, *imm, volatile) {
                 Some(op) => {
-                    if let (Op::Volatile(_), Some((off, n))) = (&op, imm) {
+                    if let (Op::Volatile(_) | Op::VolatileMem(..), Some((off, n))) = (&op, imm) {
                         holes.push(((ins.ip32() - eip) as usize + off, *n));
                     }
                     body.push((*ins, op));
@@ -1961,6 +2163,30 @@ fn emit_block(
             Op::Lea => {
                 let dst = host_reg(ins.op0_register()).unwrap();
                 e.a.add_instruction(Instruction::with2(Code::Lea_r32_m, dst, guest_address(ins).unwrap())?)?;
+            }
+            Op::VolatileMem(h, off) => {
+                e.address(ins)?;
+                e.checked(ip, n, 4, writes_memory(ins), live_here, None)?;
+                // Immédiat lu à son adresse linéaire (code de l'invité, en RAM).
+                let at = ip.wrapping_add(*off).wrapping_add(e.base);
+                e.a.mov(r11d, dword_ptr(r15 + at as i32))?;
+                e.a.add_instruction(*h)?;
+            }
+            Op::HighAlu(full) => {
+                e.address(ins)?;
+                e.checked(ip, n, 1, false, live_here, None)?;
+                e.a.movzx(r11d, byte_ptr(r15 + r13))?;
+                // AH → AL et retour, drapeaux de l'invité intacts autour.
+                let f = r32(*full);
+                e.a.pushfq()?;
+                e.a.ror(f, 8)?;
+                e.a.popfq()?;
+                let mut op = Instruction::with2(ins.code(), low_byte(*full), Register::R11L)?;
+                op.set_ip(0);
+                e.a.add_instruction(op)?;
+                e.a.pushfq()?;
+                e.a.rol(f, 8)?;
+                e.a.popfq()?;
             }
             Op::Volatile(h) => {
                 // Immédiat lu à son adresse linéaire.

@@ -541,3 +541,142 @@ fn divisions_match_interpreter() {
     // La plupart des divisions ont été faites par le code traduit.
     assert!(native > 10_000, "{native}");
 }
+
+/// Fenêtre VGA dont la carte émule chaque accès (pas de plan direct) : une
+/// mémoire à elle, pour comparer aussi les écritures.
+struct VgaMock(Vec<u8>);
+
+impl Mmio for VgaMock {
+    fn claims(&self, addr: u32, write: bool) -> bool {
+        NoMmio.claims(addr, write)
+    }
+    fn read8(&mut self, addr: u32) -> u8 {
+        self.0[(addr - 0xA0000) as usize & 0xFFFF]
+    }
+    fn write8(&mut self, addr: u32, v: u8) {
+        self.0[(addr - 0xA0000) as usize & 0xFFFF] = v;
+    }
+}
+
+/// Accès émulés à la fenêtre VGA depuis le code traduit (`vga_trampoline`,
+/// instruction exécutée sur `scratch`) : registres, drapeaux définis et
+/// mémoire de la fenêtre comme l'interpréteur.
+#[test]
+fn vga_bounce_matches_interpreter() {
+    if !std::arch::is_x86_feature_detected!("bmi2") {
+        return;
+    }
+    let mut rng = Rng(4242);
+    let mem_jit = GuestMem::new(MEM_SIZE).unwrap();
+    let mem_ref = GuestMem::new(MEM_SIZE).unwrap();
+    let mut jit = Jit::new(&mem_jit).unwrap();
+    type Gen = fn(&mut CodeAssembler) -> Result<(), IcedError>;
+    let forms: [Gen; 18] = [
+        |a| a.add(dword_ptr(esi), eax),
+        |a| a.or(byte_ptr(esi + 1), al),
+        |a| a.mov(word_ptr(esi), bx),
+        |a| a.mov(ecx, dword_ptr(esi)),
+        |a| a.xchg(dword_ptr(esi), edx),
+        |a| a.adc(dword_ptr(esi), 0x1234),
+        |a| a.sub(word_ptr(esi + 2), bx),
+        |a| a.cmp(dword_ptr(esi), ebx),
+        |a| a.test(byte_ptr(esi), 0x40),
+        |a| a.movzx(eax, byte_ptr(esi + 3)),
+        |a| a.inc(dword_ptr(esi)),
+        |a| a.neg(byte_ptr(esi)),
+        |a| a.setb(byte_ptr(esi)),
+        |a| a.shl(dword_ptr(esi), cl),
+        |a| a.mov(byte_ptr(esi), 0x5A),
+        |a| a.and(ah, byte_ptr(esi)),
+        |a| a.mov(byte_ptr(esi + 5), ch),
+        |a| a.mov(dh, byte_ptr(esi + 7)),
+    ];
+    let mut translated = 0;
+    for case in 0..20_000 {
+        let mut a = CodeAssembler::new(32).unwrap();
+        forms[case % forms.len()](&mut a).unwrap();
+        a.hlt().unwrap();
+        let code = a.assemble(u64::from(CODE_AT)).unwrap();
+        let ins = Decoder::with_ip(32, &code, u64::from(CODE_AT), DecoderOptions::NONE).decode();
+        let window: Vec<u8> = (0..0x10000).map(|_| rng.next() as u8).collect();
+        for m in [&mem_jit, &mem_ref] {
+            m.write(CODE_AT as usize, &code);
+        }
+        let mut start = random_cpu(&mut rng);
+        start.gpr[6] = 0xA0000 + rng.below(0xE000) as u32;
+        let (mut vr, mut vo) = (VgaMock(window.clone()), VgaMock(window));
+        let mut r = start.clone();
+        while run_burst(&mut r, &mem_ref, &mut vr, u64::MAX, 1).reason != StopReason::Unsupported {}
+        let mut o = start.clone();
+        jit.flush();
+        let before = jit.stats.jit_instructions;
+        jit.run(&mut o, &mem_jit, &mut vo, u64::MAX, u64::MAX);
+        translated += jit.stats.jit_instructions - before;
+        let mask = !(undefined_flags(&ins, &start) | 0x28);
+        assert_eq!((o.gpr, o.ip, o.flags & mask), (r.gpr, r.ip, r.flags & mask), "case {case}: {ins}");
+        assert!(vo.0 == vr.0, "case {case}: {ins}: window differs");
+    }
+    // Le chemin émulé a bien servi (sinon tout serait passé par l'interpréteur).
+    assert!(translated > 15_000, "{translated}");
+}
+
+/// `op [m],imm32` dont l'immédiat est réécrit par le programme : traduit
+/// (immédiat lu dans le code à chaque passage), comme l'interpréteur, avant
+/// et après une réécriture de l'immédiat sans vider le cache.
+#[test]
+fn volatile_memory_immediates() {
+    let mut rng = Rng(9090);
+    let mem_jit = GuestMem::new(MEM_SIZE).unwrap();
+    let mem_ref = GuestMem::new(MEM_SIZE).unwrap();
+    type Gen = fn(&mut CodeAssembler) -> Result<(), IcedError>;
+    let forms: [Gen; 6] = [
+        |a| a.add(dword_ptr(esi), 0x1234_5678),
+        |a| a.sub(dword_ptr(esi + 4), 0x0101_0101),
+        |a| a.adc(dword_ptr(esi), 0x7FFF_FFFF),
+        |a| a.cmp(dword_ptr(esi), 0x4000_0000),
+        |a| a.xor(dword_ptr(esi + 8), 0x5555_5555),
+        |a| a.mov(dword_ptr(esi), 0x0BAD_F00D),
+    ];
+    let mut translated = 0;
+    for (k, form) in forms.iter().enumerate() {
+        let mut jit = Jit::new(&mem_jit).unwrap();
+        let mut a = CodeAssembler::new(32).unwrap();
+        form(&mut a).unwrap();
+        a.hlt().unwrap();
+        let code = a.assemble(u64::from(CODE_AT)).unwrap();
+        let mut d = Decoder::with_ip(32, &code, u64::from(CODE_AT), DecoderOptions::NONE);
+        let ins = d.decode();
+        let c = d.get_constant_offsets(&ins);
+        let imm_at = CODE_AT as usize + c.immediate_offset();
+        jit.volatile.insert(CODE_AT);
+        for m in [&mem_jit, &mem_ref] {
+            m.write(CODE_AT as usize, &code);
+        }
+        for round in 0..200 {
+            // Nouvel immédiat, écrit comme le ferait le programme.
+            let imm = rng.next() as u32;
+            let data = [rng.next() as u32, rng.next() as u32, rng.next() as u32];
+            for m in [&mem_jit, &mem_ref] {
+                m.write_u32(imm_at, imm);
+                for (i, v) in data.iter().enumerate() {
+                    m.write_u32(0x40000 + 4 * i, *v);
+                }
+            }
+            let mut start = random_cpu(&mut rng);
+            start.gpr[6] = 0x40000;
+            let mut r = start.clone();
+            while run_burst(&mut r, &mem_ref, &mut NoMmio, u64::MAX, 1).reason != StopReason::Unsupported {}
+            let mut o = start.clone();
+            let before = jit.stats.jit_instructions;
+            jit.run(&mut o, &mem_jit, &mut NoMmio, u64::MAX, u64::MAX);
+            translated += jit.stats.jit_instructions - before;
+            let mask = !(undefined_flags(&ins, &start) | 0x28);
+            let (mut x, mut y) = ([0u8; 12], [0u8; 12]);
+            mem_jit.read(0x40000, &mut x);
+            mem_ref.read(0x40000, &mut y);
+            assert_eq!(x, y, "form {k} round {round}: {ins} imm {imm:08X}");
+            assert_eq!((o.gpr, o.ip, o.flags & mask), (r.gpr, r.ip, r.flags & mask), "form {k} round {round}: {ins}");
+        }
+    }
+    assert!(translated >= 6 * 200, "{translated}");
+}
