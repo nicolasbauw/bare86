@@ -100,6 +100,9 @@ usage: bare86 [options] [program [arguments…]]
   --set NAME=VALUE   environment variable for the built-in DOS (repeatable;
                  in a profile, one \"set = NAME=VALUE\" line each), e.g.
                  DPMILDR=16 for some Win32 programs under HX
+  --dpmi         load a DPMI host (HDPMI32, from HX) resident before the
+                 program, for programs that need one (Void 3); HX is
+                 downloaded on first use
   --mips N       throttle to N million instructions per second
   --mem MB       total memory in MB (default 64)
   --ems MB       EMS memory in MB, in addition (default 4, 0 to 32)
@@ -196,6 +199,7 @@ fn main() -> ExitCode {
     let mut wav: Option<String> = None;
     let mut video: Option<String> = None;
     let mut stats = false;
+    let mut dpmi = false;
     let mut font: Option<std::path::PathBuf> = None;
     let mut keys = None;
     let mut program = None;
@@ -435,6 +439,7 @@ fn main() -> ExitCode {
                 fullscreen = true;
             }
             "--stats" => stats = true,
+            "--dpmi" => dpmi = true,
             "--font" => font = args.next().map(Into::into),
             "--keys" => match args.next().map(|k| keyboard::parse_script(&k)) {
                 Some(Ok(ev)) => keys = Some(ev),
@@ -497,7 +502,7 @@ fn main() -> ExitCode {
     cfg.opl = opl_choice.unwrap_or(card_opl);
     // Arguments à traduire : ceux de la ligne de commande seulement.
     let program_args = if host_paths { Some(program_args) } else { None };
-    let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, video, font, stats, boot };
+    let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, video, font, stats, boot, dpmi };
     let result = if window {
         let host_keys = keys;
         let menu = menu::State {
@@ -550,6 +555,8 @@ struct RunOptions {
     program_args: Option<Vec<String>>,
     debug: bool,
     screen: bool,
+    /// Hôte DPMI de HX (HDPMI32) chargé en résident avant le programme.
+    dpmi: bool,
     shot: Option<String>,
     video: Option<String>,
     font: Option<std::path::PathBuf>,
@@ -608,6 +615,9 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
                 }
                 None => o.tail.clone(),
             };
+            if o.dpmi {
+                pc.load_dpmi_host()?;
+            }
             pc.load_program(&dos, &tail)?;
         }
         None => {

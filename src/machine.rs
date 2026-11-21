@@ -923,6 +923,18 @@ impl<B: Backend> Pc<B> {
         self.dos.chdir(path)
     }
 
+    /// Hôte DPMI de HX (`HDPMI32 -r`) chargé en résident, comme un
+    /// `AUTOEXEC.BAT` le ferait : pour les programmes qui exigent un hôte
+    /// DPMI 32 bits (`--dpmi`). HX est monté en Z: (téléchargé au besoin).
+    pub fn load_dpmi_host(&mut self) -> Result<()> {
+        let dir = crate::runtime::hx_dir_or_install()?;
+        self.dos.mount(crate::dos::HX_DRIVE, dir);
+        self.load_program(b"Z:\\BIN\\HDPMI32.EXE", b" -r")?;
+        // Resté résident (INT 21h AH=31h, code de sortie 1).
+        self.run()?;
+        Ok(())
+    }
+
     /// Charge un programme d'un lecteur monté (« C:\\JEU.EXE »).
     pub fn load_program(&mut self, path: &[u8], tail: &[u8]) -> Result<()> {
         let cpu = self.dos.start(self.vm.mem(), path, tail)?;

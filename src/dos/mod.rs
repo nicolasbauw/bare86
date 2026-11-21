@@ -18,6 +18,8 @@ mod process;
 mod lfn;
 mod shell;
 mod win32;
+/// Lecteur où Bare86 monte son HX (programmes Win32, `--dpmi`).
+pub use win32::HX_DRIVE;
 
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
