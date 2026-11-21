@@ -12,6 +12,20 @@
 
 typedef void (*bare86_rx_fn)(void *user, const uint8_t *frame, size_t len);
 
+/* libslirp 4.9 désigne les sockets par `slirp_os_socket` (rappels
+ * `*_poll_socket`, configuration version 6) ; les versions plus anciennes
+ * (4.6 d'Ubuntu 22.04, où se construit le binaire de release) par des
+ * descripteurs entiers (`*_poll_fd`). Les versions récentes gardent
+ * l'ancienne API : un binaire construit contre la 4.6 tourne aussi avec
+ * elles. */
+#if SLIRP_CHECK_VERSION(4, 9, 0)
+#define BARE86_SLIRP_SOCKETS 1
+#else
+#define BARE86_SLIRP_SOCKETS 0
+typedef ssize_t slirp_ssize_t;
+typedef int slirp_os_socket;
+#endif
+
 struct timer {
     SlirpTimerCb cb;
     void *cb_opaque;
@@ -105,8 +119,13 @@ static const SlirpCb callbacks = {
     .timer_free = cb_timer_free,
     .timer_mod = cb_timer_mod,
     .notify = cb_notify,
+#if BARE86_SLIRP_SOCKETS
     .register_poll_socket = cb_register,
     .unregister_poll_socket = cb_register,
+#else
+    .register_poll_fd = cb_register,
+    .unregister_poll_fd = cb_register,
+#endif
 };
 
 struct bare86_net *bare86_net_new(bare86_rx_fn rx, void *user)
@@ -118,9 +137,10 @@ struct bare86_net *bare86_net_new(bare86_rx_fn rx, void *user)
     n->user = user;
     SlirpConfig cfg;
     memset(&cfg, 0, sizeof cfg);
-    /* Version 6 : rappels register_poll_socket (sinon libslirp appelle
-     * register_poll_fd, laissé nul). */
-    cfg.version = 6;
+    /* Version 6 : rappels register_poll_socket (sinon libslirp 4.9 appelle
+     * register_poll_fd, laissé nul) ; avant la 4.9, la version 1 suffit aux
+     * champs remplis ici. */
+    cfg.version = BARE86_SLIRP_SOCKETS ? 6 : 1;
     cfg.in_enabled = true;
     inet_pton(AF_INET, "10.0.2.0", &cfg.vnetwork);
     inet_pton(AF_INET, "255.255.255.0", &cfg.vnetmask);
@@ -199,7 +219,11 @@ int bare86_net_poll(struct bare86_net *n, int wake_fd, int max_ms)
     uint32_t timeout = (uint32_t)max_ms;
     n->nfds = 0;
     int wake = add_poll(wake_fd, SLIRP_POLL_IN, n);
+#if BARE86_SLIRP_SOCKETS
     slirp_pollfds_fill_socket(n->slirp, &timeout, add_poll, n);
+#else
+    slirp_pollfds_fill(n->slirp, &timeout, add_poll, n);
+#endif
     int64_t now = now_ns() / 1000000;
     for (struct timer *t = n->timers; t; t = t->next) {
         if (t->expire_ms >= 0) {
