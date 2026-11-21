@@ -36,13 +36,17 @@ def ask(url, model, question, png, timeout):
             ],
         }],
         "temperature": 0,
-        "max_tokens": 300,
+        # Modèles qui raisonnent avant de répondre (Gemma 4) : raisonnement
+        # coupé si le serveur le permet (llama.cpp), et place pour la réponse.
+        "chat_template_kwargs": {"enable_thinking": False},
+        "max_tokens": 1500,
     }
     req = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         reply = json.load(r)
-    return reply["choices"][0]["message"]["content"].strip()
+    msg = reply["choices"][0]["message"]
+    return (msg.get("content") or "").strip() or (msg.get("reasoning_content") or "").strip()
 
 
 def main():
