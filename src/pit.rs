@@ -37,6 +37,9 @@ struct Channel {
     status: Option<u8>,
     /// Comptage arrêté (mode 0 avant chargement, ou porte basse du canal 2).
     armed: bool,
+    /// Mot de commande reçu, compte initial attendu : le prochain compte
+    /// écrit démarre le comptage, quel que soit le mode.
+    fresh: bool,
 }
 
 impl Channel {
@@ -51,6 +54,7 @@ impl Channel {
             read_hi: false,
             status: None,
             armed: true,
+            fresh: false,
         }
     }
 
@@ -114,12 +118,19 @@ pub struct Pit {
     /// Fin de la période du canal 0 que montre son compte : avance à
     /// l'acquittement de l'IRQ 0 par l'invité (voir `ticks`).
     shown_end: Option<Instant>,
+    /// Compte écrit au canal 0 pendant qu'il tourne en mode périodique
+    /// (2, 3), sans mot de commande : comme sur la puce, il n'est pris qu'au
+    /// rechargement suivant, et la phase de l'IRQ 0 est gardée (un
+    /// programme qui retouche le compte à chaque période pour se caler sur
+    /// un événement en dépend). Après un mot de commande, le premier compte
+    /// démarre aussitôt, comme en mode 0.
+    pending0: Option<u32>,
 }
 
 impl Pit {
     pub fn new() -> Self {
         let now = Instant::now();
-        let mut p = Self { ch: [Channel::new(now); 3], port61: 0, next_irq0: None, shown_end: None };
+        let mut p = Self { ch: [Channel::new(now); 3], port61: 0, next_irq0: None, shown_end: None, pending0: None };
         p.ch[2].armed = false;
         p.next_irq0 = Some(now + p.ch[0].period());
         p.shown_end = p.next_irq0;
@@ -150,6 +161,14 @@ impl Pit {
         // reste figé jusque-là, sans quoi la période montrée avancerait plus
         // vite que le compteur de tics et l'heure lue reculerait.
         let stale = masked && self.shown_end.is_some_and(|e| e < due);
+        let periodic = matches!(c.mode, 2 | 3 | 6 | 7);
+        // Rechargement : le compte en attente prend effet à cette échéance.
+        if periodic && let Some(r) = self.pending0.take() {
+            let c = &mut self.ch[0];
+            c.reload = r;
+            c.loaded_at = due;
+        }
+        let c = &self.ch[0];
         self.next_irq0 = match c.mode {
             2 | 3 | 6 | 7 => {
                 let p = c.period().max(Duration::from_micros(10));
@@ -212,7 +231,17 @@ impl Pit {
 
     fn reload(&mut self, i: usize, v: u32, now: Instant) {
         let c = &mut self.ch[i];
-        c.reload = if v == 0 { 0x1_0000 } else { v };
+        let v = if v == 0 { 0x1_0000 } else { v };
+        // Canal 0 en marche périodique : pris au rechargement (`pending0`).
+        if i == 0 && matches!(c.mode, 2 | 3 | 6 | 7) && !c.fresh && c.armed && self.next_irq0.is_some() {
+            self.pending0 = Some(v);
+            return;
+        }
+        c.fresh = false;
+        if i == 0 {
+            self.pending0 = None;
+        }
+        c.reload = v;
         c.loaded_at = now;
         c.armed = i != 2 || self.port61 & 1 != 0;
         if i == 0 {
@@ -265,6 +294,10 @@ impl Pit {
         let c = &mut self.ch[sel];
         c.access = access;
         c.mode = (v >> 1) & 7;
+        c.fresh = true;
+        if sel == 0 {
+            self.pending0 = None;
+        }
         c.write_lo = None;
         c.read_hi = false;
         c.latch = None;
@@ -406,6 +439,35 @@ mod tests {
         assert!(p.take_irq0(next + period * 2, true));
         let c = p.ch[0].count(p.ticks(0, next + period * 2 + Duration::from_millis(3)));
         assert!((0xE400..=0xE414).contains(&c), "{c:04X}");
+    }
+
+    /// Canal 0 en mode 3 qui tourne : un compte écrit sans mot de commande
+    /// n'est pris qu'au rechargement, la phase de l'IRQ 0 est gardée ; après
+    /// un mot de commande, le premier compte démarre aussitôt.
+    #[test]
+    fn periodic_count_rewrite_keeps_phase() {
+        let mut p = Pit::new();
+        let t0 = Instant::now();
+        p.write_control(0x36, t0);
+        p.write_counter(0, 0x00, t0);
+        p.write_counter(0, 0x50, t0); // 5000h ≈ 17,2 ms
+        let due = p.next_irq0().unwrap();
+        assert_eq!(due, t0 + p.irq0_period());
+        // Nouveau compte au milieu de la période : échéance inchangée.
+        let mid = t0 + Duration::from_millis(8);
+        p.write_counter(0, 0x00, mid);
+        p.write_counter(0, 0x40, mid); // 4000h ≈ 13,7 ms
+        assert_eq!(p.next_irq0(), Some(due));
+        // À l'échéance, la nouvelle période part de là.
+        assert!(p.take_irq0(due, false));
+        assert_eq!(p.irq0_period(), Duration::from_nanos(0x4000 * 1_000_000_000 / PIT_HZ));
+        assert_eq!(p.next_irq0(), Some(due + p.irq0_period()));
+        // Mot de commande puis compte : redémarrage immédiat.
+        let t1 = due + Duration::from_millis(2);
+        p.write_control(0x36, t1);
+        p.write_counter(0, 0x00, t1);
+        p.write_counter(0, 0x20, t1);
+        assert_eq!(p.next_irq0(), Some(t1 + p.irq0_period()));
     }
 
     #[test]
