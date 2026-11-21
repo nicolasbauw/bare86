@@ -56,11 +56,20 @@ pub struct Vbe {
 /// Géométrie verticale lue dans le CRTC (`Vga::vertical`) ; à défaut (CRTC
 /// pas encore programmé, valeurs incohérentes), celle des modes à 400
 /// lignes, 70 Hz : 449 lignes dont 400 affichées, synchronisation verticale
-/// (bit 3) sur les lignes 412 et 413.
+/// (bit 3) à partir de la ligne 412 (deux lignes sur la puce, élargies ici :
+/// `VSYNC_MIN_LINES`).
 const LINES: u128 = 449;
 const VISIBLE_LINES: u128 = 400;
-const VSYNC_LINES: std::ops::Range<u128> = 412..414;
+const VSYNC_LINES: std::ops::Range<u128> = 412..412 + VSYNC_MIN_LINES as u128;
 const LINE_NS: u128 = 31_778;
+/// Lignes au moins pendant lesquelles le bit 3 (synchronisation verticale)
+/// reste levé. La puce suit le CRTC (deux lignes en mode 13h et en mode
+/// 480 lignes, ≈ 64 µs), mais une lecture de port coûte ici ≈ 10 µs (sortie
+/// de VM, contre ≈ 1 µs sur le bus ISA) : un gestionnaire qui voit le début
+/// de l'impulsion et rend la main laissait la boucle principale la manquer
+/// (Religion, scène 165–190 s : une image sur dix). Dix lignes (≈ 320 µs)
+/// restent dans le blanc vertical de tous les modes (45 à 49 lignes).
+const VSYNC_MIN_LINES: u16 = 10;
 const HBLANK_NS: u128 = 6_356;
 
 /// Mémoire vidéo dans un memfd, avec une vue complète pour le modèle et une
@@ -561,6 +570,7 @@ impl Vga {
         if end <= sync {
             end += 16;
         }
+        let end = end.max(sync + VSYNC_MIN_LINES);
         if !(200..=1024).contains(&total) || !(100..total).contains(&visible) || !(visible..total).contains(&sync) {
             return (LINES, VISIBLE_LINES, VSYNC_LINES);
         }
@@ -915,17 +925,18 @@ mod tests {
     fn vertical_timing_follows_crtc() {
         let mut v = Vga::new().unwrap();
         // CRTC pas encore programmé : 70 Hz par défaut.
-        assert_eq!(v.vertical(), (449, 400, 412..414));
+        assert_eq!(v.vertical(), (449, 400, 412..422));
         // Mode 13h : 400 lignes, 70 Hz.
         v.set_mode(0x13, true);
-        assert_eq!(v.vertical(), (449, 400, 412..414));
-        // Mode 12h : 480 lignes affichées sur 525, 59,94 Hz.
+        assert_eq!(v.vertical(), (449, 400, 412..422));
+        // Mode 12h : 480 lignes affichées sur 525, 59,94 Hz. Impulsion de
+        // deux lignes sur la puce, élargie à `VSYNC_MIN_LINES`.
         v.set_mode(0x12, true);
-        assert_eq!(v.vertical(), (525, 480, 490..492));
+        assert_eq!(v.vertical(), (525, 480, 490..500));
         // Incohérent (fin d'affichage au-delà du total) : retour au défaut.
         set(&mut v, 0x3D4, 0x12, 0xFF);
         set(&mut v, 0x3D4, 0x07, 0xFF);
-        assert_eq!(v.vertical(), (449, 400, 412..414));
+        assert_eq!(v.vertical(), (449, 400, 412..422));
     }
 
     #[test]
