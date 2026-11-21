@@ -139,8 +139,13 @@ difference is under the hood, and shows with demanding late-90s games.
   mTCP under FreeDOS downloads at about 9.5 MB/s.
 - **Window.** SDL3 window, full screen, mouse capture, an in-window menu to
   change floppies and CDs, speed and display settings.
-- **Speed control.** Throttle to a given number of millions of instructions per
-  second for games that run too fast, and change it while playing.
+- **Speed control.** By default programs run at the full speed of the host
+  processor, which is what late-90s games like Doom or Quake benefit from.
+  Many programs of the period, demos especially, were written for a much
+  slower processor and misbehave at full speed (timers that run too fast,
+  effects skipped, early exits): throttle them to a given number of millions
+  of instructions per second (`--mips`, or `mips = N` in their profile; 200 is
+  a good start for demos), and change it while playing.
 - **Scripting.** Scripted keyboard, screenshots, sound recording and a text
   screen dump make windowless test runs possible.
 
@@ -235,7 +240,7 @@ sound need the window (or `--shot` and `--wav`).
 |---|---|
 | `--mem MB` | Total memory in MB (default 64, as a late-1990s PC; demos of 1997–1999 need 32 or more) |
 | `--ems MB` | EMS memory in MB, in addition (default 4, 0 to 32) |
-| `--mips N` | Throttle to N million instructions per second (default: full speed); needs `kernel.perf_event_paranoid` at 1 or less, see [Requirements](#requirements) |
+| `--mips N` | Throttle to N million instructions per second (default: full speed; many period programs, demos especially, need a limit, 200 being a good start); needs `kernel.perf_event_paranoid` at 1 or less, see [Requirements](#requirements) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
 | `--set NAME=VALUE` | Environment variable for the built-in DOS (repeatable; in a profile, one `set = NAME=VALUE` line each), e.g. `DPMILDR=16` for Heretic II under HX |
 | `--sb 16\|pro2\|pro1\|ess` | Sound card: Sound Blaster 16 (default), Sound Blaster Pro 2 (`pro` too: DSP 3.02, OPL3), Pro 1 (two OPL2 chips), or ESS AudioDrive ES1688 (Sound Blaster Pro compatible, ESS identification, ESFM FM: the aggressive, saturated FM sound of many cheap mid-90s PCs); the Creative Pro models filter their output like the real cards |
