@@ -44,8 +44,9 @@ difference is under the hood, and shows with demanding late-90s games.
 - **Dynamic translator.** Games that draw in planar VGA switch planes
   column by column, one VM exit each (about 64 % of Doom's time), or go
   through the interpreter for their video memory accesses. When the
-  statistics show such a loss, the flat 32-bit protected-mode code of the
-  game (DOS/4GW without paging) runs translated on the host around its
+  statistics show such a loss, the 32-bit protected-mode code of the game
+  (flat, as under DOS/4GW, or with segments sharing a base, as under Tran's
+  PMODE; no paging) runs translated on the host around its
   video work, writing straight into the video planes, and goes back to
   native execution as soon as it stops touching the card. Doom's `timedemo
   demo1` goes from about 105 to about 1,150 frames per second; Rise of the
@@ -277,7 +278,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--debug` | Debugger: registers, memory, single step |
 | `--trace-int` | Log the interrupts serviced by the host |
 | `--trace-io` | Report I/O ports with no device |
-| `--no-jit` | No dynamic translator (by default it takes over, when the statistics show a gain, the flat 32-bit code of games that lose time on planar VGA, such as Doom); `jit = off` in a profile |
+| `--no-jit` | No dynamic translator (by default it takes over, when the statistics show a gain, the 32-bit protected-mode code of games that lose time on planar VGA, such as Doom); `jit = off` in a profile |
 | `--no-realtime` | Keep the emulated CPU at normal priority. By default Bare86 asks for real-time priority and silently goes without it if not allowed, see [Timing precision (optional)](#timing-precision-optional); `realtime = off` in a profile |
 | `--jit` | Dynamic translator always engaged, whatever the statistics (measurements) |
 | `--no-interp` | No interpreter bursts: one VM exit per emulated video memory access (to measure what the interpreter brings) |
@@ -523,7 +524,7 @@ software in `src/`:
 |---|---|
 | `kvm.rs`, `backend.rs`, `mem.rs`, `machine.rs` | Virtual machine, guest memory, main loop and VM exits |
 | `interp/` | Host x86 interpreter (iced-x86) that runs bursts of emulated video memory and port accesses without leaving the host |
-| `jit/` | Dynamic translator: flat 32-bit guest blocks re-encoded for x86-64, run on the host; `policy.rs` decides when it takes over |
+| `jit/` | Dynamic translator: 32-bit guest blocks (flat or common-base segments) re-encoded for x86-64, run on the host; `policy.rs` decides when it takes over |
 | `bios.rs`, `asm/bios.S`, `hle.rs` | BIOS ROM (GNU `as`, Intel syntax) and the common helpers of the services run by the host (BIOS, DOS) |
 | `dos/` | Built-in DOS: files, processes, long names, MSCDEX, shell, Win32 loading through HX |
 | `vga.rs`, `render.rs`, `sdl.rs`, `menu.rs`, `launcher.rs` | Video card, picture, window, in-game menu and launcher |
@@ -870,9 +871,10 @@ among what does not, yet:
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine
   characters) are not shown yet in text mode.
-- The dynamic translator is new: it only serves flat 32-bit code without
-  paging, and has been tried on Doom and Rise of the Triad. If a game
-  misbehaves where it did not before, try `--no-jit` (`jit = off`).
+- The dynamic translator is new: it only serves 32-bit code without
+  paging whose CS, DS and SS share a base (ES may have its own), and has
+  been tried on Doom, Rise of the Triad and demos using Tran's PMODE. If a
+  program misbehaves where it did not before, try `--no-jit` (`jit = off`).
 - OpenGL is version 1.1 with a few extensions (multitexture ARB and SGIS,
   point parameters, compiled vertex arrays); paletted textures, hardware
   gamma, `wglUseFontBitmaps` and `wglUseFontOutlines` are missing.

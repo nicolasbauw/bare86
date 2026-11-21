@@ -32,10 +32,23 @@ impl Mmio for NoMmio {
 }
 
 fn flat(selector: u16, typ: u8) -> Seg {
-    Seg { selector, base: 0, limit: 0xFFFF_FFFF, typ, s: true, dpl: 0, present: true, db: true, g: true, unusable: false }
+    based(selector, typ, 0)
+}
+
+/// Segment de limite 4 Go et de base `base` (PMODE de Tran : base commune
+/// non nulle).
+fn based(selector: u16, typ: u8, base: u32) -> Seg {
+    Seg { selector, base: base.into(), limit: 0xFFFF_FFFF, typ, s: true, dpl: 0, present: true, db: true, g: true, unusable: false }
 }
 
 fn random_cpu(rng: &mut Rng) -> Cpu {
+    random_cpu_based(rng, 0, 0)
+}
+
+/// État aléatoire, CS, SS et DS de base commune `base`, ES de base
+/// `es_base` ; les adresses des registres restent celles de la RAM vue en
+/// linéaire (décalage = linéaire − base).
+fn random_cpu_based(rng: &mut Rng, base: u32, es_base: u32) -> Cpu {
     let mut gpr = [0u32; 8];
     for g in &mut gpr {
         // Une moitié d'adresses de la RAM (accès mémoire), une moitié de
@@ -51,12 +64,17 @@ fn random_cpu(rng: &mut Rng) -> Cpu {
     if rng.chance(50) {
         gpr[5] = gpr[4] + 4 * rng.below(16) as u32;
     }
-    let data = flat(0x10, 3);
+    for (i, g) in gpr.iter_mut().enumerate() {
+        if i == 4 || i == 5 || rng.chance(50) {
+            *g = g.wrapping_sub(base);
+        }
+    }
+    let data = based(0x10, 3, base);
     Cpu {
         gpr,
-        ip: CODE_AT,
+        ip: CODE_AT.wrapping_sub(base),
         flags: (rng.next() as u32 & 0x8D5) | 2 | 0x200,
-        seg: [data, flat(0x08, 0xB), data, data, Seg::real(0), Seg::real(0)],
+        seg: [based(0x18, 3, es_base), based(0x08, 0xB, base), data, data, Seg::real(0), Seg::real(0)],
         stack32: true,
         idt_base: 0,
         cr0: 0x11,
@@ -120,6 +138,7 @@ fn jit_matches_interpreter() {
     let mut failures = Vec::new();
     let mut translated_total = 0;
     let mut skipped = 0;
+    let mut straddled = 0;
     'cases: for case in 0..cases {
         let fill = rng.next();
         fill_memory(&mem_jit, fill);
@@ -127,6 +146,11 @@ fn jit_matches_interpreter() {
         // Séquence : instructions natives, quelques sauts conditionnels
         // courts vers l'avant, puis `hlt` (rendu au processeur).
         let code_at = if case % 2 == 0 { CODE_AT } else { HIGH_CODE_AT };
+        // Base commune des segments : nulle, positive, ou « négative »
+        // (bouclage à 4 Go, comme les accès de PMODE à la mémoire basse).
+        let base = [0u32, 0x3000, 0u32.wrapping_sub(0x2000)][(case / 2 % 3) as usize];
+        // ES : même base, ou la sienne (sélecteur de l'écran de PMODE).
+        let es_base = [base, base, 0x5000][(case / 6 % 3) as usize];
         let n = 1 + rng.below(12) as usize;
         let mut code = Vec::new();
         for _ in 0..n {
@@ -134,7 +158,8 @@ fn jit_matches_interpreter() {
             if rng.chance(10) {
                 code.extend([0x70 + rng.below(16) as u8, 0x00]); // jcc +0
             }
-            let here = code_at + code.len() as u32;
+            // Décalage (cibles de saut, adresses de retour).
+            let here = (code_at + code.len() as u32).wrapping_sub(base);
             match rng.below(40) {
                 // call +0 ; add esp,4
                 0 => code.extend([0xE8, 0, 0, 0, 0, 0x83, 0xC4, 0x04]),
@@ -169,7 +194,7 @@ fn jit_matches_interpreter() {
                             0 => 0x9_FF00 + rng.below(0x200) as u32, // bord de la fenêtre VGA
                             1 => {
                                 on_code = true;
-                                here + rng.below(64) as u32 // code qui suit
+                                here.wrapping_add(base) + rng.below(64) as u32 // code qui suit
                             }
                             2 => rng.below(0x100) as u32,           // près de 0 (DF = 1 : sous la vue)
                             3 => MEM_SIZE as u32 - rng.below(0x100) as u32, // fin de la RAM
@@ -177,9 +202,9 @@ fn jit_matches_interpreter() {
                         }
                     };
                     code.push(0xBE);
-                    code.extend(addr(&mut rng).to_le_bytes());
+                    code.extend(addr(&mut rng).wrapping_sub(base).to_le_bytes());
                     code.push(0xBF);
-                    code.extend(addr(&mut rng).to_le_bytes());
+                    code.extend(addr(&mut rng).wrapping_sub(es_base).to_le_bytes());
                     code.push(0xB9);
                     code.extend((rng.below(80) as u32).to_le_bytes());
                     if rng.chance(25) && !on_code {
@@ -211,21 +236,21 @@ fn jit_matches_interpreter() {
         mem_ref.write(code_at as usize, &code);
         jit.forget_sites();
 
-        let mut start = random_cpu(&mut rng);
-        start.ip = code_at;
+        let mut start = random_cpu_based(&mut rng, base, es_base);
+        start.ip = code_at.wrapping_sub(base);
         // Référence : l'interpréteur, pas à pas, avec les drapeaux non
         // définis encore visibles à la fin.
         let mut reference = start.clone();
         let mut undefined = 0u32;
         let mut steps = 0;
         loop {
-            let at = reference.ip as usize;
+            let at = reference.ip.wrapping_add(base) as usize;
             if at + 15 > MEM_SIZE {
                 break;
             }
             let mut bytes = [0u8; 15];
             mem_ref.read(at, &mut bytes);
-            let ins: Instruction = Decoder::with_ip(32, &bytes, at as u64, DecoderOptions::NONE).decode();
+            let ins: Instruction = Decoder::with_ip(32, &bytes, u64::from(reference.ip), DecoderOptions::NONE).decode();
             if ins.mnemonic() == Mn::Hlt {
                 break;
             }
@@ -242,6 +267,13 @@ fn jit_matches_interpreter() {
             let before = reference.clone();
             let b = run_burst(&mut reference, &mem_ref, &mut NoMmio, u64::MAX, 1);
             if b.reason == StopReason::Unsupported {
+                // Accès à cheval sur la limite de 4 Go d'un segment de base
+                // non nulle : faute pour le processeur, accès bouclé pour le
+                // traducteur (inexactitude admise, voir `Jit::lin`).
+                if (base != 0 || es_base != 0) && straddles_4g(&ins, &before) {
+                    straddled += 1;
+                    continue 'cases;
+                }
                 break;
             }
             undefined = (undefined & !flags_written(&ins)) | undefined_flags(&ins, &before);
@@ -256,7 +288,8 @@ fn jit_matches_interpreter() {
         // Arrêt avant `hlt` (instruction refusée) : les drapeaux que la suite
         // écrit avant de les lire sont morts, le contrôle d'adresse du
         // traducteur a pu les écraser.
-        let dead = if reference.ip as usize != code_at as usize + code.len() - 1 { dead_flags(&mem_ref, reference.ip) } else { 0 };
+        let end = (code_at + code.len() as u32 - 1).wrapping_sub(base);
+        let dead = if reference.ip != end { dead_flags(&mem_ref, reference.ip.wrapping_add(base)) } else { 0 };
         let mask = !(undefined | dead | 0x20 | 0x8);
         let mut diffs = Vec::new();
         if ours.gpr != reference.gpr {
@@ -278,15 +311,15 @@ fn jit_matches_interpreter() {
             diffs.push(format!("memory at {i:06X}: ours {:02X} ref {:02X}", a[i], b[i]));
         }
         if !diffs.is_empty() && std::env::var_os("JIT_TRACE").is_some() {
-            trace(&code, &start, fill, code_at);
+            trace(&code, &start, fill, code_at, base);
         }
         if !diffs.is_empty() {
-            let listing: Vec<String> = Decoder::with_ip(32, &code, u64::from(code_at), DecoderOptions::NONE)
+            let listing: Vec<String> = Decoder::with_ip(32, &code, u64::from(code_at.wrapping_sub(base)), DecoderOptions::NONE)
                 .into_iter()
                 .map(|i| format!("  {:08X} {i}", i.ip()))
                 .collect();
             failures.push(format!(
-                "case {case}: bytes {}\n{}\nstart {:08X?} flags {:08X}\n{}",
+                "case {case} (base {base:08X}, ES {es_base:08X}): bytes {}\n{}\nstart {:08X?} flags {:08X}\n{}",
                 code.iter().map(|b| format!("{b:02X}")).collect::<String>(),
                 listing.join("\n"),
                 start.gpr,
@@ -298,11 +331,36 @@ fn jit_matches_interpreter() {
             }
         }
     }
-    println!("{cases} cases ({skipped} skipped: undefined flag read), {translated_total} instructions run by translated code, stats {:?}", jit.stats);
+    println!("{cases} cases ({skipped} skipped: undefined flag read; {straddled}: 4 GB limit straddled), {translated_total} instructions run by translated code, stats {:?}", jit.stats);
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n\n"));
     assert_eq!(jit.stats.assembly_errors, 0, "blocks refused by the assembler");
 }
 
+
+/// L'instruction accède-t-elle à cheval sur la limite de 4 Go de son
+/// segment (décalage + taille − 1 au-delà de FFFFFFFFh), pile comprise ?
+fn straddles_4g(ins: &Instruction, cpu: &Cpu) -> bool {
+    let size = ins.memory_size().size().max(1) as u64;
+    let value = |r: Register, _: usize, _: usize| -> Option<u64> {
+        if r.is_segment_register() {
+            Some(0)
+        } else if r.is_gpr32() {
+            Some(u64::from(cpu.gpr[r.number()]))
+        } else if r.is_gpr16() {
+            Some(u64::from(cpu.gpr[r.number()] & 0xFFFF))
+        } else {
+            None
+        }
+    };
+    let memory = (0..ins.op_count()).any(|i| {
+        matches!(ins.op_kind(i), OpKind::Memory | OpKind::MemorySegESI | OpKind::MemoryESEDI | OpKind::MemorySegEDI)
+            && ins.virtual_address(i, 0, value).is_some_and(|va| (va & 0xFFFF_FFFF) + size - 1 > 0xFFFF_FFFF)
+    });
+    let stack = ins.is_stack_instruction() && !(64..=u32::MAX - 64).contains(&cpu.gpr[4]);
+    // `leave` : la pile repart de EBP.
+    let leave = ins.mnemonic() == Mn::Leave && cpu.gpr[5] > u32::MAX - 3;
+    memory || stack || leave
+}
 
 /// Drapeaux écrits avant d'être lus par le code qui suit `eip` (jusqu'à `hlt`).
 fn dead_flags(mem: &GuestMem, eip: u32) -> u32 {
@@ -324,7 +382,7 @@ fn dead_flags(mem: &GuestMem, eip: u32) -> u32 {
 
 /// Rejoue `code` pas à pas (blocs d'une instruction) contre l'interpréteur
 /// et affiche le premier pas qui diverge.
-fn trace(code: &[u8], start: &Cpu, fill: u64, code_at: u32) {
+fn trace(code: &[u8], start: &Cpu, fill: u64, code_at: u32, base: u32) {
     let mem_jit = GuestMem::new(MEM_SIZE).unwrap();
     let mem_ref = GuestMem::new(MEM_SIZE).unwrap();
     for m in [&mem_jit, &mem_ref] {
@@ -336,10 +394,11 @@ fn trace(code: &[u8], start: &Cpu, fill: u64, code_at: u32) {
     let (mut o, mut r) = (start.clone(), start.clone());
     for step in 0..200 {
         let mut b = [0u8; 15];
-        if r.ip as usize + 15 > MEM_SIZE {
+        let at = r.ip.wrapping_add(base) as usize;
+        if at + 15 > MEM_SIZE {
             return;
         }
-        mem_ref.read(r.ip as usize, &mut b);
+        mem_ref.read(at, &mut b);
         let ins = Decoder::with_ip(32, &b, u64::from(r.ip), DecoderOptions::NONE).decode();
         if ins.mnemonic() == Mn::Hlt {
             println!("trace: no divergence before hlt");

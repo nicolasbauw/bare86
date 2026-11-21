@@ -120,9 +120,9 @@ usage: bare86 [options] [program [arguments…]]
   --fullscreen   window, full screen from the start
   --stats        machine counters at the end (exits, emulated VRAM…)
   --vbe1         VESA 1.2 card: banked windows only, no linear framebuffer
-  --no-jit       no dynamic translator (by default it takes over the flat
-                 32-bit code of games that lose time on planar VGA, such
-                 as Doom, when the statistics show a gain)
+  --no-jit       no dynamic translator (by default it takes over the 32-bit
+                 protected-mode code of programs that lose time on VGA,
+                 such as Doom, when the statistics show a gain)
   --jit          dynamic translator always on (measurements)
   --no-realtime  keep the emulated CPU at normal priority. By default Bare86
                  asks for real-time priority and silently goes without it if

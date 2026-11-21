@@ -59,9 +59,13 @@ enough: the interpreter is about 30 ns per instruction, and the game's
 rendering loops are millions of instructions per second. The **dynamic
 translator** (`src/jit/`) takes over such code:
 
-- **What it translates.** Flat 32-bit protected-mode code (segments based
-  at 0 with a 4 GB limit, no paging): the model of DOS/4GW, DOS/32A and
-  PMODE/W games. Each basic block of the guest is decoded and re-encoded
+- **What it translates.** 32-bit protected-mode code without paging whose
+  segments have a 4 GB limit: flat (based at 0), the model of DOS/4GW,
+  DOS/32A and PMODE/W games, or with CS, DS and SS sharing a non-zero base,
+  the model of Tran's PMODE (Drift, Religion, Verses), where a linear
+  address is the offset plus that base, wrapping at 4 GB. ES may have its
+  own base (PMODE's selector for the screen at A0000h): it is read at run
+  time, segment loads being left to the interpreter. Each basic block of the guest is decoded and re-encoded
   for x86-64 almost unchanged, then run in the host process: guest
   registers live in host registers, flags are computed by the host
   processor itself, and a memory operand becomes the same instruction on

@@ -1,14 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Traducteur dynamique x86 32 bits → x86-64 (branche `dyntrans`).
 //!
-//! Pour le code 32 bits du mode protégé « plat » (segments de base 0 et de
-//! limite 4 Go, sans pagination : Doom sous DOS/4GW), les blocs de base de
-//! l'invité sont réencodés presque à l'identique pour l'hôte et exécutés
-//! côté hôte, sans sortie de VM (docs/JOURNAL.md, point 7) :
+//! Pour le code 32 bits du mode protégé « plat » (segments de limite 4 Go,
+//! sans pagination : Doom sous DOS/4GW), les blocs de base de l'invité sont
+//! réencodés presque à l'identique pour l'hôte et exécutés côté hôte, sans
+//! sortie de VM (docs/JOURNAL.md, point 7). Les segments peuvent avoir une
+//! base commune non nulle (PMODE de Tran : Drift, Religion, Verses) :
+//! adresse linéaire = décalage + base, modulo 4 Go ; ES peut avoir sa
+//! propre base (sélecteur de l'écran à A0000h), lue dans `State` à
+//! l'exécution (`es_base`, constante pendant un bloc : les chargements de
+//! segment reviennent à l'interpréteur). Les tables (blocs,
+//! répartition, sites) sont indexées par EIP, un décalage ; la mémoire est
+//! lue et surveillée aux adresses linéaires (`Jit::lin`), et l'adresse de
+//! chaque accès (R13D) est linéaire dans le code émis.
+//!
 //!
 //! - registres de l'invité dans ceux de l'hôte : EAX…EDI tels quels, sauf
 //!   ESP → R12D ; R15 = base de la mémoire de l'invité, R10 = `State` ;
-//! - opérande mémoire : `lea r13d,[…]` (arithmétique 32 bits de l'invité),
+//! - opérande mémoire : `lea r13d,[…+base]` (arithmétique 32 bits de l'invité),
 //!   contrôles (fin de la mémoire, zone A0000–FFFFF, pages de code
 //!   traduites), puis l'instruction d'origine sur `[r15+r13]` ;
 //! - drapeaux calculés par le processeur hôte (même instruction), sauvés
@@ -92,7 +101,8 @@ pub struct State {
     view: u64,
     /// Cible calculée d'un `ret` ou d'un saut indirect, pour la sortie.
     target: u32,
-    _pad3: u32,
+    /// Base d'ES (accès par ES, destination de `movs`).
+    es_base: u32,
     /// Vues des plans écrit et lu (`fastmem::VgaViews`, vue vide si aucun
     /// plan direct), et les vues elles-mêmes (pour `out_trampoline`).
     vview_w: u64,
@@ -105,6 +115,8 @@ pub struct State {
     /// traducteur.
     mask_fast: u64,
     mask_box: u64,
+    /// Opposé de `es_base` sur 32 bits : EDI linéaire → décalage (`lea`).
+    es_neg: u64,
 }
 
 /// `out 3C5h,al` (masque de plans, index 2) servi par le code traduit :
@@ -184,10 +196,12 @@ const OFF_RTAB: i32 = 176;
 const OFF_WTAB: i32 = 184;
 const OFF_VIEW: i32 = 192;
 const OFF_TARGET: i32 = 200;
+const OFF_ES_BASE: i32 = 204;
 const OFF_VVIEW_W: i32 = 208;
 const OFF_VVIEW_R: i32 = 216;
 const OFF_NEG_VIEW: i32 = 232;
 const OFF_MASK_FAST: i32 = 240;
+const OFF_ES_NEG: i32 = 256;
 /// Entrées de la table de répartition (index : 16 bits bas de l'EIP).
 const DISPATCH: usize = 1 << 16;
 /// Blocs enchaînés au plus par appel (la boucle Rust contrôle ensuite
@@ -366,19 +380,31 @@ pub struct Jit {
     pub count_fallbacks: bool,
     /// Instructions au plus par bloc (1 : pas à pas, tests).
     pub max_block: usize,
+    /// Base commune des segments du code traduit (0 : plat). Le cache entier
+    /// est oublié quand elle change.
+    base: u32,
 }
 
 /// Mode du processeur que le traducteur sait servir.
 pub fn eligible(cpu: &Cpu) -> bool {
-    let flat = |i: usize| {
-        let s = &cpu.seg[i];
-        s.base == 0 && s.limit == 0xFFFF_FFFF && !s.unusable
-    };
-    cpu.cr0 & 0x8000_0001 == 1 // protégé, sans pagination
+    common_base(cpu).is_some()
+}
+
+/// Base commune de CS, SS et DS, s'ils sont de limite 4 Go, comme ES (de
+/// base quelconque), et que le mode du processeur convient (protégé 32
+/// bits, sans pagination, ni V86 ni pas à pas) ; FS et GS ne sont pas
+/// traduits.
+fn common_base(cpu: &Cpu) -> Option<u32> {
+    let base = cpu.seg[1].base;
+    let four_gb = |i: usize| cpu.seg[i].limit == 0xFFFF_FFFF && !cpu.seg[i].unusable;
+    let ok = cpu.cr0 & 0x8000_0001 == 1 // protégé, sans pagination
         && cpu.flags & 0x0002_0100 == 0 // ni V86 ni pas à pas
         && cpu.code32()
         && cpu.stack32
-        && (0..4).all(flat)
+        && (0..4).all(four_gb)
+        && cpu.seg[2].base == base
+        && cpu.seg[3].base == base;
+    ok.then_some(base)
 }
 
 impl Jit {
@@ -409,7 +435,26 @@ impl Jit {
             stats: JitStats::default(),
             count_fallbacks: false,
             max_block: MAX_BLOCK,
+            base: 0,
         })
+    }
+
+    /// Adresse linéaire d'un décalage de l'invité.
+    fn lin(&self, off: u32) -> u32 {
+        off.wrapping_add(self.base)
+    }
+
+    /// Nouvelle base de segments : les blocs, et tout ce qui est appris par
+    /// EIP (sites, immédiats volatils), visaient d'autre code.
+    fn set_base(&mut self, base: u32) {
+        if base != self.base {
+            self.flush();
+            self.volatile.clear();
+            self.checked.clear();
+            self.vga_sites.clear();
+            self.inline_faults.clear();
+            self.base = base;
+        }
     }
 
     /// Vide le cache (code automodifiant, tampon plein).
@@ -449,12 +494,13 @@ impl Jit {
     fn changed_on(&self, mem: &GuestMem, pages: &[u32]) -> bool {
         self.blocks.iter().any(|(&eip, b)| {
             let Some(b) = b else { return false };
-            let (lo, hi) = (eip >> 12, (eip + b.bytes.len() as u32 - 1) >> 12);
+            let at = self.lin(eip);
+            let (lo, hi) = (at >> 12, (at + b.bytes.len() as u32 - 1) >> 12);
             if !pages.iter().any(|&p| p >= lo && p <= hi) {
                 return false;
             }
             // SAFETY: le bloc a été lu à cette adresse, dans les bornes.
-            let now = unsafe { std::slice::from_raw_parts(mem.ptr.add(eip as usize), b.bytes.len()) };
+            let now = unsafe { std::slice::from_raw_parts(mem.ptr.add(at as usize), b.bytes.len()) };
             !now.iter().zip(&b.mask).map(|(x, m)| x & m).eq(b.bytes.iter().copied())
         })
     }
@@ -525,13 +571,16 @@ impl Jit {
             if mmio.stop() || crate::timer::kick_pending() {
                 return (done, StopReason::Stopped);
             }
-            if !eligible(cpu) {
+            let Some(base) = common_base(cpu) else {
                 return (done, StopReason::Unsupported);
-            }
+            };
+            self.set_base(base);
             let mut interp_next = true;
             if let Some(entry) = self.block(cpu.ip, mem) {
                 st.gpr = cpu.gpr;
                 st.flags = cpu.flags;
+                st.es_base = cpu.seg[0].base;
+                st.es_neg = u64::from(cpu.seg[0].base.wrapping_neg());
                 st.code_bits = self.code_bits.as_ptr() as u64;
                 st.code_pages = self.code_pages.as_ptr() as u64;
                 st.rtab = self.rtab.as_ptr() as u64;
@@ -607,7 +656,7 @@ impl Jit {
                                 eprintln!("[jit] {what} -> {:08X} ({:08X?})", st.addr, cpu.gpr);
                                 c.ip = st.addr.saturating_sub(24);
                                 let mut bytes = vec![0u8; 64];
-                                mem.read(c.ip as usize, &mut bytes);
+                                mem.read(c.ip as usize, &mut bytes); // adresses linéaires
                                 for i in Decoder::with_ip(32, &bytes, u64::from(c.ip), DecoderOptions::NONE).into_iter().take(14) {
                                     eprintln!("[jit]     {:08X} {i}", i.ip());
                                 }
@@ -684,14 +733,15 @@ impl Jit {
                 Some(b) => {
                     // SAFETY: le bloc a été lu dans la mémoire de l'invité à
                     // cette adresse (dans ses bornes) ; le vCPU est arrêté.
-                    let now = unsafe { std::slice::from_raw_parts(mem.ptr.add(eip as usize), b.bytes.len()) };
+                    let now = unsafe { std::slice::from_raw_parts(mem.ptr.add(self.base.wrapping_add(eip) as usize), b.bytes.len()) };
                     if now.iter().zip(&b.mask).map(|(x, m)| x & m).eq(b.bytes.iter().copied()) {
                         b.verified = self.epoch;
                         return Some(b.entry);
                     }
                     // Code modifié hors du traducteur.
                     self.stats.stale_flushes += 1;
-                    let changed: Vec<u32> = (0..now.len()).filter(|&i| now[i] & b.mask[i] != b.bytes[i]).map(|i| eip + i as u32).collect();
+                    let at = self.base.wrapping_add(eip);
+                    let changed: Vec<u32> = (0..now.len()).filter(|&i| now[i] & b.mask[i] != b.bytes[i]).map(|i| at + i as u32).collect();
                     if self.count_fallbacks && self.stats.stale_flushes <= 5 {
                         eprintln!("[jit] stale block {eip:08X}: bytes changed at {changed:08X?}");
                     }
@@ -710,7 +760,7 @@ impl Jit {
             let at = unsafe { self.code.ptr.add(self.code.used) };
             let fast = self.view.is_some().then_some(&self.checked);
             let vga = self.vga_views.is_some().then_some(&self.vga_sites);
-            match emit_block(eip, mem, self.mem_size, at as u64, &self.volatile, self.max_block, self.bmi2, fast, vga) {
+            match emit_block(eip, self.base, mem, self.mem_size, at as u64, &self.volatile, self.max_block, self.bmi2, fast, vga) {
                 Ok(Some((code, len, holes, body, sites))) if self.code.used + code.len() <= CODE_SIZE => {
                     emitted = Some((at, code, len, holes, body, sites));
                     break;
@@ -732,7 +782,7 @@ impl Jit {
         let entry = match emitted {
             None => {
                 if self.count_fallbacks && self.volatile.contains(&eip) {
-                    let all = decode_block(eip, mem, self.mem_size, 1);
+                    let all = decode_block(eip, self.base, mem, self.mem_size, 1);
                     let (ins, imm) = all[0];
                     eprintln!("[jit] volatile {eip:08X} {ins} {:?} imm {imm:?} native_ok {} form {:?}", ins.code(), native_ok(&ins), imm.and_then(|(o, _)| volatile_form(&ins, o)).is_some());
                 }
@@ -745,8 +795,9 @@ impl Jit {
                 // SAFETY: place vérifiée ; le tampon est RWX.
                 unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), at, code.len()) };
                 self.code.used += code.len().next_multiple_of(16);
+                let at_lin = self.lin(eip) as usize;
                 let mut bytes = vec![0u8; len];
-                mem.read(eip as usize, &mut bytes);
+                mem.read(at_lin, &mut bytes);
                 let mut mask = vec![0xFFu8; len];
                 for &(off, n) in &holes {
                     mask[off..off + n].fill(0);
@@ -754,7 +805,7 @@ impl Jit {
                 for (i, b) in bytes.iter_mut().enumerate() {
                     *b &= mask[i];
                     if mask[i] != 0 {
-                        let a = eip as usize + i;
+                        let a = at_lin + i;
                         self.code_bits[a / 64] |= 1 << (a % 64);
                         // La page précédente aussi : une écriture qui commence
                         // juste avant déborde peut-être sur ce code.
@@ -780,7 +831,7 @@ impl Jit {
                 if let Some(dir) = std::env::var_os("BARE86_PERFMAP").filter(|d| std::path::Path::new(d).is_dir()) {
                     let mut text = String::new();
                     let mut g = vec![0u8; len];
-                    mem.read(eip as usize, &mut g);
+                    mem.read(at_lin, &mut g);
                     for i in Decoder::with_ip(32, &g, u64::from(eip), DecoderOptions::NONE) {
                         text += &format!("{:08X} {i}\n", i.ip());
                     }
@@ -804,26 +855,28 @@ impl Jit {
     /// dans l'immédiat d'une instruction, celle-ci devient volatile.
     fn patched(&mut self, cpu: &Cpu, mem: &GuestMem, addr: u32) {
         let mut b = [0u8; 15];
-        mem.read(cpu.ip as usize, &mut b);
+        mem.read(self.lin(cpu.ip) as usize, &mut b);
         let store = Decoder::with_ip(32, &b, u64::from(cpu.ip), DecoderOptions::NONE).decode();
         let size = store.memory_size().size().max(1) as u32;
         self.mark_volatile(mem, addr, size);
     }
 
-    /// Octets `addr..addr+size` modifiés : les instructions traduites dont
-    /// l'immédiat les contient deviennent volatiles.
+    /// Octets `addr..addr+size` (linéaires) modifiés : les instructions
+    /// traduites dont l'immédiat les contient deviennent volatiles.
     fn mark_volatile(&mut self, mem: &GuestMem, addr: u32, size: u32) {
         let starts: Vec<u32> = self.blocks.iter().filter(|(_, b)| b.is_some()).map(|(&k, _)| k).collect();
         for start in starts {
             let len = self.blocks[&start].as_ref().unwrap().bytes.len() as u32;
-            if addr + size <= start || addr >= start + len {
+            let at = self.lin(start);
+            if addr + size <= at || addr >= at + len {
                 continue;
             }
-            for (ins, imm) in decode_block(start, mem, self.mem_size, MAX_BLOCK) {
+            for (ins, imm) in decode_block(start, self.base, mem, self.mem_size, MAX_BLOCK) {
                 let ip = ins.ip32();
+                let ip_lin = self.lin(ip);
                 if let Some((off, n)) = imm
-                    && addr >= ip + off as u32
-                    && addr + size <= ip + (off + n) as u32
+                    && addr >= ip_lin + off as u32
+                    && addr + size <= ip_lin + (off + n) as u32
                 {
                     self.volatile.insert(ip);
                 }
@@ -859,8 +912,50 @@ enum WriteRange {
 /// Ce que l'instruction à CS:EIP peut écrire en mémoire (opérande, chaînes,
 /// pile), calculé avant de l'exécuter : un pas qui n'écrit pas dans du code
 /// traduit laisse les enchaînements et la table de répartition en place.
+/// Adresses linéaires (base du segment de chaque accès).
 fn interp_write_range(cpu: &Cpu, mem: &GuestMem) -> WriteRange {
-    let at = cpu.ip as usize;
+    match offset_write_range(cpu, mem) {
+        (WriteRange::Range(lo, hi), seg) => {
+            let base = cpu.seg[seg].base;
+            let (lo, hi) = (lo.wrapping_add(base), hi.wrapping_add(base));
+            // Zone coupée par le bouclage à 4 Go : prudence.
+            if hi < lo { WriteRange::Unknown } else { WriteRange::Range(lo, hi) }
+        }
+        (r, _) => r,
+    }
+}
+
+/// `interp_write_range` en décalages, avec l'indice du segment (ES 0, CS 1,
+/// SS 2, DS 3).
+fn offset_write_range(cpu: &Cpu, mem: &GuestMem) -> (WriteRange, usize) {
+    (offset_write_range_in(cpu, mem), write_segment(cpu, mem))
+}
+
+/// Segment de l'écriture de l'instruction à CS:EIP (voir `offset_write_range`).
+fn write_segment(cpu: &Cpu, mem: &GuestMem) -> usize {
+    let at = cpu.ip.wrapping_add(cpu.seg[1].base) as usize;
+    if at + 15 > mem.size() {
+        return 3;
+    }
+    let mut bytes = [0u8; 15];
+    mem.read(at, &mut bytes);
+    let ins = Decoder::with_ip(32, &bytes, u64::from(cpu.ip), DecoderOptions::NONE).decode();
+    if ins.is_stack_instruction() || matches!(ins.flow_control(), FlowControl::Interrupt | FlowControl::Call | FlowControl::IndirectCall) {
+        2
+    } else if ins.is_string_instruction() {
+        0
+    } else {
+        match ins.memory_segment() {
+            Register::ES => 0,
+            Register::CS => 1,
+            Register::SS => 2,
+            _ => 3,
+        }
+    }
+}
+
+fn offset_write_range_in(cpu: &Cpu, mem: &GuestMem) -> WriteRange {
+    let at = cpu.ip.wrapping_add(cpu.seg[1].base) as usize;
     if at + 15 > mem.size() {
         return WriteRange::Unknown;
     }
@@ -919,10 +1014,11 @@ fn interp_write_range(cpu: &Cpu, mem: &GuestMem) -> WriteRange {
 /// Immédiat d'une instruction : décalage et taille dans ses octets.
 type Imm = Option<(usize, usize)>;
 
-/// Instructions de l'invité à partir de `eip`, jusqu'à la première fin de
-/// bloc incluse, avec la place de leur immédiat.
-fn decode_block(eip: u32, mem: &GuestMem, mem_size: usize, max: usize) -> Vec<(Instruction, Imm)> {
-    let start = eip as usize;
+/// Instructions de l'invité à partir de `eip` (décalage ; octets lus à
+/// l'adresse linéaire `eip + base`), jusqu'à la première fin de bloc
+/// incluse, avec la place de leur immédiat.
+fn decode_block(eip: u32, base: u32, mem: &GuestMem, mem_size: usize, max: usize) -> Vec<(Instruction, Imm)> {
+    let start = eip.wrapping_add(base) as usize;
     if start >= mem_size {
         return Vec::new();
     }
@@ -1239,6 +1335,10 @@ fn classify_tail(ins: &Instruction) -> Option<Tail> {
 struct Emit {
     a: CodeAssembler,
     exits: Vec<Exit>,
+    /// Base commune des segments : ajoutée aux adresses calculées dans R13D
+    /// (linéaires), retirée de celles qui reviennent à un registre de
+    /// l'invité (ESP, ESI, EDI).
+    base: u32,
     mem_limit: i32,
     bmi2: bool,
     /// Contrôles complets rejetés en fin de bloc (`checked`).
@@ -1427,15 +1527,37 @@ impl Emit {
         Ok(())
     }
 
-    /// Adresse de l'opérande mémoire de l'invité dans R13D.
+    /// Adresse linéaire de l'opérande mémoire de l'invité dans R13D (base
+    /// d'ES lue dans `State`, celle des autres segments dans le code).
+    /// Écrase R14 pour un accès par ES.
     fn address(&mut self, ins: &Instruction) -> Result<(), IcedError> {
-        let m = guest_address(ins).unwrap();
+        let by_es = ins.memory_segment() == Register::ES;
+        let mut m = guest_address(ins).unwrap();
+        if !by_es {
+            m.displacement = (m.displacement as u32).wrapping_add(self.base) as i32 as i64;
+        }
         if m.base == Register::None && m.index == Register::None {
             self.a.mov(r13d, m.displacement as u32)?;
         } else {
             self.a.add_instruction(Instruction::with2(Code::Lea_r32_m, Register::R13D, m)?)?;
         }
+        if by_es {
+            self.a.mov(r14d, dword_ptr(r10 + OFF_ES_BASE))?;
+            self.a.lea(r13d, ptr(r13 + r14))?;
+        }
         Ok(())
+    }
+
+    /// R13D = adresse linéaire du décalage `reg + k`.
+    fn lin_from(&mut self, reg: AsmRegister64, k: i32) -> Result<(), IcedError> {
+        let d = (k as u32).wrapping_add(self.base) as i32;
+        self.a.lea(r13d, ptr(reg + d))
+    }
+
+    /// `dst` (registre de l'invité) = décalage de l'adresse linéaire R13D + `k`.
+    fn off_from_r13(&mut self, dst: AsmRegister32, k: i32) -> Result<(), IcedError> {
+        let d = (k as u32).wrapping_sub(self.base) as i32;
+        if d == 0 { self.a.mov(dst, r13d) } else { self.a.lea(dst, ptr(r13 + d)) }
     }
 }
 
@@ -1591,44 +1713,44 @@ fn emit_stackish(e: &mut Emit, ins: &Instruction, op: &Op, ip: u32, n: u32, live
     }
     match *op {
         Op::Push(src, imm) => {
-            e.a.lea(r13d, ptr(r12 - 4))?;
+            e.lin_from(r12, -4)?;
             e.checked(ip, n, 4, true, live, None)?;
             match src {
                 Some(r) => e.a.mov(dword_ptr(r15 + r13), r32(r))?,
                 None => e.a.mov(dword_ptr(r15 + r13), imm)?,
             }
-            e.a.mov(r12d, r13d)?;
+            e.off_from_r13(r12d, 0)?;
         }
         Op::Pop(dst) => {
-            e.a.mov(r13d, r12d)?;
+            e.lin_from(r12, 0)?;
             e.checked(ip, n, 4, false, live, None)?;
             e.a.mov(r11d, dword_ptr(r15 + r13))?;
             e.a.lea(r12d, ptr(r12 + 4))?;
             e.a.mov(r32(dst), r11d)?;
         }
         Op::Pushad => {
-            e.a.lea(r13d, ptr(r12 - 32))?;
+            e.lin_from(r12, -32)?;
             e.checked(ip, n, 32, true, live, None)?;
             for (k, r) in [edi, esi, ebp, r12d, ebx, edx, ecx, eax].into_iter().enumerate() {
                 e.a.mov(dword_ptr(r15 + r13 + 4 * k as i32), r)?;
             }
-            e.a.mov(r12d, r13d)?;
+            e.off_from_r13(r12d, 0)?;
         }
         Op::Popad => {
-            e.a.mov(r13d, r12d)?;
+            e.lin_from(r12, 0)?;
             e.checked(ip, n, 32, false, live, None)?;
             for (k, r) in [Some(edi), Some(esi), Some(ebp), None, Some(ebx), Some(edx), Some(ecx), Some(eax)].into_iter().enumerate() {
                 if let Some(r) = r {
                     e.a.mov(r, dword_ptr(r15 + r13 + 4 * k as i32))?;
                 }
             }
-            e.a.lea(r12d, ptr(r13 + 32))?;
+            e.off_from_r13(r12d, 32)?;
         }
         Op::Leave => {
-            e.a.mov(r13d, ebp)?;
+            e.lin_from(rbp, 0)?;
             e.checked(ip, n, 4, false, live, None)?;
             e.a.mov(r11d, dword_ptr(r15 + r13))?;
-            e.a.lea(r12d, ptr(r13 + 4))?;
+            e.off_from_r13(r12d, 4)?;
             e.a.mov(ebp, r11d)?;
         }
         Op::HighLoad(full) => {
@@ -1748,6 +1870,7 @@ fn emit_native_checked(e: &mut Emit, ins: &Instruction, h: &Instruction, ip: u32
 
 fn emit_block(
     eip: u32,
+    base: u32,
     mem: &GuestMem,
     mem_size: usize,
     rip: u64,
@@ -1759,7 +1882,7 @@ fn emit_block(
 ) -> Result<Option<Emitted>, IcedError> {
     // Accès direct par la vue de la mémoire (sauf sites qui y ont fauté).
     let direct = |ip: u32| fast.is_some_and(|c| !c.contains(&ip)) && !vga.is_some_and(|v| v.contains(&ip));
-    let all = decode_block(eip, mem, mem_size, max);
+    let all = decode_block(eip, base, mem, mem_size, max);
     let mut holes = Vec::new();
     let mut body: Vec<(Instruction, Op)> = Vec::new();
     let mut tail = Tail::Fallthrough;
@@ -1807,6 +1930,7 @@ fn emit_block(
     let mut e = Emit {
         a: CodeAssembler::new(64)?,
         exits: Vec::new(),
+        base,
         mem_limit: (mem_size as u32).saturating_sub(MEM_GUARD) as i32,
         bmi2,
         deferred: Vec::new(),
@@ -1838,7 +1962,12 @@ fn emit_block(
                 let dst = host_reg(ins.op0_register()).unwrap();
                 e.a.add_instruction(Instruction::with2(Code::Lea_r32_m, dst, guest_address(ins).unwrap())?)?;
             }
-            Op::Volatile(h) => e.a.add_instruction(*h)?,
+            Op::Volatile(h) => {
+                // Immédiat lu à son adresse linéaire.
+                let mut h = *h;
+                h.set_memory_displacement64((h.memory_displacement64() as u32).wrapping_add(e.base) as u64);
+                e.a.add_instruction(h)?
+            }
             Op::Native(h) if !(0..ins.op_count()).any(|k| ins.op_kind(k) == OpKind::Memory) => e.a.add_instruction(*h)?,
             Op::Native(h) if direct(ip) => {
                 // Accès direct par la vue protégée ; une faute reprend à la
@@ -1931,12 +2060,24 @@ fn emit_block(
                 // interruptible) : reconvertis, l'interpréteur finit.
                 let rep = m.has_rep_prefix() || m.has_repne_prefix();
                 let stub = e.exit(Some(ip), n, EXIT_FAULT, false);
+                let base = e.base as i32;
+                // Source par ES (préfixe) : base d'ES aussi.
+                let src_es = m.memory_segment() == Register::ES;
                 let a = &mut e.a;
                 let mut site = a.create_label();
                 let mut fixup = a.create_label();
                 let mut done = a.create_label();
-                a.mov(esi, esi)?;
-                a.mov(edi, edi)?;
+                // Décalages → adresses linéaires (32 bits, bouclage à 4 Go) :
+                // ESI + base de son segment, EDI + base d'ES.
+                a.mov(r9d, dword_ptr(r10 + OFF_ES_BASE))?;
+                if src_es {
+                    a.lea(esi, ptr(rsi + r9))?;
+                } else if base == 0 {
+                    a.mov(esi, esi)?;
+                } else {
+                    a.lea(esi, ptr(rsi + base))?;
+                }
+                a.lea(edi, ptr(rdi + r9))?;
                 a.lea(rsi, ptr(rsi + r8))?;
                 a.lea(rdi, ptr(rdi + r8))?;
                 if rep {
@@ -1975,14 +2116,23 @@ fn emit_block(
                     a.mov(r9, qword_ptr(r10 + OFF_NEG_VIEW))?;
                     a.lea(rsi, ptr(rsi + r9))?;
                     a.lea(rdi, ptr(rdi + r9))?;
-                    a.mov(esi, esi)?;
-                    a.mov(edi, edi)?;
+                    // Adresse de la faute : EDI linéaire.
+                    if target.is_some() {
+                        a.mov(r13d, edi)?;
+                    }
+                    // Adresses linéaires → décalages.
+                    a.mov(r9, qword_ptr(r10 + OFF_ES_NEG))?;
+                    if src_es {
+                        a.lea(esi, ptr(rsi + r9))?;
+                    } else if base == 0 {
+                        a.mov(esi, esi)?;
+                    } else {
+                        a.lea(esi, ptr(rsi - base))?;
+                    }
+                    a.lea(edi, ptr(rdi + r9))?;
                     match target {
                         None => a.jmp(done)?,
-                        Some(l) => {
-                            a.mov(r13d, edi)?;
-                            a.jmp(l)?;
-                        }
+                        Some(l) => a.jmp(l)?,
                     }
                 }
                 a.set_label(&mut done)?;
@@ -2013,16 +2163,16 @@ fn emit_block(
         }
         Tail::Call(t) => {
             let ip = t.ip32();
-            e.a.lea(r13d, ptr(r12 - 4))?;
+            e.lin_from(r12, -4)?;
             e.checked(ip, n, 4, true, true, None)?;
             e.a.mov(dword_ptr(r15 + r13), end)?;
-            e.a.mov(r12d, r13d)?;
+            e.off_from_r13(r12d, 0)?;
             let l = e.exit(Some(t.near_branch32()), n + 1, EXIT_NEXT, false);
             e.a.jmp(l)?;
         }
         Tail::Ret(extra) => {
             let ip = tail_ins.unwrap().ip32();
-            e.a.mov(r13d, r12d)?;
+            e.lin_from(r12, 0)?;
             e.checked(ip, n, 4, false, true, None)?;
             e.a.mov(r9d, dword_ptr(r15 + r13))?;
             e.a.mov(dword_ptr(r10 + OFF_TARGET), r9d)?;
@@ -2041,10 +2191,10 @@ fn emit_block(
                 e.a.mov(dword_ptr(r10 + OFF_TARGET), r9d)?;
             }
             if t.flow_control() == FlowControl::IndirectCall {
-                e.a.lea(r13d, ptr(r12 - 4))?;
+                e.lin_from(r12, -4)?;
                 e.checked(ip, n, 4, true, true, None)?;
                 e.a.mov(dword_ptr(r15 + r13), end)?;
-                e.a.mov(r12d, r13d)?;
+                e.off_from_r13(r12d, 0)?;
             }
             let l = e.exit(None, n + 1, EXIT_NEXT, false);
             e.a.jmp(l)?;
