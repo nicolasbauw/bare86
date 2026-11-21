@@ -3,6 +3,29 @@ name = "bare86"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
+description = "Runs DOS programs on Linux at native speed with KVM: no x86 emulation, BIOS, DOS and PC hardware (VGA/SVGA, Sound Blaster, Gravis UltraSound, Glide, OpenGL) in software"
+repository = "https://github.com/nicolasbauw/bare86"
+readme = "README.md"
+keywords = ["dos", "kvm", "emulator", "retro", "demoscene"]
+categories = ["emulators"]
+# Fichiers du paquet : liste explicite (les fichiers de travail non suivis
+# du dépôt n'y entrent pas).
+include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/LICENSE",
+    "/README.md",
+    "/build.rs",
+    "/src/**",
+    "/asm/**",
+    "/c/**",
+    "/guest/**",
+    "/fonts/**",
+    "/third_party/**",
+    "/tools/*.py",
+    "/tools/*.sh",
+    "/docs/**",
+]
 
 [dependencies]
 flate2 = "1.1.11"
