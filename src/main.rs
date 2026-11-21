@@ -124,9 +124,10 @@ usage: bare86 [options] [program [arguments…]]
                  32-bit code of games that lose time on planar VGA, such
                  as Doom, when the statistics show a gain)
   --jit          dynamic translator always on (measurements)
-  --no-realtime  normal priority for the emulated CPU thread (by default it
-                 runs at real-time priority, SCHED_RR, when the rtprio
-                 limit allows it: group realtime on Arch)
+  --no-realtime  keep the emulated CPU at normal priority. By default Bare86
+                 asks for real-time priority and silently goes without it if
+                 not allowed; it only matters for demos timed to the screen
+                 refresh, which can drift by about 1 % on a busy desktop.
   --no-interp    no interpreter bursts: one VM exit per emulated VRAM
                  access (to measure what the interpreter brings)
   --limit S      stop after S seconds, with registers and code at CS:IP

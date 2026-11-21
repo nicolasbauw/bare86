@@ -1756,6 +1756,7 @@ impl<B: Backend> Pc<B> {
             .into());
         }
         self.service_timers()?;
+        crate::realtime::breathe(Instant::now());
         self.update_window()?;
         self.jit_policy.tick(
             Instant::now(),

@@ -11,6 +11,7 @@ difference is under the hood, and shows with demanding late-90s games.
 
 - [Features](#features)
 - [Requirements](#requirements)
+  - [Timing precision (optional)](#timing-precision-optional)
 - [Building](#building)
 - [Quick start](#quick-start)
 - [Command-line options](#command-line-options)
@@ -168,6 +169,22 @@ without it.
   `/etc/sysctl.d/99-bare86.conf` holding `kernel.perf_event_paranoid = 1`.
   Without it, Bare86 says so and runs at full speed.
 
+### Timing precision (optional)
+
+Bare86 runs fine without any system setting. If your user may use real-time
+priority, Bare86 uses it for the emulated CPU, so that other programs cannot
+delay its timer interrupts. Without it, a few demos timed to the screen
+refresh (e.g. Second Reality's city) can drift by about 1 %; games are not
+affected.
+
+Most desktops already allow it through rtkit, the service that gives
+real-time priority to PipeWire and PulseAudio (installed by default on
+Ubuntu and Fedora, for instance): Bare86 asks it when it cannot raise the
+priority itself, and nothing needs to be done. Otherwise: on Arch, install
+`realtime-privileges` and join the `realtime` group (or install `rtkit`); on
+other distributions, add a `rtprio` limit in `/etc/security/limits.d/`. Log
+out and back in afterwards. No special kernel is needed.
+
 ## Building
 
 ```sh
@@ -256,7 +273,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--trace-int` | Log the interrupts serviced by the host |
 | `--trace-io` | Report I/O ports with no device |
 | `--no-jit` | No dynamic translator (by default it takes over, when the statistics show a gain, the flat 32-bit code of games that lose time on planar VGA, such as Doom); `jit = off` in a profile |
-| `--no-realtime` | Normal priority for the emulated CPU thread. By default it runs at real-time priority (SCHED_RR, priority 10) when the `rtprio` limit allows it (on Arch: package `realtime-privileges` and membership of the `realtime` group; silently skipped otherwise), so that other host tasks cannot preempt it and delay timer interrupts (demos synchronised to the vertical retrace lose frames otherwise); `realtime = off` in a profile |
+| `--no-realtime` | Keep the emulated CPU at normal priority. By default Bare86 asks for real-time priority and silently goes without it if not allowed, see [Timing precision (optional)](#timing-precision-optional); `realtime = off` in a profile |
 | `--jit` | Dynamic translator always engaged, whatever the statistics (measurements) |
 | `--no-interp` | No interpreter bursts: one VM exit per emulated video memory access (to measure what the interpreter brings) |
 | `-h`, `--help` | Print the options |
