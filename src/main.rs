@@ -43,6 +43,7 @@ mod opl;
 mod pic;
 mod pit;
 mod render;
+mod realtime;
 mod rtc;
 mod runtime;
 mod sb16;
@@ -123,6 +124,9 @@ usage: bare86 [options] [program [arguments…]]
                  32-bit code of games that lose time on planar VGA, such
                  as Doom, when the statistics show a gain)
   --jit          dynamic translator always on (measurements)
+  --realtime     real-time priority (SCHED_RR) for the emulated CPU thread,
+                 so that host tasks cannot delay timer interrupts; needs
+                 the rtprio limit (group realtime on Arch)
   --no-interp    no interpreter bursts: one VM exit per emulated VRAM
                  access (to measure what the interpreter brings)
   --limit S      stop after S seconds, with registers and code at CS:IP
@@ -409,6 +413,7 @@ fn main() -> ExitCode {
             "--no-interp" => cfg.interp = false,
             "--jit" => cfg.jit = crate::jit::policy::Mode::On,
             "--no-jit" => cfg.jit = crate::jit::policy::Mode::Off,
+            "--realtime" => cfg.realtime = true,
             "--vbe1" => cfg.vbe2 = false,
             "--debug" => debug = true,
             "--screen" => screen = true,

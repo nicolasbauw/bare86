@@ -156,6 +156,8 @@ pub struct Config {
     /// Traducteur dynamique pour le code 32 bits plat : automatique par
     /// défaut, forcé (`--jit`) ou coupé (`--no-jit`).
     pub jit: crate::jit::policy::Mode,
+    /// Thread du vCPU en priorité temps réel (`--realtime`).
+    pub realtime: bool,
     /// VBE 2.0 avec framebuffer linéaire (sinon VBE 1.2, `--vbe1`).
     pub vbe2: bool,
     /// Durée maximale d'exécution (diagnostic : registres affichés à l'arrêt).
@@ -187,7 +189,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { extended_kb: 63 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, jit: crate::jit::policy::Mode::Auto, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, gus: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
+        Self { extended_kb: 63 * 1024, ems_kb: 4096, mips: None, trace_int: false, trace_io: false, interp: true, jit: crate::jit::policy::Mode::Auto, realtime: false, vbe2: true, limit: None, disks: Default::default(), net: None, cdrom: None, sb_pro: false, env: Vec::new(), sb_ess: false, gus: false, opl: crate::opl::OplModel::Opl3, midi_out: None, midi_bank: Some(crate::midisynth::DEFAULT_BANK) }
     }
 }
 
@@ -682,6 +684,10 @@ impl<B: Backend> Pc<B> {
         let pit = Pit::new().shared();
         io.map(0x40..=0x43, Box::new(PitPorts(pit.clone())));
         io.map(0x61..=0x61, Box::new(PitPorts(pit.clone())));
+        // Avant les minuteurs : ce thread est celui du vCPU.
+        if cfg.realtime {
+            crate::realtime::enable();
+        }
         let heartbeat = Heartbeat::new(heartbeat_period(pit.borrow().irq0_period()))?;
         let rtc = Rc::new(RefCell::new(crate::rtc::Rtc::new(cfg.extended_kb)));
         io.map(0x70..=0x71, Box::new(crate::rtc::RtcPorts(rtc.clone())));
