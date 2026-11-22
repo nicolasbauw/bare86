@@ -23,7 +23,8 @@ Résultats dans RÉSULTATS :
 `error` (message d'erreur de Bare86), `timeout`, `no-exe`, `win32`
 (programme Windows, non lancé sans `--win32`), `bad-archive`.
 
-Paramètres : si un .BAT du dossier lance l'exécutable avec des arguments
+Paramètres : si le programme rend la main (ou plante) sans paramètre alors que son texte en
+annonce, un réessai avec un paramètre neutre puis ceux du texte (`argprobe`). Sinon, si un .BAT du dossier lance l'exécutable avec des arguments
 (GO.BAT…), ils sont repris (`args` dans le résultat). `--screen` met le texte
 de l'écran dans la sortie : un message sur le DPMI déclenche un second essai
 avec `--dpmi`, et une demande de paramètres (« usage… ») est notée `usage`
@@ -205,6 +206,19 @@ def sound_peak(path):
         return -1
 
 
+PARAM_HINT = re.compile(r"param|usage|argument|command.?line", re.I)
+
+
+def param_candidates(out):
+    """Paramètres à essayer : un neutre, puis ceux que le texte propose
+    (« param. 8 for … », « usage: PROG x »), trois au plus."""
+    found = []
+    for m in re.finditer(r"(?im)^\W*(?:param(?:eter)?s?\.?|arg(?:ument)?s?\.?)\s*[:=]?\s*['\"\[<]?([\w/-]{1,12})['\"\]>]?\s+(?:for|to|=|-)\b", out):
+        if m.group(1) not in found:
+            found.append(m.group(1))
+    return ["x"] + found[:3]
+
+
 def status_exit(res):
     return res.get("status") in ("exit", "error")
 
@@ -258,21 +272,33 @@ def run_one(item, args, src):
         if extra:
             res["args"] = extra
         out = ""
-        for attempt in range(2):
+        timed = False
+
+        def execute(command):
             try:
-                p = subprocess.run(cmd, cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                p = subprocess.run(command, cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                    errors="replace", timeout=args.limit + 90)
-                out = (p.stdout + p.stderr)
-                timed = False
+                return p.stdout + p.stderr, False
             except subprocess.TimeoutExpired as e:
-                out = ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""))
-                timed = True
+                return ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")), True
+
+        for attempt in range(2):
+            out, timed = execute(cmd)
             # Hôte DPMI demandé (« DPMI? », « no DPMI ») : un second essai avec --dpmi.
             if attempt == 0 and re.search(r"dpmi", out, re.I) and "--dpmi" not in cmd:
                 cmd.insert(1, "--dpmi")
                 res["dpmi"] = True
                 continue
             break
+        # Rendu au DOS (ou plantage) sans paramètre, alors que le texte en annonce :
+        # réessai avec un paramètre neutre, puis avec ceux que le texte propose
+        # (Decapitation plante sur argv[1] nul sans paramètre).
+        if not extra and not timed and "time limit reached" not in out and (PARAM_HINT.search(out) or "SIGSEGV" in out):
+            for cand in param_candidates(out):
+                out2, timed2 = execute(cmd + [cand])
+                if "time limit reached" in out2:
+                    out, timed, res["args"], res["argprobe"] = out2, timed2, [cand], True
+                    break
         lines = [l for l in out.splitlines() if l.strip()]
         if timed:
             res["status"] = "timeout"
