@@ -49,6 +49,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 ARCHIVES = (".zip", ".arj", ".rar", ".lzh", ".lha")
 # Exécutables écartés du choix de l'exécutable principal.
+EXTENDERS = ("dos4gw", "dos32a", "dos4g", "pmodew")
 SKIP_NAMES = re.compile(r"(setup|install|config|cfg|unp|pkunzip|pkunpak|unzip|arj|lha|readme|view|info|nfo|dos4gw|cwsdpmi|pmode|uvconfig|sndsetup|catalog|vesa|univbe|uninst)", re.I)
 DEFAULT_KEYS = "{wait:900000}"
 
@@ -172,6 +173,13 @@ def bat_args(exe):
                 name = name[:-4]
             if name == stem:
                 return words[1:]
+            # « DOS4GW PROG.EXE args » : l'extendeur du dossier lance le
+            # programme, qui n'a pas d'amorce (NT2.BAT de NRU-NT2).
+            if name in EXTENDERS and len(words) > 1 and os.path.splitext(words[1].lower())[0] == stem:
+                present = {f.lower(): f for f in os.listdir(d)}
+                for ext in (".exe", ".com"):
+                    if name + ext in present:
+                        return [present[name + ext]] + words[1:]
     return []
 
 
@@ -238,11 +246,16 @@ def run_one(item, args, src):
             cmd.append("--gus")
         if args.mips:
             cmd += ["--mips", str(args.mips)]
-        cmd.append(os.path.basename(exe))
-        # Paramètres : ceux d'un .BAT du dossier qui lance cet exécutable.
+        # Paramètres : ceux d'un .BAT du dossier qui lance cet exécutable ;
+        # le BAT peut aussi lancer un extendeur du dossier sur l'exécutable
+        # (le premier mot est alors le programme à lancer).
         extra = bat_args(exe)
-        if extra:
+        if extra and os.path.splitext(extra[0].lower())[0] in EXTENDERS:
             cmd += extra
+        else:
+            cmd.append(os.path.basename(exe))
+            cmd += extra
+        if extra:
             res["args"] = extra
         out = ""
         for attempt in range(2):
