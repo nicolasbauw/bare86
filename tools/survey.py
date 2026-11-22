@@ -248,6 +248,45 @@ def thumb_diff(a, b):
     return sum(abs(x - y) for x, y in zip(a, b)) / max(1, min(len(a), len(b)))
 
 
+class CpuSampler(threading.Thread):
+    """Échantillonne le CPU du processus (utime + stime de /proc, tous threads) toutes
+    les 0,5 s : une moyenne sur la durée cacherait un pic. Résumé : `cpu` moyenne,
+    `cpu_peak` maximum d'un échantillon, `cpu_hot` part des échantillons au-dessus de
+    0,9 cœur, `cpu_peak_at` seconde du pic (cœurs, 1,0 = 100 % d'un cœur)."""
+
+    STEP = 0.5
+
+    def __init__(self, pid):
+        super().__init__(daemon=True)
+        self.pid, self.stop, self.samples = pid, False, []
+
+    def read(self):
+        try:
+            st = open(f"/proc/{self.pid}/stat").read().rsplit(")", 1)[1].split()
+            return (int(st[11]) + int(st[12])) / os.sysconf("SC_CLK_TCK")
+        except (OSError, IndexError, ValueError):
+            return None
+
+    def run(self):
+        t0 = prev_t = time.time()
+        prev = self.read() or 0.0
+        while not self.stop:
+            time.sleep(self.STEP)
+            cur, now = self.read(), time.time()
+            if cur is None:
+                break
+            self.samples.append((now - t0, (cur - prev) / max(now - prev_t, 1e-3)))
+            prev, prev_t = cur, now
+
+    def summary(self):
+        s = self.samples
+        if not s:
+            return {}
+        peak = max(s, key=lambda x: x[1])
+        return {"cpu": round(sum(v for _, v in s) / len(s), 2), "cpu_peak": round(peak[1], 2),
+                "cpu_peak_at": round(peak[0]), "cpu_hot": round(sum(v > 0.9 for _, v in s) / len(s), 2)}
+
+
 def watch_run(command, cwd, shots, args, timeout):
     """Lance le programme et surveille les captures (mode --full) : on ne garde
     que celles qui diffèrent de la dernière gardée de plus de `--change`
@@ -264,16 +303,11 @@ def watch_run(command, cwd, shots, args, timeout):
     kept, last_thumb, seen = [], None, set()
     t0 = last_new = time.time()
     killed = timed = False
-    cpu = 0.0
+    cpu = CpuSampler(proc.pid)
+    cpu.start()
     while proc.poll() is None:
         time.sleep(2)
         now = time.time()
-        # CPU consommé (utime + stime de /proc, tous threads) : relevé à chaque tour, le dernier compte.
-        try:
-            st = open(f"/proc/{proc.pid}/stat").read().rsplit(")", 1)[1].split()
-            cpu = (int(st[11]) + int(st[12])) / os.sysconf("SC_CLK_TCK")
-        except (OSError, IndexError, ValueError):
-            pass
         for f in sorted(os.listdir(shots)):
             path = os.path.join(shots, f)
             if not f.endswith(".png") or f == "f.png" or f in seen or now - os.path.getmtime(path) < 1.5:
@@ -311,7 +345,9 @@ def watch_run(command, cwd, shots, args, timeout):
                 last_thumb = t
             else:
                 os.remove(path)
-    LAST.cpu = (cpu, time.time() - t0)
+    cpu.stop = True
+    cpu.join(timeout=2)
+    LAST.cpu = cpu.summary()
     return out, timed, len(kept), killed
 
 
@@ -431,8 +467,7 @@ def run_one(item, args, src):
             if args.full:
                 out, timed, kept, killed = watch_run(command, os.path.dirname(exe), shots, args, args.limit + 90)
                 res["kept"], res["idle_killed"] = kept, killed
-                cpu, wall = LAST.cpu
-                res["cpu"] = round(cpu / wall, 2) if wall > 0 else 0  # cœurs occupés en moyenne (1,0 = 100 %)
+                res.update(LAST.cpu)
                 return out, timed
             try:
                 p = subprocess.run(command, cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, capture_output=True, text=True,

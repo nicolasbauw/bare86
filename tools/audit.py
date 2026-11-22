@@ -8,7 +8,7 @@ que des écrans d'erreur ou de configuration. Chaque élément reçoit des drape
   FEW     3 scènes gardées ou moins
   ERR     message d'erreur de Bare86 ou texte d'erreur à l'écran final
   EARLY   rendu au DOS en moins de 20 s
-  CPU     plus de 0,9 cœur occupé en moyenne (attente active de l'invité ?)
+  CPU     pic de plus de 0,9 cœur sur 0,5 s (champs cpu*, attente active de l'invité ?)
   STATIC  écran figé (attend une touche)
   TEXT    fini sur un écran de texte (message, menu, retour au DOS)
 
@@ -42,7 +42,7 @@ def flags(r):
             f.append("ERR")
     if r.get("status") == "exit" and r.get("seconds", 99) < 20:
         f.append("EARLY")
-    if r.get("cpu", 0) > 0.9:
+    if r.get("cpu_peak", r.get("cpu", 0)) > 0.9:
         f.append("CPU")
     if r.get("static"):
         f.append("STATIC")
