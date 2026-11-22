@@ -45,6 +45,10 @@ pub struct Exe<'a> {
     /// Module chargé en mémoire (sans l'en-tête MZ).
     pub data: &'a [u8],
     relocs: Vec<(u16, u16)>,
+    /// Taille du module pour l'allocation (MZ) : pages entières moins l'en-tête,
+    /// sans tenir compte des octets de la dernière page, comme MS-DOS
+    /// (`exec_res_len_para` de EXEC.ASM) ; des programmes empaquetés en dépendent.
+    alloc_paras: u32,
     /// Paragraphes après le module : minimum et maximum (MZ).
     min_extra: u16,
     max_extra: u16,
@@ -67,6 +71,7 @@ pub fn parse(image: &[u8]) -> Result<Exe<'_>, u16> {
         return Ok(Exe {
             com: true,
             data: image,
+            alloc_paras: 0,
             relocs: Vec::new(),
             min_extra: 0,
             max_extra: 0xFFFF,
@@ -95,6 +100,7 @@ pub fn parse(image: &[u8]) -> Result<Exe<'_>, u16> {
     Ok(Exe {
         com: false,
         data: &image[hdr..end],
+        alloc_paras: (pages as u32 * 32).saturating_sub(hdr as u32 / 16).max((end - hdr).div_ceil(16) as u32),
         relocs,
         min_extra: word(image, 0x0A),
         max_extra: word(image, 0x0C),
@@ -107,7 +113,7 @@ pub fn parse(image: &[u8]) -> Result<Exe<'_>, u16> {
 
 impl Exe<'_> {
     fn image_paras(&self) -> u32 {
-        (self.data.len() as u32).div_ceil(16)
+        if self.com { (self.data.len() as u32).div_ceil(16) } else { self.alloc_paras }
     }
 
     /// Paragraphes nécessaires (PSP compris) : minimum et souhaités.
@@ -258,4 +264,34 @@ pub fn alloc_program(mem: &GuestMem, exe: &Exe<'_>, strategy: u16) -> Result<(u1
     let seg = memory::alloc(mem, paras, 0xFFFF, strategy).map_err(|(e, _)| e)?;
     memory::set_owner(mem, seg, seg);
     Ok((seg, paras))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// En-tête MZ : `pages` de 512 octets (dernière page de `last` octets),
+    /// en-tête de `hdr` paragraphes, `extra` paragraphes demandés (min = max).
+    fn mz(pages: u16, last: u16, hdr: u16, extra: u16) -> Vec<u8> {
+        let mut v = vec![0u8; usize::from(pages) * 512];
+        v[..2].copy_from_slice(b"MZ");
+        v[2..4].copy_from_slice(&last.to_le_bytes());
+        v[4..6].copy_from_slice(&pages.to_le_bytes());
+        v[8..10].copy_from_slice(&hdr.to_le_bytes());
+        v[0x0A..0x0C].copy_from_slice(&extra.to_le_bytes());
+        v[0x0C..0x0E].copy_from_slice(&extra.to_le_bytes());
+        v[0x18..0x1A].copy_from_slice(&0x1Cu16.to_le_bytes());
+        v
+    }
+
+    #[test]
+    fn allocation_counts_whole_pages_like_ms_dos() {
+        // LOW97INV : 36 pages, dernière de 40 octets, en-tête de 8 paragraphes,
+        // 0D1Fh paragraphes en plus. Le module chargé fait 17 832 octets, mais
+        // MS-DOS alloue sur les pages entières : 36 × 32 − 8 = 0478h paragraphes.
+        let image = mz(36, 40, 8, 0x0D1F);
+        let exe = parse(&image).unwrap();
+        assert_eq!(exe.data.len(), 35 * 512 + 40 - 8 * 16);
+        assert_eq!(exe.paras(), (0x10 + 0x478 + 0x0D1F, 0x10 + 0x478 + 0x0D1F));
+    }
 }
