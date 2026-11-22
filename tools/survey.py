@@ -421,11 +421,11 @@ def run_one(item, args, src):
                 if len(files) > args.max_frames:
                     # Trop de scènes : on en retient `max_frames` réparties sur toute la
                     # durée (et non les premières : la fin de la démo compte autant).
-                    pick = sorted({i * len(files) // args.max_frames for i in range(args.max_frames)})
+                    chosen = sorted({i * len(files) // args.max_frames for i in range(args.max_frames)})
                     for k, f in enumerate(files):
-                        if k not in pick:
+                        if k not in chosen:
                             os.remove(f)
-                    files = [files[k] for k in pick]
+                    files = [files[k] for k in chosen]
                 for n in range(0, len(files), 6):
                     name = sheet if n == 0 else os.path.join(args.out, "sheets", f"{iid}.{n // 6 + 1}.png")
                     subprocess.run(["montage", *files[n:n + 6], "-geometry", "320x200+2+2", "-tile", "3x", name],
