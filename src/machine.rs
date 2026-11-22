@@ -12,7 +12,7 @@
 //! ```
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -586,6 +586,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// Scrutation du clavier à vide (INT 16h AH=01h/11h sans touche) : début
     /// de la série et dernier appel.
     idle_polls: Option<(Instant, Instant)>,
+    /// Échantillons de CS:IP de l'invité au battement (`BARE86_PROFILE_IP=1`), par bloc de 16 octets.
+    ip_profile: Option<BTreeMap<u32, u32>>,
     /// Scrutation du compteur du PIT : début de la série et dernière lecture.
     pit_polls: Option<(Instant, Instant, u16)>,
     /// Scrutation du registre d'état VGA sans autre écriture sur un port :
@@ -840,6 +842,7 @@ impl<B: Backend> Pc<B> {
             unhandled: BTreeSet::new(),
             a20: None,
             idle_polls: None,
+            ip_profile: std::env::var_os("BARE86_PROFILE_IP").map(|_| BTreeMap::new()),
             pit_polls: None,
             vga_polls: None,
             spin_retries: 0,
@@ -1610,7 +1613,15 @@ impl<B: Backend> Pc<B> {
                 }
                 // Signal (battement, débordement du compteur) : le bridage
                 // est servi en tête de boucle.
-                Exit::Interrupted => self.spin_check()?,
+                Exit::Interrupted => {
+                    if self.ip_profile.is_some()
+                        && let Ok(cpu) = self.vm.state()
+                    {
+                        let at = cpu.linear(1, cpu.ip);
+                        *self.ip_profile.as_mut().unwrap().entry(at >> 4).or_default() += 1;
+                    }
+                    self.spin_check()?
+                }
                 Exit::IrqWindow => {}
                 Exit::Step => return Ok(Event::Step),
                 // Sous le débogueur (`g`), le point d'arrêt rend la main ; sinon, rapport et suite.
@@ -2171,6 +2182,19 @@ impl<B: Backend> Pc<B> {
             std::thread::sleep(Duration::from_millis(1));
         }
         self.idle_polls = Some((start, Instant::now()));
+    }
+
+    /// Rapport de `BARE86_PROFILE_IP` : blocs de 16 octets où l'invité était le plus souvent
+    /// au battement (adresse linéaire), pour trouver une boucle d'attente active.
+    pub fn profile_report(&self) {
+        let Some(p) = &self.ip_profile else { return };
+        let total: u32 = p.values().sum();
+        let mut v: Vec<_> = p.iter().collect();
+        v.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+        eprintln!("profile: {total} samples");
+        for (blk, n) in v.into_iter().take(15) {
+            eprintln!("  {:08X}  {:5.1} %  ({n})", blk << 4, f64::from(*n) * 100.0 / f64::from(total.max(1)));
+        }
     }
 
     /// Services non gérés rencontrés (vecteur, AH).

@@ -652,6 +652,7 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
     if o.stats {
         eprintln!("{:#?}", pc.stats);
     }
+    pc.profile_report(); // BARE86_PROFILE_IP
     machine::probe_report(); // sonde BARE86_JITPROBE
     if let Some(path) = &o.shot {
         match pc.frame() {

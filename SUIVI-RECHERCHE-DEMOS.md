@@ -252,3 +252,9 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   faussé par une divergence de Bare86, ou démo attendant un autre environnement. `--trace-int` imprime
   désormais les octets de l'instruction fautive (INT 06h).
 - **WARP** (60 % du temps au-dessus de 0,9 cœur) : pas encore examinée.
+- **Outil : profileur d'adresses de l'invité** (`BARE86_PROFILE_IP=1`) : échantillonne CS:IP au battement
+  (≈ 1 000 Hz) et imprime à la sortie, sur stderr, les 15 blocs de 16 octets les plus visités
+  (adresse linéaire, part, compte). Pour trouver une boucle d'attente active là où on la constate :
+  `cd ~/Dev/dos-progs/dune && BARE86_PROFILE_IP=1 bare86 --window …`, aller sur la scène, quitter.
+  Dune, intro (15 s, headless) : 94 % dans trois blocs (0000ECE0, 0000EC70, 0000FE10) : boucles serrées.
+- **Dune, carte (« see dune map »)** : constat de l'utilisateur, à mesurer avec le profileur depuis la carte.
