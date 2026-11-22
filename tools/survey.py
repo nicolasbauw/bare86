@@ -50,6 +50,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 ARCHIVES = (".zip", ".arj", ".rar", ".lzh", ".lha")
 # Exécutables écartés du choix de l'exécutable principal.
+# Scripts de touches essayés tour à tour (--probe) : la plupart des démos attendent
+# une touche (« hit a key to run the demo »), un choix de carte son ou de mode vidéo.
+KEY_CANDIDATES = [
+    "{wait:900000}",
+    "{wait:3000}{enter}{wait:900000}",
+    "{wait:3000}{enter}{wait:2000}{enter}{wait:2000}{enter}{wait:900000}",
+    "{wait:3000}{enter}{wait:2000}{enter}{wait:2000}{enter}{wait:2000}{enter}{wait:2000}{enter}{wait:900000}",
+    "{wait:3000}2{wait:2000}{enter}{wait:2000}{enter}{wait:900000}",
+    "{wait:3000}1{wait:2000}{enter}{wait:2000}{enter}{wait:900000}",
+    "{wait:3000} {wait:2000}{enter}{wait:900000}",
+]
+PROFILE_LOCK = threading.Lock()
 EXTENDERS = ("dos4gw", "dos32a", "dos4g", "pmodew")
 SKIP_NAMES = re.compile(r"(setup|install|config|cfg|unp|pkunzip|pkunpak|unzip|arj|lha|readme|view|info|nfo|dos4gw|cwsdpmi|pmode|uvconfig|sndsetup|catalog|vesa|univbe|uninst)", re.I)
 DEFAULT_KEYS = "{wait:900000}"
@@ -289,6 +301,48 @@ def watch_run(command, cwd, shots, args, timeout):
     return out, timed, len(kept), killed
 
 
+def load_profiles(path):
+    try:
+        return json.load(open(path))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_profile(path, rel, profile):
+    """Ajoute le profil d'un élément (clavier, options) au fichier partagé."""
+    with PROFILE_LOCK:
+        data = load_profiles(path)
+        data[rel] = profile
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=1, ensure_ascii=False, sort_keys=True)
+        os.replace(tmp, path)
+
+
+def with_option(command, option, value):
+    """Copie de `command` dont la valeur de `option` est remplacée."""
+    c = list(command)
+    c[c.index(option) + 1] = value
+    return c
+
+
+def probe_keys(command, cwd, shots, args):
+    """Essaie les scripts de `KEY_CANDIDATES` quelques secondes chacun et rend
+    (meilleur script, score par script) : le score est le nombre de scènes
+    distinctes vues ; un programme qui se termine avant la fin de l'essai (une
+    touche l'a fait quitter, plantage) vaut -1."""
+    scores = {}
+    for keys in KEY_CANDIDATES:
+        c = with_option(with_option(command, "--keys", keys), "--limit", str(args.probe))
+        out, timed, kept, killed = watch_run(c, cwd, shots, args, args.probe + 60)
+        ended_early = "time limit reached" not in out and not killed and not timed
+        scores[keys] = -1 if ended_early else kept
+        if scores[keys] >= 6:
+            break
+    best = max(KEY_CANDIDATES, key=lambda k: scores.get(k, -2))
+    return best, scores
+
+
 def status_exit(res):
     return res.get("status") in ("exit", "error")
 
@@ -343,6 +397,16 @@ def run_one(item, args, src):
             cmd += extra
         if extra:
             res["args"] = extra
+        # Profil de l'élément (clavier, options) : mémorisé, ou sondé (--probe).
+        profile = args.profile_data.get(rel)
+        if profile is None and args.probe:
+            best, scores = probe_keys(cmd, os.path.dirname(exe), shots, args)
+            profile = {"keys": best, "probe": scores}
+            save_profile(args.profiles, rel, profile)
+        if profile:
+            cmd = with_option(cmd, "--keys", profile.get("keys", args.keys))
+            cmd[1:1] = profile.get("opts", [])
+            res["profile"] = {k: v for k, v in profile.items() if k != "probe"}
         out = ""
         timed = False
 
@@ -411,7 +475,7 @@ def run_one(item, args, src):
         periodic = [f for f in res["shots"] if f != "f.png"]
         if periodic:
             res["static"] = all(nearly_same(os.path.join(shots, a), os.path.join(shots, b)) for a, b in zip(periodic, periodic[1:]))
-        res["keys"] = args.keys
+        res["keys"] = res.get("profile", {}).get("keys", args.keys)
         if res["shots"]:
             sheet = os.path.join(args.out, "sheets", iid + ".png")
             files = [os.path.join(shots, f) for f in res["shots"] if f != "f.png"] or [os.path.join(shots, "f.png")]
@@ -479,6 +543,8 @@ def main():
     ap.add_argument("--change", type=float, default=5.0, help="--full : écart moyen (0-255, vignettes 32×20) pour compter comme une nouvelle scène (défaut 5)")
     ap.add_argument("--idle", type=int, default=60, help="--full : secondes sans nouvelle scène avant d'arrêter le programme (défaut 60, 0 : jamais)")
     ap.add_argument("--max-frames", type=int, default=48, help="--full : scènes gardées au plus par programme (défaut 48, soit 8 planches)")
+    ap.add_argument("--probe", type=int, default=0, help="sonde les scripts de touches (KEY_CANDIDATES), SECONDES chacun, pour les éléments sans profil ; le meilleur est mémorisé dans --profiles")
+    ap.add_argument("--profiles", help="fichier JSON des profils par élément (clavier `keys`, options `opts`, notes) : lu, et complété par --probe")
     ap.add_argument("--keys", default=DEFAULT_KEYS, help="script de touches (défaut : aucune touche, entrée gardée ouverte)")
     ap.add_argument("--no-gus", dest="gus", action="store_false", help="sans Gravis UltraSound")
     ap.add_argument("--win32", action="store_true", help="lancer aussi les programmes Windows (par HX)")
@@ -491,6 +557,9 @@ def main():
     ap.add_argument("--per-page", type=int, default=12, help="éléments par planche de revue")
     ap.add_argument("--review-only", action="store_true", help="refaire seulement les planches de revue")
     args = ap.parse_args()
+    if args.probe and not args.profiles:
+        ap.error("--probe demande --profiles")
+    args.profile_data = load_profiles(args.profiles) if args.profiles else {}
     src = os.path.abspath(args.src)
     args.out = os.path.abspath(args.out)
     os.makedirs(os.path.join(args.out, "sheets"), exist_ok=True)
