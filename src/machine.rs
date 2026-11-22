@@ -1960,6 +1960,12 @@ impl<B: Backend> Pc<B> {
                 cpu.gpr[2] & 0xFFFF,
                 cpu.seg[0].selector
             );
+            if vector == 0x06 {
+                // Opcode invalide : les octets de l'instruction fautive.
+                let at = (usize::from(cs) << 4) + usize::from(ip);
+                let b: Vec<String> = (0..8).map(|i| format!("{:02X}", mem.read_u8(at + i))).collect();
+                eprintln!("      opcode: {}", b.join(" "));
+            }
             // Nom de fichier en DS:DX des fonctions DOS qui en prennent un.
             let ah = (cpu.gpr[0] >> 8) as u8;
             // Noms longs (71xxh) : mêmes registres, DS:SI pour 716Ch.
@@ -1984,7 +1990,9 @@ impl<B: Backend> Pc<B> {
         self.waiting_key = false;
         let ah = (cpu.gpr[0] >> 8) as u8;
         match (vector, ah) {
-            (0x16, 0x01 | 0x11) => self.idle_poll(),
+            (0x16, 0x01 | 0x11) => self.idle_poll(true),
+            // Lecture de l'heure en boucle serrée (IMS, Statix) : même attente.
+            (0x21, 0x2C | 0x2A) => self.idle_poll(false),
             // Compatibles avec une boucle d'attente : curseur, horloge, veille.
             (0x10, 0x02 | 0x03) | (0x1A, 0x00) | (0x28, _) | (0x2F, 0x16) => {}
             // Autre travail (disque, texte…) : ce n'est pas une attente. Le
@@ -2146,14 +2154,17 @@ impl<B: Backend> Pc<B> {
     /// touche ni autre service entre eux, chaque appel cède 1 ms à l'hôte au
     /// lieu d'occuper un cœur. Un jeu qui scrute une fois par image n'est pas
     /// concerné.
-    fn idle_poll(&mut self) {
+    ///
+    /// `keyed` : l'appel scrute le clavier (une touche en attente interrompt l'attente) ; sinon
+    /// il lit l'horloge (INT 21h AH=2Ch/2Ah), dont la résolution (10 ms) rend le sommeil sans effet.
+    fn idle_poll(&mut self, keyed: bool) {
         let now = Instant::now();
-        if !self.keys.is_empty() || bios::peek_key(self.vm.mem()).is_some() {
+        if keyed && (!self.keys.is_empty() || bios::peek_key(self.vm.mem()).is_some()) {
             self.idle_polls = None;
             return;
         }
         let start = match self.idle_polls {
-            Some((start, last)) if now - last < Duration::from_micros(200) => start,
+            Some((start, last)) if now - last < Duration::from_micros(if keyed { 1000 } else { 200 }) => start,
             _ => now,
         };
         if now - start > Duration::from_millis(20) {

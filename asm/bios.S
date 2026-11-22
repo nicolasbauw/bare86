@@ -239,14 +239,22 @@ int16:
     pop ds
     mov ax, ds:[0x1A]
     cmp ax, ds:[0x1C]
+    jne 3f
+    # Tampon vide : une scrutation sur 16 passe quand même par l'hôte (compteur dans la zone
+    # de communication entre applications, 40:F0), qui voit ainsi la boucle d'attente et
+    # endort le vCPU (`idle_poll`) ; sans cela, IMS occupait un cœur entier.
+    inc byte ptr ds:[0xF0]
+    test byte ptr ds:[0xF0], 15
+    jz 3f
     pop ax
     pop ds
-    jne 2f
     push bp
     mov bp, sp
     or word ptr [bp + 6], 0x40
     pop bp
     iret
+3:  pop ax
+    pop ds
 2:  jmp stubs + 0x16 * 16
 
     # VBE 2.0 : interface en mode protégé 32 bits (INT 10h AX=4F0Ah BL=0). Les

@@ -236,3 +236,19 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 - Gemma n'est PAS encore passé sur `scan-cd27f`.
 
 ### Étape 2 — CPU à 100 % : Dune, IMS, MISG, WARP (en cours)
+- **IMS (INVIT) : cause du 100 % trouvée et corrigée.** L'invité scrute le clavier par `INT 16h AH=11h`
+  à tampon vide ; la ROM (`asm/bios.S`, `int16`) le sert sans sortie de VM, donc l'hôte ne voyait jamais la
+  boucle (et `probe_spin` ne la reconnaît pas : elle traverse des changements de mode de l'extendeur). Une
+  scrutation sur 16 passe maintenant par l'hôte (compteur en 40:F0), dont `idle_poll` endort le vCPU
+  (seuil d'espacement porté à 1 ms pour les appels clavier). IMS : 100 % → 15 % de cœur. L'appel
+  `INT 21h AH=2Ch/2Ah` en boucle serrée est traité de la même façon. Tests : 161 verts.
+  Le bogue « Entrée sans effet » d'IMS reste entier (Entrée est bien lue : INT 16h rend 1C0D).
+- **Dune** : en headless 14 %, en fenêtre le fil `vcpu` monte à ≈ 60 % pendant l'intro ; les compteurs
+  (`spin_sleeps` > 10 000, attente sur 3DAh) montrent que l'attente de retour vertical est déjà endormie :
+  le reste est du calcul réel sans bridage (blit vers A000h). Pas de boucle active à corriger pour l'instant.
+- **MISG** (100 %, écran noir) : l'invité exécute en boucle un opcode invalide (INT 06h, ≈ 40 000/s) à
+  `014D:002B`, octets `F0 6F 00 AF…` (LOCK + OUTSW) : il a sauté dans des données après son dépaqueteur
+  (l'EXE est un exécutable compressé à routine de copie en tête). Cause non trouvée : dépaquetage
+  faussé par une divergence de Bare86, ou démo attendant un autre environnement. `--trace-int` imprime
+  désormais les octets de l'instruction fautive (INT 06h).
+- **WARP** (60 % du temps au-dessus de 0,9 cœur) : pas encore examinée.
