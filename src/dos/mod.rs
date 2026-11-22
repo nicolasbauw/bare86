@@ -17,6 +17,7 @@ mod mscdex;
 mod process;
 mod lfn;
 mod shell;
+mod dos4g;
 mod win32;
 /// Lecteur où Bare86 monte son HX (programmes Win32, `--dpmi`).
 pub use win32::HX_DRIVE;
@@ -354,6 +355,36 @@ impl Dos {
             .unwrap_or_default()
     }
 
+    /// DOS/32A à lancer à la place d'un programme lié à l'amorce de DOS/4G
+    /// quand aucun vrai `DOS4GW.EXE` n'est dans son répertoire ni le PATH
+    /// (voir `dos4g`). `None` : programme d'un autre type, extendeur présent,
+    /// ou DOS/32A indisponible (l'amorce s'exécute alors telle quelle).
+    fn dos32a_loader(&self, mem: &GuestMem, image: &[u8], path: &[u8], tail: &[u8], parent_env: u16) -> Option<win32::Loader> {
+        if !dos4g::needs_extender(image) {
+            return None;
+        }
+        let cut = path.iter().rposition(|&c| c == b'\\')?;
+        let dir = &path[..cut];
+        let path_var = self.env_path(mem, parent_env);
+        let real = |d: &[u8]| {
+            let d = d.strip_suffix(b"\\").unwrap_or(d);
+            matches!(self.drives.resolve(&[d, b"\\DOS4GW.EXE"].concat()),
+                Ok(Target::Path { host, exists: true, .. }) if vfs::is_file(&host) && !vfs::is_builtin(&host))
+        };
+        let others = path_var.split(|&c| c == b';').map(<[u8]>::trim_ascii).filter(|d| !d.is_empty());
+        if real(dir) || others.into_iter().any(real) {
+            return None;
+        }
+        let data = crate::runtime::dos32a()?;
+        let args = tail.trim_ascii_start();
+        let mut line = [&b" "[..], path].concat();
+        if !args.is_empty() {
+            line.push(b' ');
+            line.extend_from_slice(args);
+        }
+        Some(win32::Loader { image: data.to_vec(), path: [dir, b"\\DOS4GW.EXE"].concat(), tail: line, dir: Vec::new() })
+    }
+
     /// Fichier d'un programme : contenu et chemin DOS canonique.
     fn read_program(&self, path: &[u8]) -> std::result::Result<(Vec<u8>, Vec<u8>), u16> {
         match self.drives.resolve(path)? {
@@ -393,7 +424,9 @@ impl Dos {
             eprintln!("[win32] {}: Windows program; HX DOS Extender not found", String::from_utf8_lossy(path));
         }
         self.win32_started |= win32.is_some();
-        let (image, path, tail) = match &win32 {
+        // Amorce DOS/4G sans extendeur sur le disque : DOS/32A lance le programme.
+        let dos32a = if win32.is_none() { self.dos32a_loader(mem, image, path, tail, parent_env) } else { None };
+        let (image, path, tail) = match win32.as_ref().or(dos32a.as_ref()) {
             Some(l) => (&l.image[..], &l.path[..], &l.tail[..]),
             None => (image, path, tail),
         };

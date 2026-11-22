@@ -84,6 +84,11 @@ fn builtin(p: &Path) -> Option<&'static [u8]> {
     absent().then_some(*data)
 }
 
+/// Fichier fourni par Bare86 (absent de l'hôte), et non un vrai fichier.
+pub fn is_builtin(p: &Path) -> bool {
+    fs::symlink_metadata(p).is_err() && builtin(p).is_some()
+}
+
 fn not_found() -> io::Error {
     io::Error::from(io::ErrorKind::NotFound)
 }
