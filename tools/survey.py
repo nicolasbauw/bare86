@@ -476,6 +476,7 @@ def main():
     ap.add_argument("--no-gus", dest="gus", action="store_false", help="sans Gravis UltraSound")
     ap.add_argument("--win32", action="store_true", help="lancer aussi les programmes Windows (par HX)")
     ap.add_argument("--filter", help="expression régulière sur le chemin relatif des éléments")
+    ap.add_argument("--items", help="fichier : un chemin relatif d'élément par ligne (comme `item` dans results.jsonl)")
     ap.add_argument("--max", type=int, help="au plus N éléments (essais)")
     ap.add_argument("--redo", action="store_true", help="refaire les éléments déjà traités")
     ap.add_argument("--retry-static", metavar="KEYS", help="relancer seulement les éléments figés (dernier résultat), avec ce script de touches")
@@ -498,6 +499,9 @@ def main():
     items = collect(src)
     if args.filter:
         items = [i for i in items if re.search(args.filter, os.path.relpath(i, src), re.I)]
+    if args.items:
+        wanted = {l.strip() for l in open(args.items) if l.strip()}
+        items = [i for i in items if os.path.relpath(i, src) in wanted]
     if args.retry_static:
         args.keys = args.retry_static
         items = [i for i in items if last.get(ident(os.path.relpath(i, src)), {}).get("static")]
