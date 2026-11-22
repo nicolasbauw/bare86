@@ -23,6 +23,12 @@ Résultats dans RÉSULTATS :
 `error` (message d'erreur de Bare86), `timeout`, `no-exe`, `win32`
 (programme Windows, non lancé sans `--win32`), `bad-archive`.
 
+Paramètres : si un .BAT du dossier lance l'exécutable avec des arguments
+(GO.BAT…), ils sont repris (`args` dans le résultat). `--screen` met le texte
+de l'écran dans la sortie : un message sur le DPMI déclenche un second essai
+avec `--dpmi`, et une demande de paramètres (« usage… ») est notée `usage`
+pour un examen à la main.
+
 Les archives sont des données non fiables : décompressées chacune dans un
 dossier vide, jamais exécutées hors de Bare86. Les dossiers de travail sont
 effacés après chaque élément (sauf `--keep-work`). Prévoir une destination
@@ -139,6 +145,36 @@ def pick(work, name_hint):
     return main, k, [os.path.relpath(p, work) for p, _ in found[1:]]
 
 
+def bat_args(exe):
+    """Arguments avec lesquels un .BAT du même dossier lance cet exécutable
+    (GO.BAT, RUN.BAT…) : liste vide s'il n'y en a pas. Les lignes qui
+    dépendent de paramètres du .BAT (%1…) sont ignorées."""
+    d = os.path.dirname(exe)
+    stem = os.path.splitext(os.path.basename(exe))[0].lower()
+    try:
+        bats = sorted(f for f in os.listdir(d) if f.lower().endswith(".bat"))
+    except OSError:
+        return []
+    for b in bats:
+        try:
+            with open(os.path.join(d, b), encoding="latin-1") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            words = line.strip().lstrip("@").split()
+            if words and words[0].lower() in ("call", "start"):
+                words = words[1:]
+            if len(words) < 2 or "%" in line or "|" in line or "<" in line or ">" in line:
+                continue
+            name = words[0].lower()
+            if name.endswith((".exe", ".com")):
+                name = name[:-4]
+            if name == stem:
+                return words[1:]
+    return []
+
+
 def nearly_same(a, b):
     """Deux captures presque identiques (au plus 0,5 % de pixels différents :
     un curseur qui clignote ne compte pas)."""
@@ -159,6 +195,10 @@ def sound_peak(path):
         return max((abs(x) for x in a[::7]), default=0)
     except Exception:
         return -1
+
+
+def status_exit(res):
+    return res.get("status") in ("exit", "error")
 
 
 def run_one(item, args, src):
@@ -190,13 +230,20 @@ def run_one(item, args, src):
             res["status"] = "win32"
             return res
         wav = os.path.join(shots, "sound.wav")
+        # --screen : le texte de l'écran est aussi dans la sortie, même quand le
+        # programme rend la main au DOS avant la limite (message de DPMI absent…).
         cmd = [args.bare86, "--no-realtime", "--limit", str(args.limit), "--shot", os.path.join(shots, "f.png"),
-               "--shot-every", str(args.every), "--wav", wav, "--keys", args.keys]
+               "--shot-every", str(args.every), "--wav", wav, "--keys", args.keys, "--screen"]
         if args.gus:
             cmd.append("--gus")
         if args.mips:
             cmd += ["--mips", str(args.mips)]
         cmd.append(os.path.basename(exe))
+        # Paramètres : ceux d'un .BAT du dossier qui lance cet exécutable.
+        extra = bat_args(exe)
+        if extra:
+            cmd += extra
+            res["args"] = extra
         out = ""
         for attempt in range(2):
             try:
@@ -227,6 +274,10 @@ def run_one(item, args, src):
         if "screen:" in out:
             screen = out.split("screen:", 1)[1]
             res["screen"] = " | ".join(s.strip() for s in screen.splitlines() if s.strip())[:300]
+        # Le programme réclame des paramètres : à regarder à la main.
+        use = next((l.strip() for l in lines if re.search(r"usage|parameter|argument|syntax|command.?line", l, re.I) and "[int]" not in l), "")
+        if use and status_exit(res):
+            res["usage"] = use[:120]
         res["sound_peak"] = sound_peak(wav)
         try:
             os.remove(wav)
