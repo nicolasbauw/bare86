@@ -8,7 +8,7 @@ cette machine : http://localhost:13305/api/v1).
       --question "Décris ces images en une phrase. Y voit-on un cochon ?"
 
 Pour chaque élément (dernier résultat de `results.jsonl` qui a une planche),
-la planche `sheets/ID.png` est envoyée avec la question ; la réponse est
+les planches `sheets/ID.png`, `ID.2.png`… sont envoyées une à une avec la question ; la réponse est
 ajoutée à `asks.jsonl` (id, question, modèle, réponse). Reprend là où il
 s'est arrêté (même question et même modèle). `--grep MOT` affiche ensuite
 les éléments dont la réponse contient MOT.
@@ -49,6 +49,17 @@ def ask(url, model, question, png, timeout):
     return (msg.get("content") or "").strip() or (msg.get("reasoning_content") or "").strip()
 
 
+def sheets_of(out, i):
+    """Planches d'un élément : `ID.png`, puis `ID.2.png`, `ID.3.png`… (mode --full de survey.py)."""
+    d = os.path.join(out, "sheets")
+    found = [os.path.join(d, i + ".png")] if os.path.exists(os.path.join(d, i + ".png")) else []
+    n = 2
+    while os.path.exists(os.path.join(d, f"{i}.{n}.png")):
+        found.append(os.path.join(d, f"{i}.{n}.png"))
+        n += 1
+    return found
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True, help="dossier de résultats de tools/survey.py")
@@ -78,13 +89,17 @@ def main():
             a = json.loads(l)
             if a["question"] == args.question and a["model"] == args.model:
                 done.add(a["id"])
-    todo = [i for i in last if i not in done and os.path.exists(os.path.join(args.out, "sheets", i + ".png"))]
+    todo = [i for i in last if i not in done and sheets_of(args.out, i)]
     if args.max:
         todo = todo[:args.max]
     print(f"{len(todo)} planches à interroger ({len(done)} déjà faites)", flush=True)
     for n, i in enumerate(todo, 1):
         try:
-            answer = ask(args.url, args.model, args.question, os.path.join(args.out, "sheets", i + ".png"), args.timeout)
+            sheets = sheets_of(args.out, i)
+            answers = [ask(args.url, args.model, args.question, sheet, args.timeout) for sheet in sheets]
+            # Plusieurs planches : réponses réunies, une par planche (le filtre --grep
+            # trouve donc un « PIG: yes » de n'importe laquelle).
+            answer = answers[0] if len(answers) == 1 else "\n".join(f"[planche {k}] {a}" for k, a in enumerate(answers, 1))
         except Exception as e:
             print(f"[{n}/{len(todo)}] {i}: erreur {e}", flush=True)
             continue

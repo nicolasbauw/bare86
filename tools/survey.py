@@ -219,6 +219,76 @@ def param_candidates(out):
     return ["x"] + found[:3]
 
 
+def thumb(path):
+    """Vignette 32×20 en niveaux de gris (640 octets) pour comparer des captures."""
+    r = subprocess.run(["magick", path, "-resize", "32x20!", "-colorspace", "Gray", "-depth", "8", "gray:-"], capture_output=True)
+    return r.stdout
+
+
+def thumb_diff(a, b):
+    """Écart moyen (0 à 255) entre deux vignettes."""
+    return sum(abs(x - y) for x, y in zip(a, b)) / max(1, min(len(a), len(b)))
+
+
+def watch_run(command, cwd, shots, args, timeout):
+    """Lance le programme et surveille les captures (mode --full) : on ne garde
+    que celles qui diffèrent de la dernière gardée de plus de `--change`
+    (changement de scène), les autres sont effacées au fil de l'eau ; sans
+    nouvelle image gardée pendant `--idle` secondes (écran figé : menu final,
+    boucle), le programme est arrêté. Rend (sortie, expiré, nombre gardé, arrêté)."""
+    for f in os.listdir(shots):
+        if f.endswith(".png"):
+            os.remove(os.path.join(shots, f))
+    proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    chunks = []
+    reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()), daemon=True)
+    reader.start()
+    kept, last_thumb, seen = [], None, set()
+    t0 = last_new = time.time()
+    killed = timed = False
+    while proc.poll() is None:
+        time.sleep(2)
+        now = time.time()
+        for f in sorted(os.listdir(shots)):
+            path = os.path.join(shots, f)
+            if not f.endswith(".png") or f == "f.png" or f in seen or now - os.path.getmtime(path) < 1.5:
+                continue
+            seen.add(f)
+            t = thumb(path)
+            if last_thumb is None or thumb_diff(t, last_thumb) > args.change:
+                kept.append(f)
+                last_thumb, last_new = t, now
+            else:
+                os.remove(path)
+        if args.idle and now - last_new > args.idle and now - t0 > 30:
+            proc.terminate()
+            killed = True
+            break
+        if now - t0 > timeout:
+            proc.kill()
+            timed = True
+            break
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    reader.join(timeout=10)
+    out = (chunks[0] if chunks else b"").decode(errors="replace")
+    if killed:
+        out += "\ntime limit reached (idle: screen unchanged)\n"
+    # Captures restantes non encore traitées (fin de course) : même tri.
+    for f in sorted(os.listdir(shots)):
+        path = os.path.join(shots, f)
+        if f.endswith(".png") and f != "f.png" and f not in seen:
+            t = thumb(path)
+            if last_thumb is None or thumb_diff(t, last_thumb) > args.change:
+                kept.append(f)
+                last_thumb = t
+            else:
+                os.remove(path)
+    return out, timed, len(kept), killed
+
+
 def status_exit(res):
     return res.get("status") in ("exit", "error")
 
@@ -255,7 +325,9 @@ def run_one(item, args, src):
         # --screen : le texte de l'écran est aussi dans la sortie, même quand le
         # programme rend la main au DOS avant la limite (message de DPMI absent…).
         cmd = [args.bare86, "--no-realtime", "--limit", str(args.limit), "--shot", os.path.join(shots, "f.png"),
-               "--shot-every", str(args.every), "--wav", wav, "--keys", args.keys, "--screen"]
+               "--shot-every", str(args.every), "--keys", args.keys, "--screen"]
+        if not args.full:
+            cmd += ["--wav", wav]
         if args.gus:
             cmd.append("--gus")
         if args.mips:
@@ -275,6 +347,10 @@ def run_one(item, args, src):
         timed = False
 
         def execute(command):
+            if args.full:
+                out, timed, kept, killed = watch_run(command, os.path.dirname(exe), shots, args, args.limit + 90)
+                res["kept"], res["idle_killed"] = kept, killed
+                return out, timed
             try:
                 p = subprocess.run(command, cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                    errors="replace", timeout=args.limit + 90)
@@ -339,8 +415,17 @@ def run_one(item, args, src):
         if res["shots"]:
             sheet = os.path.join(args.out, "sheets", iid + ".png")
             files = [os.path.join(shots, f) for f in res["shots"] if f != "f.png"] or [os.path.join(shots, "f.png")]
-            subprocess.run(["montage", *files, "-geometry", "160x120+2+2", "-tile", f"{len(files)}x1", sheet],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if args.full:
+                # Scènes distinctes : planches de 6 images (3 × 2, 320×200), `ID.png`
+                # (la première, pour la revue) puis `ID.2.png`, `ID.3.png`…
+                files = files[:args.max_frames]
+                for n in range(0, len(files), 6):
+                    name = sheet if n == 0 else os.path.join(args.out, "sheets", f"{iid}.{n // 6 + 1}.png")
+                    subprocess.run(["montage", *files[n:n + 6], "-geometry", "320x200+2+2", "-tile", "3x", name],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(["montage", *files, "-geometry", "160x120+2+2", "-tile", f"{len(files)}x1", sheet],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if not args.keep_work:
             shutil.rmtree(work, ignore_errors=True)
 
@@ -383,6 +468,10 @@ def main():
     ap.add_argument("--limit", type=int, default=60, help="secondes par élément (défaut 60)")
     ap.add_argument("--every", type=float, default=5, help="secondes entre deux captures (défaut 5)")
     ap.add_argument("--mips", type=int, default=200, help="bridage (défaut 200, la règle des démos ; 0 : pleine vitesse)")
+    ap.add_argument("--full", action="store_true", help="durée complète : captures denses (--every), seules les scènes distinctes sont gardées, arrêt si l'écran ne change plus (--idle)")
+    ap.add_argument("--change", type=float, default=5.0, help="--full : écart moyen (0-255, vignettes 32×20) pour compter comme une nouvelle scène (défaut 5)")
+    ap.add_argument("--idle", type=int, default=60, help="--full : secondes sans nouvelle scène avant d'arrêter le programme (défaut 60, 0 : jamais)")
+    ap.add_argument("--max-frames", type=int, default=48, help="--full : scènes gardées au plus par programme (défaut 48, soit 8 planches)")
     ap.add_argument("--keys", default=DEFAULT_KEYS, help="script de touches (défaut : aucune touche, entrée gardée ouverte)")
     ap.add_argument("--no-gus", dest="gus", action="store_false", help="sans Gravis UltraSound")
     ap.add_argument("--win32", action="store_true", help="lancer aussi les programmes Windows (par HX)")
