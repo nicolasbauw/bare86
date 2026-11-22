@@ -697,6 +697,8 @@ impl<B: Backend> Pc<B> {
         io.map(0x70..=0x71, Box::new(crate::rtc::RtcPorts(rtc.clone())));
         io.map(0x3B4..=0x3BA, Box::new(VgaPorts(vga.clone())));
         io.map(0x3C0..=0x3DF, Box::new(VgaPorts(vga.clone())));
+        // Interface VBE 2.0 en mode protégé (code de la ROM).
+        io.map(crate::vga::VBE_PM_WINDOW..=crate::vga::VBE_PM_START_Y + 1, Box::new(VgaPorts(vga.clone())));
         let kbc = Kbc::new().shared();
         io.map(0x60..=0x60, Box::new(KbcPorts(kbc.clone())));
         io.map(0x64..=0x64, Box::new(KbcPorts(kbc.clone())));

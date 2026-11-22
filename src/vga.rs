@@ -200,6 +200,8 @@ pub enum Access {
 pub struct Vga {
     /// Mode VBE en cours (sinon : modes VGA standard).
     pub vbe: Option<Vbe>,
+    /// Abscisse du début d'affichage écrite par l'interface protégée VBE.
+    vbe_pm_x: usize,
     /// Écritures du registre 0Ch du CRTC (adresse de début, octet haut) :
     /// une par changement de page, d'où la cadence d'affichage d'un jeu.
     pub start_writes: u64,
@@ -241,6 +243,7 @@ impl Vga {
     pub fn new() -> std::io::Result<Self> {
         let mut v = Self {
             vbe: None,
+            vbe_pm_x: 0,
             start_writes: 0,
             vram: Vram::new()?,
             latch: [0; 4],
@@ -589,6 +592,17 @@ impl Vga {
         u8::from(vblank || hblank) | if vsync { 0x08 } else { 0 }
     }
 
+    /// Écriture sur un port de l'interface VBE protégée : banque, ou début
+    /// d'affichage (l'ordonnée, écrite en dernier, le fait prendre effet).
+    fn vbe_pm_write(&mut self, port: u16, value: u16) {
+        let Some(v) = &mut self.vbe else { return };
+        match port {
+            VBE_PM_WINDOW => v.bank = usize::from(value),
+            VBE_PM_START_X => self.vbe_pm_x = usize::from(value),
+            _ => v.start = usize::from(value) * v.pitch + self.vbe_pm_x * v.bpp.div_ceil(8),
+        }
+    }
+
     /// Temps restant avant le prochain blanc vertical (nul pendant celui-ci).
     pub fn until_vblank(&self) -> std::time::Duration {
         let (lines, visible, _) = self.vertical();
@@ -895,15 +909,28 @@ pub fn default_dac() -> [[u8; 3]; 256] {
 /// Ports 3B4h–3DFh.
 pub struct VgaPorts(pub std::rc::Rc<std::cell::RefCell<Vga>>);
 
+/// Ports de l'interface VBE 2.0 en mode protégé (code de la ROM,
+/// `asm/bios.S`) : fenêtre, abscisse et ordonnée du début d'affichage.
+pub const VBE_PM_WINDOW: u16 = 0x1D0;
+pub const VBE_PM_START_X: u16 = 0x1D2;
+pub const VBE_PM_START_Y: u16 = 0x1D4;
+
 impl IoDevice for VgaPorts {
     fn read(&mut self, port: u16, size: u8) -> u32 {
         let mut v = self.0.borrow_mut();
+        if port == VBE_PM_WINDOW {
+            return v.vbe.as_ref().map_or(0, |b| b.bank as u32);
+        }
         let lo = u32::from(v.port_read(port));
         if size == 2 { lo | u32::from(v.port_read(port + 1)) << 8 } else { lo }
     }
 
     fn write(&mut self, port: u16, size: u8, value: u32) {
         let mut v = self.0.borrow_mut();
+        if matches!(port, VBE_PM_WINDOW | VBE_PM_START_X | VBE_PM_START_Y) {
+            v.vbe_pm_write(port, value as u16);
+            return;
+        }
         v.port_write(port, value as u8);
         // OUT 16 bits sur un index : index puis donnée (port suivant).
         if size == 2 {
@@ -919,6 +946,23 @@ mod tests {
     fn set(v: &mut Vga, port: u16, idx: u8, val: u8) {
         v.port_write(port, idx);
         v.port_write(port + 1, val);
+    }
+
+    #[test]
+    fn vbe_protected_mode_ports() {
+        let mut v = Vga::new().unwrap();
+        let mode = Vbe { mode: 0x101, width: 640, height: 480, bpp: 8, pitch: 640, start: 0, bank: 0, lfb: false };
+        v.set_vbe(mode, true);
+        v.vbe_pm_write(VBE_PM_WINDOW, 3);
+        assert_eq!(v.vbe.as_ref().unwrap().bank, 3);
+        // Abscisse puis ordonnée : l'ordonnée fait prendre effet.
+        v.vbe_pm_write(VBE_PM_START_X, 10);
+        v.vbe_pm_write(VBE_PM_START_Y, 2);
+        assert_eq!(v.vbe.as_ref().unwrap().start, 2 * 640 + 10);
+        // Hors mode VBE : sans effet.
+        let mut w = Vga::new().unwrap();
+        w.vbe_pm_write(VBE_PM_WINDOW, 3);
+        assert!(w.vbe.is_none());
     }
 
     #[test]

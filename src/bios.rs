@@ -102,6 +102,9 @@ const VBE_PRODUCT: u16 = 0xE900;
 const VBE_REVISION: u16 = 0xE910;
 /// Liste des modes VBE (écrite par `install_rom`, terminée par FFFFh).
 const VBE_MODES: u16 = 0xEA00;
+/// Interface VBE 2.0 en mode protégé (table et code 32 bits, `asm/bios.S`) et sa longueur.
+const VBE_PM: u16 = 0xEC00;
+const VBE_PM_LEN: u16 = 0x8A;
 
 /// Modes VBE : numéro, largeur, hauteur, bits par point. Numéros de VBE 1.2
 /// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
@@ -667,7 +670,15 @@ impl Bios {
                 }
                 true
             }
-            // Sauvegarde d'état (04h), interface protégée (0Ah) : absentes.
+            // Interface protégée : table en ROM (VBE 2.0 seulement), que le
+            // programme copie dans son propre segment.
+            0x0A if self.vbe2 && cpu.lo(BX) == 0 => {
+                cpu.set_sreg(ES, ROM_SEG);
+                cpu.set_w(DI, VBE_PM);
+                cpu.set_w(CX, VBE_PM_LEN);
+                true
+            }
+            // Sauvegarde d'état (04h) : absente.
             _ => false,
         };
         cpu.set_w(AX, if ok { 0x004F } else { 0x014F });

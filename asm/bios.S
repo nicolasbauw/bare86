@@ -249,6 +249,75 @@ int16:
     iret
 2:  jmp stubs + 0x16 * 16
 
+    # VBE 2.0 : interface en mode protégé 32 bits (INT 10h AX=4F0Ah BL=0). Les
+    # programmes copient cette table, puis appellent ses fonctions (appel
+    # proche, registres de 4F05h, 4F07h et 4F09h) depuis leur propre segment.
+    # Les ports 1D0h (fenêtre), 1D2h et 1D4h (début d'affichage : x puis y)
+    # sont ceux de l'hôte ; la palette passe par le DAC (3C8h-3C9h).
+    .org 0xEC00, 0xFF
+vbe_pm:
+    .word pm_window - vbe_pm, pm_start - vbe_pm, pm_palette - vbe_pm, pm_ports - vbe_pm
+pm_window:
+    .code32
+    cmp bh, 1
+    je 1f
+    push eax
+    push edx
+    mov ax, dx
+    mov dx, 0x1D0
+    out dx, ax
+    pop edx
+    pop eax
+    ret
+1:  push eax
+    mov dx, 0x1D0
+    in ax, dx
+    mov dx, ax
+    pop eax
+    ret
+pm_start:
+    push eax
+    push edx
+    mov ax, cx
+    mov dx, 0x1D2
+    out dx, ax
+    pop edx
+    push edx
+    mov ax, dx
+    mov dx, 0x1D4
+    out dx, ax
+    pop edx
+    pop eax
+    ret
+pm_palette:
+    push eax
+    push ecx
+    push edx
+    push edi
+    movzx ecx, cx
+    mov al, dl
+    mov dx, 0x3C8
+    out dx, al
+    inc dx
+2:  mov al, es:[edi + 2]
+    out dx, al
+    mov al, es:[edi + 1]
+    out dx, al
+    mov al, es:[edi]
+    out dx, al
+    add edi, 4
+    loop 2b
+    pop edi
+    pop edx
+    pop ecx
+    pop eax
+    ret
+    .code16
+pm_ports:
+    .word 0x1D0, 0x1D2, 0x1D4, 0x3C0, 0x3C4, 0x3C5, 0x3C6, 0x3C7, 0x3C8, 0x3C9, 0x3CE, 0x3CF, 0x3D4, 0x3D5, 0x3DA, 0xFFFF
+    .word 0xFFFF
+vbe_pm_end:
+
     # Table des paramètres de disquette (vecteur 1Eh, INT 13h AH=08h), à son
     # adresse traditionnelle : 1,44 Mo, 18 secteurs par piste.
     .org 0xEFC7, 0xFF
