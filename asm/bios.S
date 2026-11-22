@@ -252,7 +252,7 @@ int16:
     # VBE 2.0 : interface en mode protégé 32 bits (INT 10h AX=4F0Ah BL=0). Les
     # programmes copient cette table, puis appellent ses fonctions (appel
     # proche, registres de 4F05h, 4F07h et 4F09h) depuis leur propre segment.
-    # Les ports 1D0h (fenêtre), 1D2h et 1D4h (début d'affichage : x puis y)
+    # Les ports 1D0h (fenêtre), 1D2h et 1D4h (début d'affichage : CX puis DX, mots bas et haut de l'adresse en dwords)
     # sont ceux de l'hôte ; la palette passe par le DAC (3C8h-3C9h).
     .org 0xEC00, 0xFF
 vbe_pm:

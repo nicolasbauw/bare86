@@ -200,8 +200,8 @@ pub enum Access {
 pub struct Vga {
     /// Mode VBE en cours (sinon : modes VGA standard).
     pub vbe: Option<Vbe>,
-    /// Abscisse du début d'affichage écrite par l'interface protégée VBE.
-    vbe_pm_x: usize,
+    /// Mot bas de l'adresse de début d'affichage écrit par l'interface protégée VBE.
+    vbe_pm_lo: usize,
     /// Écritures du registre 0Ch du CRTC (adresse de début, octet haut) :
     /// une par changement de page, d'où la cadence d'affichage d'un jeu.
     pub start_writes: u64,
@@ -243,7 +243,7 @@ impl Vga {
     pub fn new() -> std::io::Result<Self> {
         let mut v = Self {
             vbe: None,
-            vbe_pm_x: 0,
+            vbe_pm_lo: 0,
             start_writes: 0,
             vram: Vram::new()?,
             latch: [0; 4],
@@ -593,13 +593,15 @@ impl Vga {
     }
 
     /// Écriture sur un port de l'interface VBE protégée : banque, ou début
-    /// d'affichage (l'ordonnée, écrite en dernier, le fait prendre effet).
+    /// d'affichage : adresse de 32 bits en dwords (CX = bits 0 à 15, DX = bits
+    /// 16 à 31, fonction 07h du mode protégé, qui n'est pas celle de INT 10h) ;
+    /// le mot haut, écrit en dernier, la fait prendre effet.
     fn vbe_pm_write(&mut self, port: u16, value: u16) {
         let Some(v) = &mut self.vbe else { return };
         match port {
             VBE_PM_WINDOW => v.bank = usize::from(value),
-            VBE_PM_START_X => self.vbe_pm_x = usize::from(value),
-            _ => v.start = usize::from(value) * v.pitch + self.vbe_pm_x * v.bpp.div_ceil(8),
+            VBE_PM_START_LO => self.vbe_pm_lo = usize::from(value),
+            _ => v.start = ((usize::from(value) << 16) | self.vbe_pm_lo) * 4,
         }
     }
 
@@ -910,10 +912,10 @@ pub fn default_dac() -> [[u8; 3]; 256] {
 pub struct VgaPorts(pub std::rc::Rc<std::cell::RefCell<Vga>>);
 
 /// Ports de l'interface VBE 2.0 en mode protégé (code de la ROM,
-/// `asm/bios.S`) : fenêtre, abscisse et ordonnée du début d'affichage.
+/// `asm/bios.S`) : fenêtre, puis début d'affichage (CX et DX de la fonction 07h).
 pub const VBE_PM_WINDOW: u16 = 0x1D0;
-pub const VBE_PM_START_X: u16 = 0x1D2;
-pub const VBE_PM_START_Y: u16 = 0x1D4;
+pub const VBE_PM_START_LO: u16 = 0x1D2;
+pub const VBE_PM_START_HI: u16 = 0x1D4;
 
 impl IoDevice for VgaPorts {
     fn read(&mut self, port: u16, size: u8) -> u32 {
@@ -927,7 +929,7 @@ impl IoDevice for VgaPorts {
 
     fn write(&mut self, port: u16, size: u8, value: u32) {
         let mut v = self.0.borrow_mut();
-        if matches!(port, VBE_PM_WINDOW | VBE_PM_START_X | VBE_PM_START_Y) {
+        if matches!(port, VBE_PM_WINDOW | VBE_PM_START_LO | VBE_PM_START_HI) {
             v.vbe_pm_write(port, value as u16);
             return;
         }
@@ -955,10 +957,10 @@ mod tests {
         v.set_vbe(mode, true);
         v.vbe_pm_write(VBE_PM_WINDOW, 3);
         assert_eq!(v.vbe.as_ref().unwrap().bank, 3);
-        // Abscisse puis ordonnée : l'ordonnée fait prendre effet.
-        v.vbe_pm_write(VBE_PM_START_X, 10);
-        v.vbe_pm_write(VBE_PM_START_Y, 2);
-        assert_eq!(v.vbe.as_ref().unwrap().start, 2 * 640 + 10);
+        // Adresse en dwords : mot bas puis mot haut (qui fait prendre effet).
+        v.vbe_pm_write(VBE_PM_START_LO, 0x0010);
+        v.vbe_pm_write(VBE_PM_START_HI, 0x0002);
+        assert_eq!(v.vbe.as_ref().unwrap().start, ((2 << 16) | 0x10) * 4);
         // Hors mode VBE : sans effet.
         let mut w = Vga::new().unwrap();
         w.vbe_pm_write(VBE_PM_WINDOW, 3);

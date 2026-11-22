@@ -1,6 +1,6 @@
 # VBE 2.0 : interface en mode protégé 32 bits (INT 10h AX=4F0Ah). Mode 101h, table
 # demandée en mode réel, puis en mode protégé : fenêtre (réglage et lecture),
-# début d'affichage (x=10, y=2) et palette (entrées 7 et 8 : B,G,R = 1,2,3 et 4,5,6).
+# début d'affichage (CX=0100h, DX=0002h : adresse en dwords) et palette (entrées 7 et 8 : B,G,R = 1,2,3 et 4,5,6).
 # Code de sortie : 0, ou n° du contrôle en échec ; le test Rust relit l'état de la carte.
     .code16
     .intel_syntax noprefix
@@ -78,7 +78,7 @@ pm32:
     call edi
     movzx eax, word ptr [esi + 2]   # début d'affichage
     add eax, esi
-    mov cx, 10
+    mov cx, 0x0100
     mov dx, 2
     xor ebx, ebx
     call eax
