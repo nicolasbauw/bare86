@@ -258,3 +258,34 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   `cd ~/Dev/dos-progs/dune && BARE86_PROFILE_IP=1 bare86 --window …`, aller sur la scène, quitter.
   Dune, intro (15 s, headless) : 94 % dans trois blocs (0000ECE0, 0000EC70, 0000FE10) : boucles serrées.
 - **Dune, carte (« see dune map »)** : constat de l'utilisateur, à mesurer avec le profileur depuis la carte.
+
+### Étape 3 — démos douteuses du CD 27 (faite en partie)
+- **CYC_OOM** : réglée, 1 → 63 scènes. Menu à trois questions : carte (`2` = GUS), port (`4` = 240h),
+  IRQ (`3` = entrée « 3)=7 »), sans Entrée. Profil écrit à la main dans `profiles.json`.
+- **FELLOW** : réglée, 0 → 27 scènes. Le `FELLOW.CFG` d'auteur visait le port 220h (GUS en 240h d'où
+  « hardware failure »). Nouveau champ de profil `prep` (étapes sur une COPIE du dossier : `remove`,
+  `run` avec touches) : suppression du .CFG puis `SETUP.EXE` (5 Entrées) qui écrit la bonne config.
+  Une touche pendant la démo la fait quitter : profil `{wait:900000}` seul.
+- **WIPE_N64** (64K_2) : `INT 10h AX=1112` (police 8×8, texte 80×50) ajouté à Bare86 (BIOS + rendu :
+  50 lignes de 8 points, police 8×16 lue une ligne sur deux) ; l'avertissement « not handled » a disparu.
+  Toujours noir puis rouge uni après 20 s, avec beaucoup d'activité (13 000 écritures de palette, 777
+  changements de début d'affichage, 4 M accès VRAM émulés, mode graphique en accès direct aux registres) :
+  hypothèse = effet de palette ou de début d'affichage mal rendu ; NON résolu. Aucune touche n'y change rien.
+- **WARP** (CPU 60 %) : pas une boucle d'attente : le profileur montre un code réparti sur de nombreux blocs
+  (calcul d'effets) ; la démo est simplement lourde. Rien à corriger.
+- **MISG, LowRes'97 (64K_5)** : pas retouchés (voir étapes précédentes).
+
+### Pour la reprise (état au 2026-11-22, ~23 h)
+1. CD 27 : relancer le balayage complet avec les correctifs (IMS endormi, FELLOW, CYC_OOM, 80×50) :
+   `python3 -I tools/survey.py --src "$PC/dos-demos" --out "$PC/scan-cd27f" --items <liste des 28> --redo
+   --probe 25 --profiles "$PC/profiles.json" --full --every 2 --idle 60 --limit 600 --jobs 4`, puis
+   `python3 -I tools/audit.py "$PC/scan-cd27f"` : l'échantillon est « fiable » quand plus aucune démo n'a
+   les drapeaux FEW/ERR/STATIC sans explication consignée. Restent douteuses : WIPE_N64, MISG, 64K_5, INVIT.
+2. **Dune, carte** : lancer avec `BARE86_PROFILE_IP=1 bare86 --window …`, aller sur la carte, quitter,
+   fournir le bloc « profile » (utilisateur en remote ; à faire plus tard).
+3. MISG : comprendre pourquoi le dépaqueteur saute dans des données (LOCK OUTSW en 014D:002B).
+4. WIPE_N64 : examiner le mode graphique (palette / début d'affichage) ; 64K_5 : comparer à une vidéo.
+5. IMS : « Entrée sans effet » (bloque ≈ 30 démos) : toujours à diagnostiquer.
+6. Ensuite seulement : Gemma sur `scan-cd27f` (`tools/survey_ask.py`), puis CD 28 et suivants avec la même
+   chaîne (sonde de touches corrigée, audit, CPU), un CD à la fois, revue avant de continuer.
+7. `.BAT` (interpréteur de lots) toujours à faire, après accord.

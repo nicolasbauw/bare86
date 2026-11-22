@@ -184,7 +184,13 @@ fn render_vbe(vga: &Vga, v: &crate::vga::Vbe, out: &mut Vec<u32>) -> (usize, usi
 /// curseur selon sa forme dans la BDA. `blink_on` : phase visible.
 pub fn render_text(vga: &Vga, mem: &GuestMem, font: &crate::font::Font, blink_on: bool, out: &mut Vec<u32>) -> Option<(usize, usize)> {
     let snap = crate::bios::text_snapshot(mem)?;
-    let (fw, fh) = (font.width, font.height);
+    // Hauteur de cellule du BIOS (INT 10h AX=1112 : 8 points, 80×50) ; la police 8×16 est
+    // alors lue une ligne sur deux.
+    let fw = font.width;
+    let fh = match usize::from(mem.read_u8(0x485)) {
+        h @ 1..=31 if h < font.height => h,
+        _ => font.height,
+    };
     let (w, h) = (snap.cols * fw, snap.rows * fh);
     out.clear();
     out.resize(w * h, 0);
@@ -200,7 +206,7 @@ pub fn render_text(vga: &Vga, mem: &GuestMem, font: &crate::font::Font, blink_on
             }
             let fg_rgb = dac_rgb(vga, attr_color(vga, fg));
             for y in 0..fh {
-                let bits = font.row(ch, y);
+                let bits = font.row(ch, y * font.height / fh);
                 let line = &mut out[(row * fh + y) * w + col * fw..][..fw];
                 for (x, px) in line.iter_mut().enumerate() {
                     *px = if bits >> (7 - x) & 1 != 0 { fg_rgb } else { bg_rgb };

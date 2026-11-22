@@ -491,6 +491,18 @@ impl Bios {
             // du rendu texte. Les polices chargées par le programme (plan 2)
             // ne sont pas encore affichées.
             0x11 if matches!(al, 0x04 | 0x14) => {}
+            // Police 8×8 avec reprogrammation (AL=12h, 22h) : mode texte 80×50 (WIPE_N64). La
+            // police 8×16 de la ROM sert de source (une ligne sur deux) au rendu.
+            0x11 if matches!(al, 0x12 | 0x22) => {
+                if mem.read_u8(bda::VIDEO_MODE) <= 3 {
+                    mem.write_u8(bda::CHAR_HEIGHT, 8);
+                    mem.write_u8(bda::ROWS, 49);
+                    mem.write_u16(bda::PAGE_SIZE, 8192);
+                    mem.write_u16(bda::CURSOR_SHAPE, 0x0607);
+                }
+            }
+            // Autres chargements de police (8×14, 8×16, 8×8 sans reprogrammation) : sans effet visible.
+            0x11 if matches!(al, 0x00..=0x03 | 0x10..=0x11 | 0x20..=0x24) => {}
             // Informations sur la police : ES:BP selon BH (00h INT 1Fh,
             // 01h INT 43h, 02h 8×14, 06h 8×16, 05h/07h remplacements 9
             // points) ; 8×8 (03h, 04h) pas encore en ROM : 0000:0000.
