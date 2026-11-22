@@ -97,6 +97,19 @@ fn vbe_banks() {
 }
 
 #[test]
+fn vbe_protected_mode_interface() {
+    let (code, _, pc) = run(program!("vbe_pm"));
+    assert_eq!(code, 0, "n° du contrôle en échec (voir asm/tests/vbe_pm.S)");
+    let vga = pc.vga();
+    let fb = vga.fb();
+    assert_eq!((fb[0], fb[0x1_0000]), (0x11, 0x22));
+    let v = vga.vbe.as_ref().expect("mode VBE");
+    assert_eq!(v.bank, 1);
+    assert_eq!(v.start, 2 * 640 + 10);
+    assert_eq!((vga.dac[7], vga.dac[8]), ([3, 2, 1], [6, 5, 4]));
+}
+
+#[test]
 fn protected_mode_burst() {
     let (code, _, pc) = run(program!("pmode"));
     assert_eq!(code, 0x5A);
