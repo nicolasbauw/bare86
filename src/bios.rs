@@ -106,8 +106,8 @@ const VBE_MODES: u16 = 0xEA00;
 /// Modes VBE : numéro, largeur, hauteur, bits par point. Numéros de VBE 1.2
 /// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
 /// parcourent la liste et lisent les caractéristiques de chaque mode) : 32 bits
-/// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2).
-const VBE_MODE_LIST: [(u16, usize, usize, usize); 26] = [
+/// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2), 320×240 et 320×200.
+const VBE_MODE_LIST: [(u16, usize, usize, usize); 30] = [
     (0x100, 640, 400, 8),
     (0x101, 640, 480, 8),
     (0x103, 800, 600, 8),
@@ -134,6 +134,12 @@ const VBE_MODE_LIST: [(u16, usize, usize, usize); 26] = [
     (0x127, 512, 384, 32),
     (0x128, 320, 240, 8),
     (0x129, 320, 240, 32),
+    // 320×240 en couleur et 320×200 en 256 couleurs : modes que les démos
+    // cherchent dans la liste (cartes dont le BIOS les propose, UniVBE).
+    (0x12A, 320, 240, 15),
+    (0x12B, 320, 240, 16),
+    (0x12C, 320, 240, 24),
+    (0x12D, 320, 200, 8),
 ];
 
 /// Mode VBE de la liste.
