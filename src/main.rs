@@ -295,7 +295,8 @@ fn main() -> ExitCode {
         };
         match a.as_str() {
             "--mips" => match value("--mips") {
-                Some(v) => cfg.mips = Some(v),
+                // 0 : pleine vitesse (comme sans l'option).
+                Some(v) => cfg.mips = (v > 0.0).then_some(v),
                 None => return ExitCode::from(2),
             },
             "--mem" => match value("--mem") {

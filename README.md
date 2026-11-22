@@ -243,7 +243,7 @@ sound need the window (or `--shot` and `--wav`).
 | `--ems MB` | EMS memory in MB, in addition (default 4, 0 to 32) |
 | `--dpmi` | Load a DPMI host (HDPMI32, from HX) resident before the program, for programs that need one (the 4k intro Void 3); HX is downloaded on first use; `dpmi = on` in a profile |
 | `--shot-every S` | With `--shot F.png`: also `F-SSSS.png` every S seconds (seconds since the start), rendered at the same safe moments as `--video`; for unattended surveys (`tools/survey.py`) |
-| `--mips N` | Throttle to N million instructions per second (default: full speed; many period programs, demos especially, need a limit, 200 being a good start); needs `kernel.perf_event_paranoid` at 1 or less, see [Requirements](#requirements) |
+| `--mips N` | Throttle to N million instructions per second (default, and 0: full speed; many period programs, demos especially, need a limit, 200 being a good start); needs `kernel.perf_event_paranoid` at 1 or less, see [Requirements](#requirements) |
 | `--vbe1` | VESA 1.2 card: banked windows only, no linear framebuffer |
 | `--set NAME=VALUE` | Environment variable for the built-in DOS (repeatable; in a profile, one `set = NAME=VALUE` line each), e.g. `DPMILDR=16` for Heretic II under HX |
 | `--sb 16\|pro2\|pro1\|ess` | Sound card: Sound Blaster 16 (default), Sound Blaster Pro 2 (`pro` too: DSP 3.02, OPL3), Pro 1 (two OPL2 chips), or ESS AudioDrive ES1688 (Sound Blaster Pro compatible, ESS identification, ESFM FM: the aggressive, saturated FM sound of many cheap mid-90s PCs); the Creative Pro models filter their output like the real cards |
