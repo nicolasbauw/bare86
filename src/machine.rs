@@ -498,10 +498,14 @@ pub enum Event {
     Exit(u8),
     /// Fin d'un pas (pas à pas).
     Step,
+    /// Point d'arrêt matériel (`BARE86_HWBP`) atteint, sous le débogueur.
+    Breakpoint,
 }
 
 pub struct Pc<B: Backend = KvmVm> {
     pub vm: B,
+    /// Le point d'arrêt matériel arrête `resume` (débogueur, commande `g`).
+    pub stop_at_breakpoint: bool,
     pub io: IoBus,
     pub host: Host,
     pub stats: Stats,
@@ -823,6 +827,7 @@ impl<B: Backend> Pc<B> {
             input_paused_until: None,
             until_text: None,
             stepping: false,
+            stop_at_breakpoint: false,
             trace_int: cfg.trace_int,
             interp: cfg.interp,
             jit: None,
@@ -1608,6 +1613,8 @@ impl<B: Backend> Pc<B> {
                 Exit::Interrupted => self.spin_check()?,
                 Exit::IrqWindow => {}
                 Exit::Step => return Ok(Event::Step),
+                // Sous le débogueur (`g`), le point d'arrêt rend la main ; sinon, rapport et suite.
+                Exit::Breakpoint if self.stop_at_breakpoint => return Ok(Event::Breakpoint),
                 Exit::Breakpoint => self.report_breakpoint()?,
                 Exit::Hlt => self.halt()?,
                 Exit::Shutdown if !self.dos_hle => {
