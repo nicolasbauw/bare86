@@ -60,8 +60,14 @@ KEY_CANDIDATES = [
     "{wait:3000}2{wait:2000}{enter}{wait:2000}{enter}{wait:900000}",
     "{wait:3000}1{wait:2000}{enter}{wait:2000}{enter}{wait:900000}",
     "{wait:3000} {wait:2000}{enter}{wait:900000}",
+    # Choix d'un chiffre sans Entrée (« Select sound card: 1. SB 2. GUS »), puis avec écrans enchaînés
+    # (Useless Sound System : Entrée, Entrée, mode 1, Entrée).
+    "{wait:3000}2{wait:900000}",
+    "{wait:3000}1{wait:900000}",
+    "{wait:3000}{enter}{wait:2000}{enter}{wait:3000}1{wait:3000}{enter}{wait:900000}",
 ]
 PROFILE_LOCK = threading.Lock()
+LAST = threading.local()  # résultat annexe de watch_run (CPU), par thread
 EXTENDERS = ("dos4gw", "dos32a", "dos4g", "pmodew")
 SKIP_NAMES = re.compile(r"(setup|install|config|cfg|unp|pkunzip|pkunpak|unzip|arj|lha|readme|view|info|nfo|dos4gw|cwsdpmi|pmode|uvconfig|sndsetup|catalog|vesa|univbe|uninst)", re.I)
 DEFAULT_KEYS = "{wait:900000}"
@@ -258,9 +264,16 @@ def watch_run(command, cwd, shots, args, timeout):
     kept, last_thumb, seen = [], None, set()
     t0 = last_new = time.time()
     killed = timed = False
+    cpu = 0.0
     while proc.poll() is None:
         time.sleep(2)
         now = time.time()
+        # CPU consommé (utime + stime de /proc, tous threads) : relevé à chaque tour, le dernier compte.
+        try:
+            st = open(f"/proc/{proc.pid}/stat").read().rsplit(")", 1)[1].split()
+            cpu = (int(st[11]) + int(st[12])) / os.sysconf("SC_CLK_TCK")
+        except (OSError, IndexError, ValueError):
+            pass
         for f in sorted(os.listdir(shots)):
             path = os.path.join(shots, f)
             if not f.endswith(".png") or f == "f.png" or f in seen or now - os.path.getmtime(path) < 1.5:
@@ -298,6 +311,7 @@ def watch_run(command, cwd, shots, args, timeout):
                 last_thumb = t
             else:
                 os.remove(path)
+    LAST.cpu = (cpu, time.time() - t0)
     return out, timed, len(kept), killed
 
 
@@ -417,6 +431,8 @@ def run_one(item, args, src):
             if args.full:
                 out, timed, kept, killed = watch_run(command, os.path.dirname(exe), shots, args, args.limit + 90)
                 res["kept"], res["idle_killed"] = kept, killed
+                cpu, wall = LAST.cpu
+                res["cpu"] = round(cpu / wall, 2) if wall > 0 else 0  # cœurs occupés en moyenne (1,0 = 100 %)
                 return out, timed
             try:
                 p = subprocess.run(command, cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, capture_output=True, text=True,
