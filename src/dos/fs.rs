@@ -61,6 +61,14 @@ fn to_83(comp: &[u8]) -> Result<Vec<u8>, u16> {
         Some(i) => (&up[..i], &up[i + 1..]),
         None => (&up[..], &[][..]),
     };
+    // Blancs de fin du nom et de l'extension : le DOS les compare au remplissage du nom de
+    // répertoire (11 octets), « CRACK   .DAT » désigne donc CRACK.DAT (Supra3d, SPID).
+    let trim = |s: &[u8]| {
+        let n = s.iter().rposition(|&c| c != b' ').map_or(0, |i| i + 1);
+        s[..n].to_vec()
+    };
+    let (base, ext) = (trim(base), trim(ext));
+    let (base, ext) = (&base[..], &ext[..]);
     let ok = |s: &[u8]| s.iter().all(|&c| valid_char(c) || c == b'?' || c == b'*');
     if base.is_empty() || !ok(base) || !ok(ext) || ext.contains(&b'.') {
         return Err(ERR_PATH_NOT_FOUND);

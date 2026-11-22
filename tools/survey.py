@@ -329,14 +329,17 @@ def with_option(command, option, value):
 def probe_keys(command, cwd, shots, args):
     """Essaie les scripts de `KEY_CANDIDATES` quelques secondes chacun et rend
     (meilleur script, score par script) : le score est le nombre de scènes
-    distinctes vues ; un programme qui se termine avant la fin de l'essai (une
-    touche l'a fait quitter, plantage) vaut -1."""
+    distinctes vues ; un programme qui se termine avant la fin de l'essai avec moins
+    de deux scènes (une touche l'a fait quitter, plantage) vaut -1."""
     scores = {}
     for keys in KEY_CANDIDATES:
         c = with_option(with_option(command, "--keys", keys), "--limit", str(args.probe))
         out, timed, kept, killed = watch_run(c, cwd, shots, args, args.probe + 60)
         ended_early = "time limit reached" not in out and not killed and not timed
-        scores[keys] = -1 if ended_early else kept
+        # Un programme qui rend la main après avoir montré plusieurs scènes a fini normalement
+        # (intro courte) : il vaut ses scènes. Seul un arrêt quasi immédiat (plantage, touche
+        # qui fait quitter) vaut -1.
+        scores[keys] = -1 if ended_early and kept < 2 else kept
         if scores[keys] >= 6:
             break
     best = max(KEY_CANDIDATES, key=lambda k: scores.get(k, -2))
