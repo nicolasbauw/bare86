@@ -400,6 +400,24 @@ def status_exit(res):
     return res.get("status") in ("exit", "error")
 
 
+def run_prep(prep, root, args):
+    """Étapes de préparation d'un profil (`prep`), dans le dossier de travail : `remove` (fichiers
+    à supprimer), `run` (programme DOS à lancer dans Bare86 avec `keys`, `limit` secondes ; par
+    exemple le SETUP.EXE d'une démo pour écrire une configuration adaptée à la machine émulée)."""
+    for step in prep:
+        for name in step.get("remove", []):
+            for dirpath, _, files in os.walk(root):
+                for f in files:
+                    if f.lower() == name.lower():
+                        os.remove(os.path.join(dirpath, f))
+        if "run" in step:
+            exe = next((os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs if f.lower() == step["run"].lower()), None)
+            if exe:
+                cmd = [args.bare86, "--no-realtime", "--limit", str(step.get("limit", 20)), "--keys", step.get("keys", "{enter}"), "--gus",
+                       "--mips", str(args.mips or 200), os.path.basename(exe)]
+                subprocess.run(cmd, cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, capture_output=True, timeout=step.get("limit", 20) + 60)
+
+
 def run_one(item, args, src):
     rel = os.path.relpath(item, src)
     iid = ident(rel)
@@ -411,7 +429,13 @@ def run_one(item, args, src):
     os.makedirs(shots)
     t0 = time.time()
     try:
-        if os.path.isdir(item):
+        prep = (args.profile_data.get(rel) or {}).get("prep")
+        if os.path.isdir(item) and prep:
+            # Préparation demandée par le profil : sur une copie, jamais dans la collection.
+            shutil.copytree(item, work)
+            run_dir = work
+            run_prep(prep, work, args)
+        elif os.path.isdir(item):
             run_dir = item
         else:
             if not extract(item, work):
