@@ -402,6 +402,8 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   d'où l'erreur, alors qu'un PC rend FFh (bus ouvert). Remède (`src/kvm.rs`, `map_open_bus`, créneaux 26 et 27) : les plages sans
   rien (RAM+1 → framebuffer, framebuffer+4 Mo → FFFF0000h) sont mappées en lecture seule sur des pages FFh. Overdrive passe le
   point de plantage (71 scènes en 150 s). Les écritures y sont toujours ignorées (sondes de taille mémoire inchangées).
-- Restent douteuses (non examinées) : orthicon (« you fucked it up » après le chargement des .3ds), PW-BANAN (DOS32, sort après
+- orthicon : EXAMINÉE (2026-11-23), pas un bogue de Bare86 : l'archive ne contient que `DEMO.EXE`, le NFO et le DIZ ; la démo cherche
+  `gfx\part2.tga`, `gfx\toriod.3ds`… (répertoire `gfx` absent, « you fucked it up » = fichier introuvable). Archive incomplète.
+- Restent douteuses (non examinées) : PW-BANAN (DOS32, sort après
   lecture de son exe), INVALIDE/glamour/4kbugs (intros de 4 Ko qui s'arrêtent sans message), ms98/demo.zip (exige COMMAND.COM).
 
