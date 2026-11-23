@@ -317,3 +317,16 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   boot plain DOS! » (même famille que l'avertissement MIDAS « Unable to synchronize to display refresh » : calibration du
   retour vertical par le PIT, cause encore inconnue). Profil MISG : à relancer avec `opts: ["--mips","100"]` dès que (2) sera réglé.
 
+### MIDAS / synchronisation d'écran : MISG réglée (2026-11-23, commit 61a627d)
+- **Mécanisme** : la démo (Pascal + MIDAS) mesure la période du balayage : sur un front montant de 3DAh bit 3 elle réarme le
+  canal 0 du PIT (`ctl 36`, compte 0), sur le front suivant elle le verrouille (`ctl 00`) et relit ; elle répète jusqu'à
+  obtenir des mesures concordantes (≈ ± 4 tics ?), abandonne après 18 essais : « unable to synchronize screen. please boot
+  plain DOS! ». Chaque lecture de 3DAh coûte ici une sortie de VM (≈ 10 µs) : la période mesurée variait de 45 à 90 µs
+  (≈ ± 0,3 %), d'où ≈ 50 % d'échecs, au hasard.
+- **Remède** (`vga::timer_now`) : quand une lecture de 3DAh voit le front montant de la synchronisation verticale avec moins de
+  150 µs de retard, le PIT montre la date réelle du front pour les accès qui suivent dans les 100 µs (il en est de même sur un
+  vrai PC, où la scrutation prend 1 µs). 20 essais sur 20 passent (avant : 3 sur 6). Même famille que l'avertissement
+  MIDAS « Unable to synchronize to display refresh » : à revérifier sur les démos MIDAS concernées.
+- **MISG** : `scan-ims` 140 scènes. Profil `opts: ["--mips", "100"]` (Turbo Pascal : erreur 200 au-dessus de ≈ 150 MIPS) ;
+  `tools/survey.py` : l'option `--mips` d'un profil remplace désormais le bridage par défaut.
+
