@@ -2015,6 +2015,8 @@ impl<B: Backend> Pc<B> {
             (0x16, 0x01 | 0x11) => self.idle_poll(true),
             // Lecture de l'heure en boucle serrée (IMS, Statix) : même attente.
             (0x21, 0x2C | 0x2A) => self.idle_poll(false),
+            // Lecture de la souris en boucle (Dune) : même attente.
+            (0x33, 0x00) if cpu.gpr[0] as u8 == 3 => self.idle_poll(false),
             // Compatibles avec une boucle d'attente : curseur, horloge, veille.
             (0x10, 0x02 | 0x03) | (0x1A, 0x00) | (0x28, _) | (0x2F, 0x16) => {}
             // Autre travail (disque, texte…) : ce n'est pas une attente. Le

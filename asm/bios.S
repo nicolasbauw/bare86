@@ -83,10 +83,7 @@ wait21:
 int33:
     cmp ax, 3
     jne 1f
-    mov bx, cs:[mouse_state]
-    mov cx, cs:[mouse_state + 2]
-    mov dx, cs:[mouse_state + 4]
-    iret
+    jmp int33_pos
 1:  jmp stubs + 0x33 * 16
     .org 0xE890, 0xFF
 mouse_state:
@@ -262,6 +259,25 @@ int16:
     # proche, registres de 4F05h, 4F07h et 4F09h) depuis leur propre segment.
     # Les ports 1D0h (fenêtre), 1D2h et 1D4h (début d'affichage : CX puis DX, mots bas et haut de l'adresse en dwords)
     # sont ceux de l'hôte ; la palette passe par le DAC (3C8h-3C9h).
+
+    # INT 33h AX=0003h, suite : une scrutation sur 16 passe par l'hôte (compteur en 40:F1) ;
+    # il voit ainsi les jeux qui relisent la souris en boucle (Dune, salle du trône) et
+    # endort le vCPU (`idle_poll`).
+int33_pos:
+    push ds
+    push ax
+    mov ax, 0x40
+    mov ds, ax
+    add byte ptr ds:[0xF1], 0x10
+    pop ax
+    pop ds
+    jc 1f
+    mov bx, cs:[mouse_state]
+    mov cx, cs:[mouse_state + 2]
+    mov dx, cs:[mouse_state + 4]
+    iret
+1:  jmp stubs + 0x33 * 16
+
     .org 0xEC00, 0xFF
 vbe_pm:
     .word pm_window - vbe_pm, pm_start - vbe_pm, pm_palette - vbe_pm, pm_ports - vbe_pm
