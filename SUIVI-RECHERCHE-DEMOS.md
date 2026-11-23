@@ -195,9 +195,8 @@ erreurs). CAUSE : presque toutes les démos attendent une touche / un choix (son
 - Outil de test rapide : scratchpad `tk.sh ITEM "TOUCHES" SECONDES` (perdu entre sessions : refaire avec survey.py).
 
 ## ANOMALIES À CORRIGER (liste tenue par l'utilisateur)
-- **Dune** (`~/Dev/dos-progs/dune`, `./DUNEPRG.EXE ENG VGA EMS 386 SDB`) : Bare86 crée des threads qui consomment
-  100 % de CPU (observé par l'utilisateur, 2026-11-22). À mesurer (`top -H`), probablement des boucles d'attente
-  (scrutation sans sommeil : vga_poll / pit_poll / idle_poll, ou threads audio / SB).
+- **Dune** (`~/Dev/dos-progs/dune`, `./DUNEPRG.EXE ENG VGA EMS 386 SDB`) : 100 % de CPU signalé le 2026-11-22. RÉGLÉ
+  le 2026-11-23 : `INT 33h AX=3` servi en ROM échappait à l'endormissement (84 % → 9 %, commit f817c63).
 - **IMS (Indoor Music System)** : Entrée ne lance pas le programme sur l'écran de configuration (flèches OK) ; bloque 30+ démos.
 - **`.BAT`** : pas d'interpréteur de lots dans le shell intégré (`program = DUNE.BAT` ne marche pas).
 - Avertissement MIDAS « Unable to synchronize to display refresh » : cause non trouvée.
@@ -229,8 +228,7 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   passer par SETUP.EXE), CYC_OOM (menu de carte son non passé), MISG (noir, INT 03h AH=4Bh non géré),
   INVIT (IMS), 64K_5 LowRes'97 (2 scènes, la démo tourne mais reste quasi statique : à confronter à une
   vidéo de référence), 64K_2 WIPE_N64 (3 scènes, écran rouge, INT 10h AH=11h non géré).
-- **CPU** : à 100 % en continu : MISG (écran noir), INVIT (écran IMS), WARP (60 % du temps) ; Dune
-  signalée par l'utilisateur. Pics isolés de 0,5 s (chargement) sur plusieurs 64k : normaux.
+- **CPU** : à 100 % en continu : MISG (écran noir), INVIT (écran IMS), WARP (60 % du temps). Pics isolés de 0,5 s (chargement) sur plusieurs 64k : normaux.
 - Piège de la session : une attente `while pgrep -f "survey.py …"` se trouve elle-même (sa ligne de
   commande contient le motif) et boucle sans fin ; ne jamais attendre ainsi.
 - Gemma n'est PAS encore passé sur `scan-cd27f`.
@@ -257,7 +255,7 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   (adresse linéaire, part, compte). Pour trouver une boucle d'attente active là où on la constate :
   `cd ~/Dev/dos-progs/dune && BARE86_PROFILE_IP=1 bare86 --window …`, aller sur la scène, quitter.
   Dune, intro (15 s, headless) : 94 % dans trois blocs (0000ECE0, 0000EC70, 0000FE10) : boucles serrées.
-- **Dune, carte (« see dune map »)** : constat de l'utilisateur, à mesurer avec le profileur depuis la carte.
+- **Dune** : réglé (salle du trône, `INT 33h AX=3` en ROM : une scrutation sur 16 passe par l'hôte, 84 % → 9 %).
 
 ### Étape 3 — démos douteuses du CD 27 (faite en partie)
 - **CYC_OOM** : réglée, 1 → 63 scènes. Menu à trois questions : carte (`2` = GUS), port (`4` = 240h),
@@ -281,8 +279,7 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
    --probe 25 --profiles "$PC/profiles.json" --full --every 2 --idle 60 --limit 600 --jobs 4`, puis
    `python3 -I tools/audit.py "$PC/scan-cd27f"` : l'échantillon est « fiable » quand plus aucune démo n'a
    les drapeaux FEW/ERR/STATIC sans explication consignée. Restent douteuses : WIPE_N64, MISG, 64K_5, INVIT.
-2. **Dune, carte** : lancer avec `BARE86_PROFILE_IP=1 bare86 --window …`, aller sur la carte, quitter,
-   fournir le bloc « profile » (utilisateur en remote ; à faire plus tard).
+2. (Dune : réglé le 2026-11-23, plus rien à faire.)
 3. MISG : comprendre pourquoi le dépaqueteur saute dans des données (LOCK OUTSW en 014D:002B).
 4. WIPE_N64 : examiner le mode graphique (palette / début d'affichage) ; 64K_5 : comparer à une vidéo.
 5. IMS : « Entrée sans effet » (bloque ≈ 30 démos) : toujours à diagnostiquer.
