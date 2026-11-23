@@ -304,3 +304,16 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   * rplbaker (movistar.exe, Evoke 98) : opcode invalide (INT 06h) comme MISG ;
   * rpl_star (ICING99, movie.exe) : `INT 68h AH=43h` non géré (pas IMS).
 
+### Opcode invalide : MISG et rplbaker (2026-11-23)
+- **Cause (commit 38dcde5)** : MISG (chargeur HJB + module résident) crée un PSP par INT 21h AH=55h, saute dans le module, qui
+  se termine par `AX=3100h` (TSR) depuis sa propre pile. DOS rend alors la main à l'adresse de fin (PSP:0Ah) avec la PILE
+  DE L'APPELANT d'AH=55h ; Bare86 restait sur la pile du fils : le `ret` du parent dépilait 0 et sautait en 014D:0000
+  (données : `F0 6F` = LOCK OUTSW). Corrigé : `child_frames` (SS, SP, drapeaux) mémorisés à AH=55h, rétablis à la fin.
+  Trouvé par une trace pas à pas de l'invité (tampon circulaire des 400 000 derniers CS:IP, hack non commité).
+- **rplbaker** (movistar.exe) : l'opcode invalide a disparu avec ce correctif ; elle exigeait en plus un mode VBE 320×400
+  en 16 bits (« too little colors in your box of crayons ») : mode `0x130` ajouté (et `0x12E` 320×400×8). Elle tourne (« baker selection »).
+- **MISG** : passe l'amorce mais plus loin : (1) à `--mips 200` « Runtime error 200 » (Turbo Pascal : division par zéro, boucle
+  de calibration du `Crt` trop rapide) ; à `--mips 100` pas d'erreur 200 mais (2) MIDAS : « unable to synchronize screen. please
+  boot plain DOS! » (même famille que l'avertissement MIDAS « Unable to synchronize to display refresh » : calibration du
+  retour vertical par le PIT, cause encore inconnue). Profil MISG : à relancer avec `opts: ["--mips","100"]` dès que (2) sera réglé.
+
