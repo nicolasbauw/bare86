@@ -16,6 +16,8 @@ pub enum Action {
     Continue,
     /// Programme à lancer : chemin DOS, ligne de commande.
     Run(Vec<u8>, Vec<u8>),
+    /// `PAUSE` : message, puis attente d'une touche.
+    Pause,
     Exit,
 }
 
@@ -103,6 +105,29 @@ impl Dos {
         }
     }
 
+    /// Attend une touche (`PAUSE`) ; faux quand l'entrée est épuisée.
+    pub fn shell_wait_key(&mut self, mem: &GuestMem, host: &mut Host, redraw: &mut dyn FnMut(&GuestMem, &mut Host)) -> bool {
+        loop {
+            redraw(mem, host);
+            match host.input.wait() {
+                None => return false,
+                Some(InputEvent::Text(_)) => return true,
+                Some(InputEvent::Key(code)) => {
+                    if code & 0x80 == 0 && keyboard::modifier(code & 0x7F).is_none() {
+                        return true;
+                    }
+                }
+                Some(InputEvent::Quit) => {
+                    host.quit = true;
+                    return false;
+                }
+                Some(InputEvent::Wait(ms)) => std::thread::sleep(std::time::Duration::from_millis(u64::from(ms))),
+                Some(e @ (InputEvent::InsertFloppy(_) | InputEvent::InsertCd(_))) => self.pending_media.push(e),
+                Some(_) => {}
+            }
+        }
+    }
+
     pub fn shell_command(&mut self, mem: &GuestMem, host: &mut Host, line: &[u8]) -> Result<Action> {
         let line = line.trim_ascii();
         if line.is_empty() {
@@ -128,9 +153,55 @@ impl Dos {
             }
             _ if eq(cmd, "VER") => out(b"\r\nMS-DOS version 5.00 (HLE DOS under KVM)\r\n\r\n"),
             _ if eq(cmd, "ECHO") => {
-                let text = rest.strip_prefix(b" ").unwrap_or(rest);
-                out(text);
-                out(b"\r\n");
+                if arg.eq_ignore_ascii_case(b"off") {
+                    self.echo = false;
+                } else if arg.eq_ignore_ascii_case(b"on") {
+                    self.echo = true;
+                } else if arg.is_empty() {
+                    out(if self.echo { b"ECHO is on\r\n" } else { b"ECHO is off\r\n" });
+                } else {
+                    // « ECHO. » et « ECHO texte » ; « > fichier » écrit le texte dans le fichier.
+                    let text = rest.strip_prefix(b" ").or_else(|| rest.strip_prefix(b".")).unwrap_or(rest);
+                    let (text, target) = match text.iter().position(|&c| c == b'>') {
+                        Some(i) => (&text[..i], Some(&text[i..])),
+                        None => (text, None),
+                    };
+                    match target {
+                        None => {
+                            out(text);
+                            out(b"\r\n");
+                        }
+                        Some(t) => {
+                            let append = t.starts_with(b">>");
+                            let name = t.iter().position(|&c| c != b'>').map_or(&t[t.len()..], |i| &t[i..]).trim_ascii();
+                            if !name.eq_ignore_ascii_case(b"nul")
+                                && let Ok(Target::Path { host: h, .. }) = self.drives.resolve(name)
+                            {
+                                let mut data = if append { vfs::read(&h).unwrap_or_default() } else { Vec::new() };
+                                data.extend_from_slice(text.trim_ascii_end());
+                                data.extend_from_slice(b"\r\n");
+                                if !vfs::is_virtual(&h) {
+                                    let _ = std::fs::write(&h, &data);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ if eq(cmd, "REM") || eq(cmd, "BREAK") || eq(cmd, "VERIFY") || eq(cmd, "PROMPT") || eq(cmd, "MODE") || eq(cmd, "CTTY") => {}
+            _ if eq(cmd, "PAUSE") => return Ok(Action::Pause),
+            _ if eq(cmd, "GOTO") => self.batch_goto(mem, host, arg),
+            _ if eq(cmd, "CALL") => return self.batch_call(mem, host, arg),
+            _ if eq(cmd, "SHIFT") => self.batch_shift(),
+            _ if eq(cmd, "IF") => return self.batch_if(mem, host, arg),
+            _ if eq(cmd, "FOR") => self.batch_for(mem, host, arg),
+            // Chargement en mémoire haute : sans objet, le programme est lancé tel quel.
+            _ if eq(cmd, "LH") || eq(cmd, "LOADHIGH") => return self.shell_command(mem, host, arg),
+            _ if eq(cmd, "PATH") => {
+                let line = if arg.is_empty() { b"PATH".to_vec() } else { [&b"SET PATH="[..], arg.strip_prefix(b"=").unwrap_or(arg)].concat() };
+                if !arg.is_empty() {
+                    return self.shell_command(mem, host, &line);
+                }
             }
             _ if eq(cmd, "SET") && arg.is_empty() => {
                 for var in self.master_vars(mem) {
@@ -211,6 +282,12 @@ impl Dos {
                 let end = line.iter().position(|&c| c == b' ' || c == b'\t').unwrap_or(line.len());
                 let (word, args) = line.split_at(end);
                 return Ok(match self.find_program(word, mem) {
+                    Some(path) if path.rsplit(|&b| b == b'.').next().is_some_and(|e| eq(e, "BAT")) => {
+                        if !self.start_batch(&path, args) {
+                            out(BAD_COMMAND);
+                        }
+                        Action::Continue
+                    }
                     Some(path) => Action::Run(path, args.to_vec()),
                     None => {
                         out(BAD_COMMAND);
@@ -224,8 +301,9 @@ impl Dos {
 
     /// Variables de l'environnement maître (celui du shell, hérité par les
     /// programmes qu'il lance).
-    fn master_vars(&self, mem: &GuestMem) -> Vec<Vec<u8>> {
-        let env = mem.read_u16(psp_addr(self.procs[0].psp, psp::ENV));
+    pub(super) fn master_vars(&self, mem: &GuestMem) -> Vec<Vec<u8>> {
+        let Some(root) = self.procs.first() else { return Vec::new() };
+        let env = mem.read_u16(psp_addr(root.psp, psp::ENV));
         let mut at = usize::from(env) << 4;
         let mut vars = Vec::new();
         loop {
@@ -255,12 +333,12 @@ impl Dos {
 
     /// Programme à lancer : dans le répertoire courant, puis dans les
     /// répertoires du PATH maître ; extensions .COM puis .EXE.
-    fn find_program(&self, name: &[u8], mem: &GuestMem) -> Option<Vec<u8>> {
+    pub(super) fn find_program(&self, name: &[u8], mem: &GuestMem) -> Option<Vec<u8>> {
         let has_ext = name.iter().rposition(|&c| c == b'.').is_some_and(|i| !name[i..].contains(&b'\\'));
         let candidates: Vec<Vec<u8>> = if has_ext {
             vec![name.to_vec()]
         } else {
-            [&b".COM"[..], b".EXE"].iter().map(|e| [name, e].concat()).collect()
+            [&b".COM"[..], b".EXE", b".BAT"].iter().map(|e| [name, e].concat()).collect()
         };
         let path = self.master_vars(mem).into_iter().find_map(|v| v.strip_prefix(b"PATH=").map(<[u8]>::to_vec)).unwrap_or_default();
         let mut dirs: Vec<Vec<u8>> = vec![Vec::new()];
@@ -277,7 +355,7 @@ impl Dos {
                     && vfs::is_file(&host)
                 {
                     let ext = dos.rsplit(|&b| b == b'.').next().unwrap_or(b"");
-                    if eq(ext, "COM") || eq(ext, "EXE") {
+                    if eq(ext, "COM") || eq(ext, "EXE") || eq(ext, "BAT") {
                         return Some(dos);
                     }
                 }

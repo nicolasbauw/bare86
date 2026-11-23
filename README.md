@@ -418,7 +418,13 @@ Without `--boot`, Bare86 runs its own DOS. A host directory is drive C: (the
 program's directory, or `--mount DIR`). Host file names that are valid 8.3
 names appear in upper case; longer names get a short name (`LONGNA~1.TXT`).
 The shell, started without a program, knows `DIR`, `CD`, `MD`, `RD`, `DEL`,
-`REN`, `TYPE`, `ECHO`, `SET`, `CLS`, `VER` and `EXIT`, and runs programs. Its
+`REN`, `TYPE`, `ECHO`, `SET`, `PATH`, `CLS`, `VER` and `EXIT`, and runs programs
+and batch files. A `.BAT` file (named on the command line, as `program = GAME.BAT`
+in a profile, or typed at the prompt) is run by the shell: `ECHO ON/OFF` and
+`@`, `REM`, `SET`, `%0`–`%9`, `%*` and `%VARIABLE%`, `GOTO` and labels, `CALL`
+(a batch file or a `:label`), `IF [NOT] ERRORLEVEL n | EXIST file | a==b`,
+`FOR %%x IN (…) DO` (with wildcards), `SHIFT`, `PAUSE`, `LH`; `ECHO text > file`
+writes a file. Redirections and pipes of programs are not supported. Its
 messages are in French for now.
 
 Memory: 640 KB of conventional memory, XMS through the built-in HIMEM-like

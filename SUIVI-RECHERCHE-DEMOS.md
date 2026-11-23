@@ -368,3 +368,15 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 - `tools/survey.py` : sur « No DPMI host present », si un extendeur (DOS4GW.EXE, DOS32A…) est dans le dossier, l'exécutable est relancé par
   lui avant de se rabattre sur `--dpmi`. Profil : `{wait:6000}{enter}{wait:500}{enter}`.
 
+### Fichiers de commandes (.BAT) pris en charge par le shell interne (2026-11-23)
+- Nouveau `src/dos/batch.rs` (+ branchements dans `src/dos/shell.rs`, `Pc::shell_loop` / `Pc::run_batch`, `main.rs`) : un `.BAT`
+  donné comme programme (ligne de commande, `program = DUNE.BAT` d'un profil) ou tapé à l'invite est exécuté ligne à ligne :
+  `@`, `ECHO ON/OFF`, `REM`, `SET`, `PATH`, `%0`–`%9`, `%*`, `%VAR%`, `%%`, `GOTO` et étiquettes (`:EOF`), `CALL` (fichier ou `:étiquette`),
+  `IF [NOT] ERRORLEVEL | EXIST | a==b`, `FOR %%x IN (liste ou motifs) DO`, `SHIFT`, `PAUSE`, `LH`/`LOADHIGH`, `ECHO texte > fichier`.
+  `ERRORLEVEL` = code de sortie du dernier programme lancé. Non pris en charge : redirections et tubes des programmes (`> NUL`),
+  `CHOICE` (commande externe absente).
+- Vérifié : `DUNE.BAT` (`logo`, `duneprg ENG VGA EMS 386`) lance Dune (désert à l'écran, sans mon essai précédent à la main) ; essai
+  complet des constructions sur un `T.BAT` de test ; 2 tests unitaires (développement des paramètres, `SHIFT`).
+- À FAIRE ensuite : `tools/survey.py` pourrait désormais lancer les démos qui n'ont qu'un `.BAT` (aujourd'hui il lit leurs arguments
+  par `bat_args` et lance l'exécutable lui-même).
+

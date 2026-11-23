@@ -7,6 +7,7 @@
 //! Les fichiers sont ceux de répertoires hôtes montés comme lecteurs.
 
 mod alkufix;
+mod batch;
 mod crtfix;
 mod fcb;
 mod fs;
@@ -120,6 +121,12 @@ pub struct Dos {
     pub env: Vec<(String, String)>,
     /// Changements de disque demandés pendant que le shell attendait une ligne.
     pub pending_media: Vec<crate::host::InputEvent>,
+    /// Fichiers de commandes en cours (le dernier est le courant).
+    batch: Vec<batch::Frame>,
+    /// Écho des lignes des fichiers de commandes (`ECHO ON/OFF`).
+    echo: bool,
+    /// Code de sortie du dernier programme lancé par le shell (`IF ERRORLEVEL`).
+    pub errorlevel: u8,
     /// Un programme Win32 a été lancé par HX (pour le reste de la session) :
     /// pas de répétition automatique des touches (voir `Machine::key_in`).
     pub win32_started: bool,
@@ -183,6 +190,9 @@ impl Dos {
             env: Vec::new(),
             pending_media: Vec::new(),
             win32_started: false,
+            batch: Vec::new(),
+            echo: true,
+            errorlevel: 0,
         }
     }
 
@@ -1801,6 +1811,12 @@ fn read_asciiz(mem: &GuestMem, at: usize) -> Vec<u8> {
 }
 
 /// Sortie console : télétype du BIOS sur la page active.
+/// Écrit `text` suivi d'un retour à la ligne (écho des lignes d'un fichier de commandes).
+pub fn echo_line(mem: &GuestMem, host: &mut Host, text: &[u8]) {
+    con_out(mem, host, text);
+    con_out(mem, host, b"\r\n");
+}
+
 fn con_out(mem: &GuestMem, host: &mut Host, bytes: &[u8]) {
     let page = bios::active_page(mem);
     for &c in bytes {

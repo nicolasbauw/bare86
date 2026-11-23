@@ -1005,23 +1005,54 @@ impl<B: Backend> Pc<B> {
     /// Shell interne : invite, commandes, programmes lancés tour à tour.
     /// Rend la main sur EXIT ou quand l'entrée clavier est épuisée.
     pub fn shell(&mut self) -> Result<u8> {
+        self.shell_loop(false)
+    }
+
+    /// Exécute le fichier de commandes `path` (chemin DOS) comme le ferait COMMAND.COM, puis
+    /// rend la main (sans invite) ; code de sortie : celui du dernier programme lancé.
+    pub fn run_batch(&mut self, path: &[u8], tail: &[u8]) -> Result<u8> {
+        if !self.dos.start_batch(path, tail) {
+            return Err(format!("{}: batch file not readable", String::from_utf8_lossy(path)).into());
+        }
+        self.shell_loop(true)
+    }
+
+    fn shell_loop(&mut self, batch_only: bool) -> Result<u8> {
         let mut code = 0;
         loop {
             let mem = self.vm.mem();
-            self.dos.prompt(mem, &mut self.host);
-            let (vga, font, started) = (&self.vga, &self.font, self.started);
-            let mut redraw = |mem: &crate::mem::GuestMem, host: &mut Host| {
-                if let Some(t) = &mut host.term {
-                    t.render(mem);
+            // Rafraîchit l'affichage (terminal, fenêtre) avant chaque attente ; refait à chaque usage
+            // pour ne pas garder `self` emprunté.
+            macro_rules! redraw {
+                () => {{
+                    let (vga, font, started) = (&self.vga, &self.font, self.started);
+                    move |mem: &crate::mem::GuestMem, host: &mut Host| {
+                        if let Some(t) = &mut host.term {
+                            t.render(mem);
+                        }
+                        if host.wants_frames
+                            && let Some((width, height, pixels)) = frame_of(&vga.borrow(), mem, font.as_ref(), started)
+                        {
+                            let graphics = crate::render::is_graphics(&vga.borrow(), mem);
+                            host.display.present(&crate::host::Frame { width, height, pixels: &pixels, graphics });
+                        }
+                    }
+                }};
+            }
+            let line = if let Some((line, show)) = self.dos.batch_next(mem) {
+                // Écho de la ligne du fichier de commandes, comme à l'invite.
+                if show {
+                    self.dos.prompt(mem, &mut self.host);
+                    crate::dos::echo_line(mem, &mut self.host, &line);
                 }
-                if host.wants_frames
-                    && let Some((width, height, pixels)) = frame_of(&vga.borrow(), mem, font.as_ref(), started)
-                {
-                    let graphics = crate::render::is_graphics(&vga.borrow(), mem);
-                    host.display.present(&crate::host::Frame { width, height, pixels: &pixels, graphics });
-                }
+                line
+            } else if batch_only || self.host.quit {
+                return Ok(code);
+            } else {
+                self.dos.prompt(mem, &mut self.host);
+                let Some(line) = self.dos.shell_read(mem, &mut self.host, &mut redraw!()) else { return Ok(code) };
+                line
             };
-            let Some(line) = self.dos.shell_read(mem, &mut self.host, &mut redraw) else { return Ok(code) };
             for e in std::mem::take(&mut self.dos.pending_media) {
                 self.media_event(e);
             }
@@ -1029,9 +1060,18 @@ impl<B: Backend> Pc<B> {
             match self.dos.shell_command(mem, &mut self.host, &line)? {
                 dos::Action::Continue => {}
                 dos::Action::Exit => return Ok(code),
+                dos::Action::Pause => {
+                    crate::dos::echo_line(mem, &mut self.host, b"");
+                    crate::dos::echo_line(mem, &mut self.host, b"Press any key to continue . . .");
+                    if !self.dos.shell_wait_key(mem, &mut self.host, &mut redraw!()) {
+                        return Ok(code);
+                    }
+                    crate::dos::echo_line(mem, &mut self.host, b"");
+                }
                 dos::Action::Run(path, tail) => {
                     self.load_program(&path, &tail)?;
                     code = self.run()?;
+                    self.dos.errorlevel = code;
                 }
             }
         }

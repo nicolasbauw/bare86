@@ -586,6 +586,8 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
     if let (Some(every), Some(shot)) = (o.shot_every, &o.shot) {
         pc.shot_every(shot.strip_suffix(".png").unwrap_or(shot), std::time::Duration::from_secs_f64(every));
     }
+    // Fichier de commandes (.BAT) donné comme programme : exécuté par le shell interne.
+    let mut batch: Option<(Vec<u8>, Vec<u8>)> = None;
     match &o.program {
         _ if o.boot => {
             let drive = if !o.cfg.disks[0].is_empty() { 0 } else if !o.cfg.disks[2].is_empty() { 0x80 } else { 1 };
@@ -631,7 +633,11 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
             if o.dpmi {
                 pc.load_dpmi_host()?;
             }
-            pc.load_program(&dos, &tail)?;
+            if dos.rsplit(|&b| b == b'.').next().is_some_and(|e| e.eq_ignore_ascii_case(b"BAT")) {
+                batch = Some((dos, tail));
+            } else {
+                pc.load_program(&dos, &tail)?;
+            }
         }
         None => {
             pc.mount(2, o.mount.clone().unwrap_or_else(|| ".".into()));
@@ -639,7 +645,9 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
     }
     // Sans programme : le shell interne ; `--shot` et `--stats` valent aussi
     // pour une session de shell (fin de l'entrée, EXIT ou limite de temps).
-    let code = if o.program.is_none() && !o.boot {
+    let code = if let Some((path, tail)) = &batch {
+        pc.run_batch(path, tail)
+    } else if o.program.is_none() && !o.boot {
         pc.shell()
     } else if o.debug {
         debug::repl(&mut pc).map(|c| c.unwrap_or(0))
