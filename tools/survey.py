@@ -65,6 +65,11 @@ KEY_CANDIDATES = [
     "{wait:3000}2{wait:900000}",
     "{wait:3000}1{wait:900000}",
     "{wait:3000}{enter}{wait:2000}{enter}{wait:3000}1{wait:3000}{enter}{wait:900000}",
+    # IMS (Indoor Music System) : « return:start » demande DEUX Entrées à moins de 36 tics (≈ 2 s) l'une
+    # de l'autre ; le premier écran (mode vidéo, etc.) se passe avec les Entrées espacées de 2 s.
+    "{wait:3000}{enter}{wait:500}{enter}{wait:900000}",
+    "{wait:3000}{enter}{wait:2000}{enter}{wait:500}{enter}{wait:900000}",
+    "{wait:3000}1{wait:2000}{enter}{wait:2000}{enter}{wait:500}{enter}{wait:900000}",
 ]
 PROFILE_LOCK = threading.Lock()
 LAST = threading.local()  # résultat annexe de watch_run (CPU), par thread
