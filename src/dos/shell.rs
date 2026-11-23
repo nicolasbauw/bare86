@@ -276,6 +276,7 @@ impl Dos {
                 }
                 _ => out(b"File not found\r\n"),
             },
+            _ if eq(cmd, "COPY") => self.copy(mem, host, arg),
             _ if eq(cmd, "DIR") => self.dir(mem, host, arg),
             _ => {
                 // Programme : tout le premier mot, chemin compris (« C:\JEU\X.EXE »).
@@ -362,6 +363,101 @@ impl Dos {
             }
         }
         None
+    }
+
+    /// `COPY source[+source…] [destination]` : motifs `*` et `?`, destination fichier ou répertoire,
+    /// concaténation par `+` ; les options (`/Y`, `/B`…) sont ignorées.
+    fn copy(&mut self, mem: &GuestMem, host: &mut Host, arg: &[u8]) {
+        let mut out = |s: &[u8]| con_out(mem, host, s);
+        let text = String::from_utf8_lossy(arg).replace(" + ", "+").replace("+ ", "+").replace(" +", "+");
+        let tokens: Vec<&str> = text.split_whitespace().filter(|t| !t.starts_with('/')).collect();
+        let Some(first) = tokens.first() else {
+            out(b"The syntax of the command is incorrect.\r\n");
+            return;
+        };
+        let specs: Vec<&str> = first.split('+').filter(|s| !s.is_empty()).collect();
+        let concat = specs.len() > 1;
+        // Sources : (chemin hôte, nom DOS du fichier).
+        let mut sources: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+        for spec in &specs {
+            let b = spec.as_bytes();
+            if b.contains(&b'*') || b.contains(&b'?') {
+                if let Ok((dir, pat)) = self.drives.search(b) {
+                    for e in fs::list(&dir).into_iter().filter(|e| fs::fcb_matches(&pat, &e.short) && !e.meta.is_dir()) {
+                        sources.push((e.host, e.short));
+                    }
+                }
+            } else if let Ok(Target::Path { host: h, exists: true, dos }) = self.drives.resolve(b)
+                && vfs::is_file(&h)
+            {
+                let name = dos.rsplit(|&c| c == b'\\').next().unwrap_or(&dos).to_vec();
+                sources.push((h, name));
+            }
+        }
+        if sources.is_empty() {
+            out(b"File not found\r\n");
+            return;
+        }
+        // Destination : un répertoire (existant, ou motif « ...\*.* »), un fichier, ou le répertoire courant.
+        let dest = tokens.get(1).map(|d| d.as_bytes());
+        let (dest_dir, dest_file): (Option<std::path::PathBuf>, Option<std::path::PathBuf>) = match dest {
+            None => match self.drives.resolve(b".") {
+                Ok(Target::Path { host: h, .. }) => (Some(h), None),
+                _ => (None, None),
+            },
+            Some(d) if d.contains(&b'*') || d.contains(&b'?') => match self.drives.search(d) {
+                Ok((dir, _)) => (Some(dir), None),
+                Err(_) => (None, None),
+            },
+            Some(d) => match self.drives.resolve(d) {
+                Ok(Target::Path { host: h, exists: true, .. }) if vfs::is_dir(&h) => (Some(h), None),
+                Ok(Target::Path { host: h, .. }) => (None, Some(h)),
+                _ => (None, None),
+            },
+        };
+        if dest_dir.is_none() && dest_file.is_none() {
+            out(b"Invalid path\r\n");
+            return;
+        }
+        let write = |to: &std::path::Path, data: &[u8]| !vfs::is_virtual(to) && std::fs::write(to, data).is_ok();
+        let mut copied = 0u32;
+        if concat || (dest_file.is_some() && sources.len() == 1) {
+            let to = match (&dest_file, &dest_dir) {
+                (Some(f), _) => f.clone(),
+                (None, Some(d)) => d.join(String::from_utf8_lossy(&sources[0].1).into_owned()),
+                _ => return,
+            };
+            let mut data = Vec::new();
+            for (h, _) in &sources {
+                if *h == to {
+                    out(b"File cannot be copied onto itself\r\n");
+                    return;
+                }
+                data.extend(vfs::read(h).unwrap_or_default());
+            }
+            if write(&to, &data) {
+                copied = 1;
+            } else {
+                out(b"Access denied\r\n");
+            }
+        } else if let Some(dir) = dest_dir {
+            for (h, name) in &sources {
+                let to = dir.join(String::from_utf8_lossy(name).into_owned());
+                if *h == to {
+                    out(b"File cannot be copied onto itself\r\n");
+                    return;
+                }
+                if write(&to, &vfs::read(h).unwrap_or_default()) {
+                    copied += 1;
+                } else {
+                    out(b"Access denied\r\n");
+                }
+            }
+        } else {
+            out(b"Content of destination lost before copy\r\n");
+            return;
+        }
+        out(format!("{copied:>9} file(s) copied\r\n").as_bytes());
     }
 
     fn dir(&mut self, mem: &GuestMem, host: &mut Host, arg: &[u8]) {

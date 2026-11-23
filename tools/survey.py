@@ -213,7 +213,7 @@ BAT_INTERNAL = {"echo", "rem", "set", "path", "cls", "cd", "chdir", "md", "mkdir
                 "type", "dir", "pause", "goto", "call", "shift", "if", "for", "lh", "loadhigh", "break", "verify", "prompt",
                 "mode", "ctty", "exit", "ver"}
 # Commandes externes ou internes que le shell intégré ne sait pas faire : le .BAT n'est pas lancé tel quel.
-BAT_UNSUPPORTED = {"choice", "copy", "xcopy", "deltree", "mem", "edit", "format", "fdisk", "scandisk", "attrib", "mkdir", "label", "date", "time"}
+BAT_UNSUPPORTED = {"choice", "xcopy", "deltree", "mem", "edit", "format", "fdisk", "scandisk", "attrib", "mkdir", "label", "date", "time"}
 
 
 def bat_script(exe):

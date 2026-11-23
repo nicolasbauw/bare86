@@ -382,3 +382,6 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   `bat_args` (%1, redirections) ou qu'il lance plus d'un programme (`LOGO` avant `DUNEPRG`) ; sinon l'ancien chemin (exécutable +
   arguments lus dans le BAT) est conservé, plus simple. Vérifié : Dune (`DUNE.BAT`, 8 captures, état ok) et shortcut (inchangée).
 
+- `COPY` ajoutée au shell (2026-11-23) : motifs, `a+b`, destination fichier ou répertoire (`SUB`, `SUB\\`, `SUB\\*.*`), options ignorées ; messages
+  « n file(s) copied », « File not found », « File cannot be copied onto itself ». `tools/survey.py` ne l'écarte plus des BAT lancés.
+
