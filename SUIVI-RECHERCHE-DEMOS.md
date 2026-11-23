@@ -433,3 +433,12 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 - **Piste générale** : un vecteur d'IRQ par défaut qui ne fait pas ce que fait le BIOS réel (acquittement du périphérique) fige les
   programmes qui s'y chaînent ; à garder en tête pour d'autres IRQ (INT 08h, clavier, IRQ 12…).
 
+### WARP (Area 512) examinée (2026-11-23) : rien à corriger
+- Enchaîne ≈ 10 effets (serpent vert, anneaux bleus, flammes « AREA512 »…) puis, vers 70 s, passe à un écran BLANC et attend une
+  touche (`INT 21h AH=0Bh` en boucle ; une touche la fait sortir proprement). Même chronologie à 60 et à 200 MIPS : pas de dépendance à
+  la vitesse. Les 60 % de CPU sont du vrai calcul (boucle d'attente `jmp $+2` du blanc final comprise).
+- **Effet de bord trouvé en la lançant** : au point d'attente finale, WARP parcourt l'espace d'adresses ; avec les pages « bus ouvert »
+  (`map_open_bus`) la mémoire RÉSIDENTE du processus montait de 22 Mo/s (3 Go atteints) : les mêmes 2 Mo physiques mappés des
+  centaines de fois sont comptés à chaque mappage. Corrigé (commit 09fee32) : `Backend::trim_open_bus`, MADV_DONTNEED de ces
+  mappages toutes les secondes (54 Mo stables). Aucune mémoire réelle n'était occupée.
+
