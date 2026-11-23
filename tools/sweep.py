@@ -70,6 +70,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=10)
     ap.add_argument("--limit", type=int, default=600)
     ap.add_argument("--profiles", help="profils de touches/options par élément (profiles.json de survey.py)")
+    ap.add_argument("--probe", type=int, default=0, help="secondes par script de touches essayé pour les éléments sans profil (survey.py --probe)")
     ap.add_argument("--model", default="Gemma-4-12B-it-GGUF")
     args = ap.parse_args()
 
@@ -103,7 +104,7 @@ def main():
         open(listing, "w").write("\n".join(rels) + "\n")
         subprocess.run([sys.executable, "-I", os.path.join(HERE, "survey.py"), "--src", args.src, "--out", args.out,
                         "--items", listing, "--jobs", str(args.jobs), "--limit", str(args.limit), "--every", "2",
-                        "--full", "--idle", "60"] + (["--profiles", args.profiles] if args.profiles else []), check=False)
+                        "--full", "--idle", "60"] + (["--profiles", args.profiles] if args.profiles else []) + (["--probe", str(args.probe)] if args.probe else []), check=False)
         subprocess.run([sys.executable, "-I", os.path.join(HERE, "survey_ask.py"), "--out", args.out, "--model", args.model,
                         "--question", QUESTION], check=False)
         ids = {ident(r) for r in rels}

@@ -442,3 +442,42 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   centaines de fois sont comptés à chaque mappage. Corrigé (commit 09fee32) : `Backend::trim_open_bus`, MADV_DONTNEED de ces
   mappages toutes les secondes (54 Mo stables). Aucune mémoire réelle n'était occupée.
 
+## ÉTAT À LA FIN DE LA SESSION DU 2026-11-23 (~20 h) — À REPRENDRE
+
+### Fait aujourd'hui (tout commité et poussé sur `origin/master`)
+Correctifs Bare86 : IMS (double Entrée), pile du fils d'AH=55h (MISG), calage du PIT sur le front de 3DAh (MIDAS/MISG), alias de la
+ROM en FFFF0000h (SHINE#2), Glide `gu3dfGetInfo/Load` (shortcut), modes VBE 0136h/012Eh/0130h, `.BAT` et `COPY` dans le shell,
+bus ouvert FFh au-dessus de la RAM (+ allègement de la mémoire résidente), texte VGA piloté par les registres (WIPE_N64), INT 70h
+qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `.BAT`), `sweep.py` (`--profiles`, `--probe`).
+
+### CD 27 (WIR97) : balayage complet refait avec la chaîne actuelle — `scan-cd27g/` (28 éléments, tous avec ≥ 9 scènes)
+- Lancé par : `systemd-inhibit --what=sleep:idle python3 -I tools/sweep.py --src "$PC/dos-demos" --out "$PC/scan-cd27g"
+  --items "$PC/cd27-items.txt" --profiles "$PC/profiles.json" --cds 27-27 --jobs 4 --model Gemma-4-12B-it-GGUF` (≈ 45 min, Lemonade
+  sur http://localhost:13305, modèle `Gemma-4-12B-it-GGUF` déjà téléchargé). `$PC` = `/run/media/nicolasb/Seagate Portable Drive/ExtData/CD PC Team`.
+- **Analyse Gemma 4 : « PIG yes » 1, « DONTSMOKE yes » 1, TOUS DEUX FAUX POSITIFS** (comme prévu sur ce CD) : BAHO planche 6 = une
+  VACHE (clipart) et un personnage à épée ; 64K_6 planche 2 = lettres en particules illisibles prises pour « DON'T SMOKE ». La chaîne
+  (démos qui vont jusqu'au bout, scènes distinctes, planches, Gemma, bilan) est validée ; les cibles sont sur des CD ultérieurs.
+- **Ce qui reste sur CD 27** : rien d'obligatoire. Optionnel : `64K_8` (9 scènes seulement, « ok » : vérifier à la main) ; avertissements
+  `INT 10h AH=1Ch` (SWEETY, U_PLSMU : sauvegarde/restauration de l'état vidéo, non gérée) et `INT 21h AH=FFh` (GMF, TUROK) ; les
+  démos hors cibles du CD (GAME100K, ANSI, GFX, MULTICHA, RAYTRACE, 4K) ne sont volontairement pas balayées ; les 83 démos « figées »
+  de `scan-cfg/` (profils de touches inconnus) restent à traiter à part.
+- **Référence anti-régression** : `scan-cd27g/results.jsonl` (statut et nombre de scènes par démo). Après toute modification de
+  l'émulateur (IRQ, BIOS, VGA…) : `cargo test --release` (163 verts) PUIS rejouer ce CD (`sweep.py` avec une autre `--out`) et comparer
+  `kept` / `status` démo par démo avant de commiter.
+
+### Pour la suite, dans l'ordre
+1. **Audit des autres IRQ par défaut** (demande de l'utilisateur, à faire avec la référence ci-dessus) : comparer chaque gestionnaire de
+   `asm/bios.S` (INT 08h/09h, 0Ah–0Fh, 70h–77h, 1Ch) à celui d'un BIOS d'AT (acquittement du périphérique : RTC reg C fait ; clavier
+   (lecture de 60h), IRQ 12 souris, IRQ 13 FPU (port F0h), IRQ 14/15 disques : à vérifier) ; tester chaque changement isolément.
+2. **CD 28 puis suivants**, un CD à la fois, revue des « à regarder » avant de continuer :
+   `python3 -I tools/sweep.py --src "$PC/dos-demos" --out "$PC/scan-full" --items "$PC/scan-full/full-items.txt" --profiles "$PC/profiles.json"
+   --probe 25 --cds 28-28 --one --jobs 4` (sous `systemd-inhibit`, en tâche suivie, JAMAIS `nohup &`; ne pas recompiler Bare86 pendant un balayage).
+   `full-items.txt` : 629 éléments, CD 27 → 63 (CD 28 : 49 ; CD 29 : 96 ; CD 32 : 67). Les démos qui s'arrêtent en moins de 20 s : relancer à
+   `--mips 60` (voir MISG, R_TV, immort).
+3. Démos douteuses restantes : PW-BANAN, INVALIDE, glamour, 4kbugs ; WIPE_N64 (rendu animé mais non vérifié) ; orthicon (archive incomplète).
+4. Idées : `CHOICE`/`XCOPY` et redirection `> NUL` des programmes dans le shell ; `INT 10h AH=1Ch` ; `INT 21h AH=FFh`.
+
+### Piège rappelé
+Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
+Branche locale `dyntrans` : non poussée (travail antérieur, non touché aujourd'hui).
+
