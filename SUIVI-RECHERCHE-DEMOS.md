@@ -197,7 +197,7 @@ erreurs). CAUSE : presque toutes les démos attendent une touche / un choix (son
 ## ANOMALIES À CORRIGER (liste tenue par l'utilisateur)
 - **Dune** (`~/Dev/dos-progs/dune`, `./DUNEPRG.EXE ENG VGA EMS 386 SDB`) : 100 % de CPU signalé le 2026-11-22. RÉGLÉ
   le 2026-11-23 : `INT 33h AX=3` servi en ROM échappait à l'endormissement (84 % → 9 %, commit f817c63).
-- **IMS (Indoor Music System)** : Entrée ne lance pas le programme sur l'écran de configuration (flèches OK) ; bloque 30+ démos.
+- **IMS (Indoor Music System)** : ~~Entrée ne lance pas le programme~~ NON-BOGUE, élucidé le 2026-11-23 : « return:start » exige DEUX Entrées à moins de 36 tics (≈ 2 s) l'une de l'autre (premier appui = armement, le second confirme ; au-delà de 2 s l'armement est annulé). Nos sondes espaçaient les Entrées de 2 s pile. `{enter}{wait:500}{enter}` lance la démo (INVIT : « Starting vesa », scènes). Esc suit la même logique (Esc, puis Esc).
 - **`.BAT`** : pas d'interpréteur de lots dans le shell intégré (`program = DUNE.BAT` ne marche pas).
 - Avertissement MIDAS « Unable to synchronize to display refresh » : cause non trouvée.
 
@@ -240,7 +240,7 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   scrutation sur 16 passe maintenant par l'hôte (compteur en 40:F0), dont `idle_poll` endort le vCPU
   (seuil d'espacement porté à 1 ms pour les appels clavier). IMS : 100 % → 15 % de cœur. L'appel
   `INT 21h AH=2Ch/2Ah` en boucle serrée est traité de la même façon. Tests : 161 verts.
-  Le bogue « Entrée sans effet » d'IMS reste entier (Entrée est bien lue : INT 16h rend 1C0D).
+  Le « bogue » d'IMS « Entrée sans effet » n'en est pas un : double Entrée à moins de 2 s requise (voir plus bas, 2026-11-23).
 - **Dune** : en headless 14 %, en fenêtre le fil `vcpu` monte à ≈ 60 % pendant l'intro ; les compteurs
   (`spin_sleeps` > 10 000, attente sur 3DAh) montrent que l'attente de retour vertical est déjà endormie :
   le reste est du calcul réel sans bridage (blit vers A000h). Pas de boucle active à corriger pour l'instant.
@@ -282,7 +282,10 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 2. (Dune : réglé le 2026-11-23, plus rien à faire.)
 3. MISG : comprendre pourquoi le dépaqueteur saute dans des données (LOCK OUTSW en 014D:002B).
 4. WIPE_N64 : examiner le mode graphique (palette / début d'affichage) ; 64K_5 : comparer à une vidéo.
-5. IMS : « Entrée sans effet » (bloque ≈ 30 démos) : toujours à diagnostiquer.
+5. IMS : RÉSOLU le 2026-11-23, pas un bogue de Bare86 : double Entrée à moins de 2 s (`{enter}{wait:500}{enter}`).
+   Méthode : trace pas à pas du code protégé de l'invité (désassemblage de la boucle de saisie : état 1 + comparaison
+   de `40:6C` avec 0x24 tics). `tools/survey.py` a trois nouveaux scripts candidats ; profil INVIT corrigé.
+   À FAIRE : relancer la sonde sur les ≈ 30 démos IMS (celles dont le profil retient une Entrée simple) et revoir le CD 27.
 6. Ensuite seulement : Gemma sur `scan-cd27f` (`tools/survey_ask.py`), puis CD 28 et suivants avec la même
    chaîne (sonde de touches corrigée, audit, CPU), un CD à la fois, revue avant de continuer.
 7. `.BAT` (interpréteur de lots) toujours à faire, après accord.
