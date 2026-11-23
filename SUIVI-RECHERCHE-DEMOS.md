@@ -289,3 +289,16 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 6. Ensuite seulement : Gemma sur `scan-cd27f` (`tools/survey_ask.py`), puis CD 28 et suivants avec la même
    chaîne (sonde de touches corrigée, audit, CPU), un CD à la fois, revue avant de continuer.
 7. `.BAT` (interpréteur de lots) toujours à faire, après accord.
+
+### Relance des démos IMS (2026-11-23, `scan-ims`, 17 éléments repérés par « Indoor Music System » à l'écran)
+- Passées (scènes 29 à 170) : INVIT, AMB_NOBL (cd28 et cd32), MARKKU (cd28 et cd32), MACHINA, PM_FREE, img_del4, tour_by_, delir, vague_sp.
+  Clé du succès : `{enter}{wait:500}{enter}` (IMS v0.6 l'affiche : « 2*return:start »), attente initiale de 3 à 8 s ; les profils
+  de `profiles.json` sont corrigés (sauvegardes `profiles.json.bak`, `.bak-ims`). La sonde automatique ne les retrouvait pas
+  toutes seule : les profils déjà mémorisés l'emportent (les retirer avant de relancer `--probe`).
+- Passé IMS mais bloqué plus loin (nouveaux bogues, pas IMS) :
+  * QD_FOCUS (Quad, BIZ97) et R_TV : « VESA LFB MODES CHECK … 320x240x16bit Failed », sortie au DOS après 10 s ;
+  * SHINE2 (MAGS) : « unexpected VM exit: InternalError » (erreur de l'hôte KVM, à reproduire) ;
+  * shortcut (Takeover 98) : rendu au DOS après 15 s, sans message ;
+  * rplbaker (movistar.exe, Evoke 98) : opcode invalide (INT 06h) comme MISG ;
+  * rpl_star (ICING99, movie.exe) : `INT 68h AH=43h` non géré (pas IMS).
+
