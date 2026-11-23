@@ -19,7 +19,7 @@
 //!
 //! Texte et CGA restent en RAM ordinaire (B0000–BFFFF).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::io::IoDevice;
 
@@ -197,6 +197,27 @@ pub enum Access {
     Emulated,
 }
 
+/// Retard maximal, après le début de l'impulsion de synchronisation verticale, avec lequel on
+/// recale la date que voit le minuteur (au-delà, le programme a vraiment été retardé).
+const EDGE_PEG_MAX_NS: u128 = 150_000;
+/// Fenêtre, après la lecture qui a vu le front, où le minuteur montre la date du front.
+const EDGE_PEG_WINDOW: Duration = Duration::from_micros(100);
+/// Dernier front montant de l'impulsion verticale vu par le programme : (date du front, date de la lecture).
+static EDGE: std::sync::Mutex<Option<(Instant, Instant)>> = std::sync::Mutex::new(None);
+
+/// Date que voit le minuteur 8254 à `now` : pour les accès qui suivent de peu la lecture de 3DAh qui
+/// a vu le front montant du retour vertical, la date de ce front. Un programme qui mesure la
+/// période du balayage (arme le minuteur sur un front, le relit sur le suivant) trouve ainsi
+/// toujours la même valeur, comme sur un PC où la scrutation prend une microseconde ; ici chaque
+/// lecture de 3DAh coûte une sortie de VM (≈ 10 µs) et la période mesurée variait de ± 40 µs
+/// (la démo MISG, qui refuse un écart, déclarait ne pas pouvoir se synchroniser).
+pub fn timer_now(now: Instant) -> Instant {
+    match *EDGE.lock().unwrap() {
+        Some((edge, seen)) if now >= seen && now - seen < EDGE_PEG_WINDOW => edge,
+        _ => now,
+    }
+}
+
 pub struct Vga {
     /// Mode VBE en cours (sinon : modes VGA standard).
     pub vbe: Option<Vbe>,
@@ -230,6 +251,8 @@ pub struct Vga {
     cga_mode: u8,
     cga_color: u8,
     start: Instant,
+    /// Bit 3 (synchronisation verticale) vu à la dernière lecture de 3DAh.
+    last_vsync: bool,
     /// Incrémenté à chaque changement de registre qui touche l'accès mémoire.
     pub epoch: u64,
     /// Chain4 au dernier changement de configuration (bascule du contenu).
@@ -266,6 +289,7 @@ impl Vga {
             cga_mode: 0x29,
             cga_color: 0x30,
             start: Instant::now(),
+            last_vsync: false,
             epoch: 0,
             chain4_was: false,
             read_intent: false,
@@ -582,11 +606,22 @@ impl Vga {
 
     fn status(&mut self) -> u8 {
         self.attr_data = false;
-        let (lines, visible, vsync) = self.vertical();
-        let t = self.start.elapsed().as_nanos();
+        let (lines, visible, vsync_lines) = self.vertical();
+        let now = Instant::now();
+        let t = now.saturating_duration_since(self.start).as_nanos();
         let line = t / LINE_NS % lines;
         let vblank = line >= visible;
-        let vsync = vsync.contains(&line);
+        let vsync = vsync_lines.contains(&line);
+        // Front montant vu par le programme : date réelle de l'impulsion, que le minuteur
+        // montre pour les accès qui suivent aussitôt (`edge_time`).
+        if vsync && !self.last_vsync {
+            let since = (line - vsync_lines.start) * LINE_NS + t % LINE_NS;
+            if since < EDGE_PEG_MAX_NS {
+                let edge = now - Duration::from_nanos(since as u64);
+                *EDGE.lock().unwrap() = Some((edge, now));
+            }
+        }
+        self.last_vsync = vsync;
         let hblank = t % LINE_NS >= LINE_NS - HBLANK_NS;
         // Bit 0 : affichage inactif (blanc de ligne ou vertical) ; bit 3 : synchronisation verticale.
         u8::from(vblank || hblank) | if vsync { 0x08 } else { 0 }

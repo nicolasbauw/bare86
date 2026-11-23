@@ -487,7 +487,11 @@ def run_one(item, args, src):
             save_profile(args.profiles, rel, profile)
         if profile:
             cmd = with_option(cmd, "--keys", profile.get("keys", args.keys))
-            cmd[1:1] = profile.get("opts", [])
+            opts = profile.get("opts", [])
+            if "--mips" in opts and "--mips" in cmd:
+                i = cmd.index("--mips")  # le bridage du profil remplace celui par défaut
+                del cmd[i:i + 2]
+            cmd[1:1] = opts
             res["profile"] = {k: v for k, v in profile.items() if k != "probe"}
         out = ""
         timed = False

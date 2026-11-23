@@ -375,7 +375,7 @@ pub struct PitPorts(pub Rc<RefCell<Pit>>);
 
 impl IoDevice for PitPorts {
     fn read(&mut self, port: u16, _: u8) -> u32 {
-        let now = Instant::now();
+        let now = crate::vga::timer_now(Instant::now());
         let mut p = self.0.borrow_mut();
         u32::from(match port {
             0x40..=0x42 => p.read_counter(usize::from(port - 0x40), now),
@@ -385,7 +385,7 @@ impl IoDevice for PitPorts {
     }
 
     fn write(&mut self, port: u16, _: u8, value: u32) {
-        let now = Instant::now();
+        let now = crate::vga::timer_now(Instant::now());
         let mut p = self.0.borrow_mut();
         let v = value as u8;
         match port {
