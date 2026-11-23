@@ -421,3 +421,15 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   de vidéo de référence pour confirmer que l'image est exacte (les lignes de bas d'écran restent suspectes). À confronter à une prise
   de référence si on en trouve une.
 
+### 64K_5 LowRes'97 (intro d'invitation de Metabolic) réglée (2026-11-23)
+- **Symptôme** : logo « LowRes'97 » puis moitié basse noire, image figée pendant 40 s.
+- **Cause** : la démo cadence sa chronologie sur l'IRQ 8 de l'horloge temps réel (RTC à 1 024 Hz : CMOS reg B ← 42h), son gestionnaire
+  incrémente un compteur puis CHAÎNE vers l'ancien vecteur INT 70h. Le BIOS d'un AT y lit le registre C du CMOS (acquittement) ; le nôtre
+  n'y faisait que la fin d'interruption : la RTC, qui ne redemande une interruption qu'après lecture du registre C, n'en envoyait
+  plus qu'une seule : chronologie arrêtée.
+- **Remède** : `INT 70h` par défaut en ROM (`asm/bios.S` `int70`, `bios.rs` `INT70`) lit le registre C avant les deux fins d'interruption.
+  43 000 IRQ 8 en 40 s ; les textes « METABOLIC INVITES YOU TO LOWRES 97 », « THE FIRST PARTY EVER HELD IN AMSTERDAM », « 31 OCT TILL 2 NOV
+  THIS YEAR » défilent maintenant. Aucune vidéo de référence (introuvable), mais l'ensemble est cohérent.
+- **Piste générale** : un vecteur d'IRQ par défaut qui ne fait pas ce que fait le BIOS réel (acquittement du périphérique) fige les
+  programmes qui s'y chaînent ; à garder en tête pour d'autres IRQ (INT 08h, clavier, IRQ 12…).
+

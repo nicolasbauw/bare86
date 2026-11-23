@@ -278,6 +278,22 @@ int33_pos:
     iret
 1:  jmp stubs + 0x33 * 16
 
+    # INT 70h, IRQ 8 (horloge temps réel) sans gestionnaire du programme : comme le BIOS d'un AT, lit le
+    # registre C du CMOS (sans quoi l'horloge ne redemande plus d'interruption périodique : un programme
+    # qui chaîne vers l'ancien vecteur après son propre gestionnaire, LowRes'97, ne recevait qu'une
+    # interruption), puis fin d'interruption aux deux 8259.
+    .org 0xEBE0, 0xFF
+int70:
+    push ax
+    mov al, 0x0C
+    out 0x70, al
+    in al, 0x71
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop ax
+    iret
+
     .org 0xEC00, 0xFF
 vbe_pm:
     .word pm_window - vbe_pm, pm_start - vbe_pm, pm_palette - vbe_pm, pm_ports - vbe_pm
