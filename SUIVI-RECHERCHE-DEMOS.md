@@ -361,3 +361,10 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   avant (pas à pas lent : la démo ne quitte pas). Profil : `opts: ["--mips", "60"]`, clavier `{wait:8000}{enter}{wait:500}{enter}`.
 - **Piège de méthode** : deux démos « IMS » (INVIT, R_TV…) demandent deux Entrées à moins de 2 s ; un `{enter}` isolé ne démarre pas.
 
+### rpl_star (ICING99, movie.exe) réglée (2026-11-23) : pas un bogue de fond
+- `INT 68h AH=43h not handled` n'était qu'un message inoffensif (appel de reconnaissance du hôte DPMI, `--dpmi`), non la cause.
+  Le vrai défaut : `MOVIE.EXE` seul répond « No DPMI host present » (NOTE.TXT : « try dos4gw movie.exe ») ; lancée par
+  `DOS4GW.EXE MOVIE.EXE` elle arrive à l'écran IMS v0.5 (double Entrée `{enter}{wait:500}{enter}`) puis joue (86 scènes, « Roger Superstar »).
+- `tools/survey.py` : sur « No DPMI host present », si un extendeur (DOS4GW.EXE, DOS32A…) est dans le dossier, l'exécutable est relancé par
+  lui avant de se rabattre sur `--dpmi`. Profil : `{wait:6000}{enter}{wait:500}{enter}`.
+

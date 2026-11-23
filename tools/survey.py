@@ -511,6 +511,16 @@ def run_one(item, args, src):
 
         for attempt in range(2):
             out, timed = execute(cmd)
+            # « No DPMI host present » alors qu'un extendeur du dossier (DOS4GW.EXE…) y est :
+            # on lance l'exécutable par lui (« dos4gw movie.exe », comme le dit le NOTE.TXT de
+            # rpl_star), avant de se rabattre sur --dpmi.
+            if attempt == 0 and re.search(r"no dpmi host", out, re.I) and not extra:
+                d = os.path.dirname(exe)
+                ext = next((f for f in sorted(os.listdir(d)) if os.path.splitext(f.lower())[0] in EXTENDERS and f.lower().endswith(".exe")), None)
+                if ext and ext.lower() != os.path.basename(exe).lower():
+                    cmd = cmd[:-1] + [ext, os.path.basename(exe)]
+                    res["args"] = [ext, os.path.basename(exe)]
+                    continue
             # Hôte DPMI demandé (« DPMI? », « no DPMI ») : un second essai avec --dpmi.
             if attempt == 0 and re.search(r"dpmi", out, re.I) and "--dpmi" not in cmd:
                 cmd.insert(1, "--dpmi")
