@@ -183,6 +183,9 @@ fn render_vbe(vga: &Vga, v: &crate::vga::Vbe, out: &mut Vec<u32>) -> (usize, usi
 /// contrôleur d'attributs puis le DAC, clignotement (bit 7 si activé),
 /// curseur selon sa forme dans la BDA. `blink_on` : phase visible.
 pub fn render_text(vga: &Vga, mem: &GuestMem, font: &crate::font::Font, blink_on: bool, out: &mut Vec<u32>) -> Option<(usize, usize)> {
+    if let Some(r) = render_text_hw(vga, mem, font, blink_on, out) {
+        return Some(r);
+    }
     let snap = crate::bios::text_snapshot(mem)?;
     // Hauteur de cellule du BIOS (INT 10h AX=1112 : 8 points, 80×50) ; la police 8×16 est
     // alors lue une ligne sur deux.
@@ -227,6 +230,111 @@ pub fn render_text(vga: &Vga, mem: &GuestMem, font: &crate::font::Font, blink_on
         for y in (start * scale)..((end + 1) * scale).min(fh) {
             let line = &mut out[(r * fh + y) * w + c * fw..][..fw];
             line.fill(fg);
+        }
+    }
+    Some((w, h))
+}
+
+/// Texte piloté par les registres, pour les programmes qui s'en servent : texte placé dans les plans 0
+/// (caractères) et 1 (attributs) de la VGA, vus par la fenêtre A0000h (carte mémoire de GC 06h), avec
+/// adresse de début, largeur logique (registre de décalage), hauteur de cellule et défilement fin du
+/// CRTC, polices chargées dans le plan 2 et choisies par le registre de sélection de table de caractères
+/// (WIPE_N64 : « écran » de 160 colonnes défilé point par point, polices redéfinies). Les polices du plan 2
+/// restées vides (celles de la ROM, que le BIOS de l'hôte ne charge pas) retombent sur la police `font`.
+/// `None` : le texte ordinaire, rendu d'après la mémoire B8000h et le BDA.
+fn render_text_hw(vga: &Vga, mem: &GuestMem, font: &crate::font::Font, blink_on: bool, out: &mut Vec<u32>) -> Option<(usize, usize)> {
+    if vga.gc[6] & 1 != 0 || vga.vbe.is_some() || matches!(mem.read_u8(0x449), 4..=6) {
+        return None;
+    }
+    let map = vga.gc[6] >> 2 & 3;
+    let planes = map < 2;
+    let font_plane = vga.region(2);
+    let user_font = font_plane.iter().any(|&b| b != 0);
+    if !planes && !user_font {
+        return None;
+    }
+    let c = &vga.crtc;
+    let cols = usize::from(c[1]) + 1;
+    let fh = usize::from(c[9] & 0x1F) + 1;
+    let vde = usize::from(c[0x12]) | (usize::from(c[7] & 0x02) << 7) | (usize::from(c[7] & 0x40) << 3);
+    let lines = vde + 1;
+    let rows = lines.div_ceil(fh);
+    let word = c[0x17] & 0x40 == 0;
+    let logical = usize::from(c[0x13]) * if word { 2 } else { 1 };
+    let start = (usize::from(c[0x0C]) << 8) | usize::from(c[0x0D]);
+    let (width9, nine) = (vga.seq[1] & 1 == 0, vga.seq[1] & 1 == 0);
+    let fw = if width9 { 9 } else { 8 };
+    let (w, h) = (cols * fw, lines);
+    if cols == 0 || cols > 200 || h == 0 || h > 1024 || logical == 0 {
+        return None;
+    }
+    // Cellules : plans 0 et 1 (A0000h), ou la mémoire de texte ordinaire.
+    let (mut ram, cells_plane) = (Vec::new(), planes);
+    if !planes {
+        let base = if map == 2 { 0xB_0000 } else { 0xB_8000 };
+        ram = vec![0u8; 0x8000];
+        mem.read(base, &mut ram);
+    }
+    let cell = |addr: usize| -> (u8, u8) {
+        if cells_plane {
+            (vga.region(0)[addr & 0xFFFF], vga.region(1)[addr & 0xFFFF])
+        } else {
+            let a = (addr * 2) & 0x7FFF;
+            (ram[a], ram[a + 1])
+        }
+    };
+    // Tables de caractères A (attribut bit 3 à 1) et B : numéro 0–7 → base dans le plan 2.
+    let sel = vga.seq[3];
+    let base = |n: u8| usize::from(n & 3) * 0x4000 + usize::from(n >> 2 & 1) * 0x2000;
+    let map_a = base((sel & 3) | (sel >> 4 & 1) << 2);
+    let map_b = base((sel >> 2 & 3) | (sel >> 5 & 1) << 2);
+    let region_used = |b: usize| font_plane[b..(b + 0x2000).min(font_plane.len())].iter().any(|&x| x != 0);
+    let (a_used, b_used) = (region_used(map_a), region_used(map_b));
+    let blink = vga.attr[0x10] & 0x08 != 0;
+    let preset = usize::from(c[8] & 0x1F);
+    let pan = usize::from(vga.attr[0x13] & 0x0F);
+    let pan = if nine { if pan == 8 { 0 } else { pan + 1 } } else { pan & 7 };
+    let line_compare = usize::from(c[0x18]) | (usize::from(c[7] & 0x10) << 4) | (usize::from(c[9] & 0x40) << 3);
+    out.clear();
+    out.resize(w * h, 0);
+    for y in 0..h {
+        // Après la comparaison de ligne, l'écran repart de l'adresse 0 sans défilement.
+        let (s_y, origin) = if y > line_compare { (y - line_compare - 1, 0) } else { (y + preset, start) };
+        let (row, sub) = (s_y / fh, s_y % fh);
+        let line = &mut out[y * w..][..w];
+        for col in 0..cols + 1 {
+            let (ch, a) = cell(origin + row * logical + col);
+            let (fg, bg) = if blink { (a & 0x0F, a >> 4 & 7) } else { (a & 0x0F, a >> 4) };
+            let hidden = blink && a & 0x80 != 0 && !blink_on;
+            let bg_rgb = dac_rgb(vga, attr_color(vga, bg));
+            let fg_rgb = dac_rgb(vga, attr_color(vga, if hidden { bg } else { fg }));
+            let (used, mbase) = if a & 0x08 != 0 { (a_used, map_a) } else { (b_used, map_b) };
+            let bits = if used { font_plane[(mbase + usize::from(ch) * 32 + sub) & 0xFFFF] } else { font.row(ch, sub * font.height / fh) };
+            for x in 0..fw {
+                let px = col * fw + x;
+                if px < pan || px - pan >= w {
+                    continue;
+                }
+                let on = if x < 8 { bits >> (7 - x) & 1 != 0 } else { vga.attr[0x10] & 0x04 != 0 && (0xC0..=0xDF).contains(&ch) && bits & 1 != 0 };
+                line[px - pan] = if on { fg_rgb } else { bg_rgb };
+            }
+        }
+    }
+    // Curseur matériel.
+    let cur = (usize::from(c[0x0E]) << 8) | usize::from(c[0x0F]);
+    if blink_on && c[0x0A] & 0x20 == 0 {
+        let rel = cur.wrapping_sub(start) & 0xFFFF;
+        let (r, k) = (rel / logical, rel % logical);
+        if r < rows && k < cols {
+            let (_, a) = cell(cur);
+            let fg = dac_rgb(vga, attr_color(vga, a & 0x0F));
+            for sy in usize::from(c[0x0A] & 0x1F)..=usize::from(c[0x0B] & 0x1F).min(fh - 1) {
+                let y = r * fh + sy;
+                if y < h {
+                    let _ = width9;
+                    out[y * w + k * fw..][..fw].fill(fg);
+                }
+            }
         }
     }
     Some((w, h))

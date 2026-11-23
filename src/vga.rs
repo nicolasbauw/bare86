@@ -753,6 +753,15 @@ impl Vga {
     }
 
     /// Mode VGA standard programmé par l'INT 10h (registres du BIOS).
+    /// Hauteur de cellule d'un mode texte (INT 10h AH=11h avec reprogrammation) : lignes de balayage par
+    /// caractère et forme du curseur.
+    pub fn set_cell_height(&mut self, h: usize) {
+        self.crtc[9] = (self.crtc[9] & 0xE0) | (h as u8 - 1);
+        self.crtc[0x0A] = h as u8 - 2;
+        self.crtc[0x0B] = h as u8 - 1;
+        self.epoch += 1;
+    }
+
     pub fn set_mode(&mut self, mode: u8, clear: bool) {
         self.vbe = None;
         let p = mode_params(mode);

@@ -493,10 +493,17 @@ impl Bios {
             // Police ROM 8×16 dans un bloc (AL=04h, 14h) : c'est déjà celle
             // du rendu texte. Les polices chargées par le programme (plan 2)
             // ne sont pas encore affichées.
-            0x11 if matches!(al, 0x04 | 0x14) => {}
+            0x11 if matches!(al, 0x04 | 0x14) => {
+                if al == 0x14 {
+                    self.vga.borrow_mut().set_cell_height(16);
+                }
+            }
             // Police 8×8 avec reprogrammation (AL=12h, 22h) : mode texte 80×50 (WIPE_N64). La
             // police 8×16 de la ROM sert de source (une ligne sur deux) au rendu.
             0x11 if matches!(al, 0x12 | 0x22) => {
+                if al == 0x12 {
+                    self.vga.borrow_mut().set_cell_height(8);
+                }
                 if mem.read_u8(bda::VIDEO_MODE) <= 3 {
                     mem.write_u8(bda::CHAR_HEIGHT, 8);
                     mem.write_u8(bda::ROWS, 49);
@@ -505,7 +512,11 @@ impl Bios {
                 }
             }
             // Autres chargements de police (8×14, 8×16, 8×8 sans reprogrammation) : sans effet visible.
-            0x11 if matches!(al, 0x00..=0x03 | 0x10..=0x11 | 0x20..=0x24) => {}
+            0x11 if matches!(al, 0x00..=0x03 | 0x10..=0x11 | 0x20..=0x24) => {
+                if al == 0x11 {
+                    self.vga.borrow_mut().set_cell_height(14);
+                }
+            }
             // Informations sur la police : ES:BP selon BH (00h INT 1Fh,
             // 01h INT 43h, 02h 8×14, 06h 8×16, 05h/07h remplacements 9
             // points) ; 8×8 (03h, 04h) pas encore en ROM : 0000:0000.

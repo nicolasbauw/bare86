@@ -407,3 +407,17 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 - Restent douteuses (non examinées) : PW-BANAN (DOS32, sort après
   lecture de son exe), INVALIDE/glamour/4kbugs (intros de 4 Ko qui s'arrêtent sans message), ms98/demo.zip (exige COMMAND.COM).
 
+### WIPE_N64 (64K_2, Wired 97) : rendu du texte piloté par la VGA (2026-11-23)
+- **Cause de l'« écran noir puis rouge »** : WIPE_N64 est une démo en MODE TEXTE qui n'utilise pas la mémoire B8000h : elle met la
+  carte mémoire à A0000h (GC 06h = 06h), écrit caractères et attributs dans les PLANS 0 et 1 de la VGA (64 Ko chacun, 32 K cellules),
+  redéfinit des polices dans le plan 2, les choisit par le registre de sélection de table de caractères (SEQ 03h), et fait défiler un
+  « écran » logique de 160 colonnes (registre de décalage 13h = 50h) par l'adresse de début (CRTC 0Ch/0Dh) et le défilement fin
+  (CRTC 08h). Bare86 ne rendait que le texte de B8000h avec sa police (le BDA), d'où un rouge uni.
+- **Remède** : `render_text_hw` (src/render.rs), actif quand la carte mémoire est A0000h ou qu'une police est chargée dans le plan 2 :
+  cellules des plans 0/1 (ou de B8000h), adresse de début, largeur logique, hauteur de cellule (CRTC 09h), 8/9 points, défilement
+  fin, comparaison de ligne, curseur matériel, tables de caractères A/B (attribut bit 3) dans le plan 2 ; une table restée vide retombe
+  sur la police de l'hôte. `INT 10h AX=1111h/1112h/1114h` règlent maintenant la hauteur de cellule du CRTC (`Vga::set_cell_height`).
+- **État** : la démo ANIME des balayages vert sur rouge (des « wipes » faits de glyphes en points) au lieu d'un rouge fixe ; je n'ai pas
+  de vidéo de référence pour confirmer que l'image est exacte (les lignes de bas d'écran restent suspectes). À confronter à une prise
+  de référence si on en trouve une.
+
