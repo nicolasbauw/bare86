@@ -1903,7 +1903,9 @@ impl<B: Backend> Pc<B> {
             } else {
                 let mut glide = self.glide.borrow_mut();
                 let g = glide.get_or_insert_with(|| Box::new(crate::glide::Glide::new()));
-                let ret = g.execute(&words, &mut read, &mut write);
+                let dos = &self.dos;
+                let mut file = |name: &[u8]| dos.read_file(name);
+                let ret = g.execute(&words, &mut read, &mut write, &mut file);
                 self.stats.glide_swaps = g.swaps;
                 ret
             }

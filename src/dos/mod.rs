@@ -390,6 +390,11 @@ impl Dos {
     }
 
     /// Fichier d'un programme : contenu et chemin DOS canonique.
+    /// Contenu d'un fichier désigné par un chemin du DOS (répertoire courant compris), pour l'hôte.
+    pub fn read_file(&self, path: &[u8]) -> Option<Vec<u8>> {
+        self.read_program(path).ok().map(|(data, _)| data)
+    }
+
     fn read_program(&self, path: &[u8]) -> std::result::Result<(Vec<u8>, Vec<u8>), u16> {
         match self.drives.resolve(path)? {
             Target::Path { host, exists: true, dos } if vfs::is_file(&host) => {

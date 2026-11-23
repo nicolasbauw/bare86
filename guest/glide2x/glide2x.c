@@ -36,7 +36,7 @@ enum {
     OP_TEX_MIPMAP, OP_TEX_SOURCE, OP_TEX_DOWNLOAD, OP_TEX_DOWNLOAD_PARTIAL,
     OP_TEX_TABLE, OP_TRIANGLE, OP_LINE, OP_POINT, OP_SAVE_STATE,
     OP_RESTORE_STATE, OP_LFB_READ, OP_LFB_WRITE, OP_FOG_GENERATE, OP_SHUTDOWN,
-    OP_GAMMA, OP_MISSING, OP_CHROMA_MODE, OP_CHROMA_VALUE,
+    OP_GAMMA, OP_MISSING, OP_CHROMA_MODE, OP_CHROMA_VALUE, OP_FILE_READ,
 };
 #define VERTEX_WORDS 11
 
@@ -426,6 +426,103 @@ static i32 tex_current[2] = {-1, -1};
 static GrMipMapInfo *mipmap(i32 id) { return id >= 0 && id < mipmap_count && mipmaps[id].valid ? &mipmaps[id] : 0; }
 static u32 mipmap_bytes(const GrMipMapInfo *m) {
     return mem_required(m->lod_min, m->lod_max, m->aspect_ratio, m->format, m->odd_even_mask);
+}
+
+/* --- Fichiers .3df (gu3dfGetInfo, gu3dfLoad) ---------------------------
+ * Le fichier est lu par l'hôte (OP_FILE_READ) ; l'en-tête est du texte :
+ *   3df v1.1 / <format> / lod range: <petit> <grand> / aspect ratio: <l> <h>
+ * puis, pour les formats YIQ, la table NCC (64 octets), ou pour P_8 et AP_88 la palette
+ * (1 024 octets), puis les niveaux du plus grand au plus petit, tels que
+ * grTexDownloadMipMap les attend (texels de 16 bits : poids fort d'abord). */
+typedef struct { u32 width, height; i32 small_lod, large_lod, aspect_ratio, format; } Gu3dfHeader;
+/* `table` est une union de la Glide 2.4 : table NCC (formats YIQ) ou palette de 256 mots (P_8, AP_88). */
+typedef struct { Gu3dfHeader header; union { GuNccTable ncc; u32 palette[256]; } table; void *data; u32 mem_required; } Gu3dfInfo;
+
+static u32 file_read(const char *name, void *dst, u32 off, u32 max) {
+    cmd4(OP_FILE_READ, (u32)name, (u32)dst, off, max);
+    return flush();
+}
+static i32 lower(i32 c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static i32 same(const char *a, const char *b) {
+    while (*b) { if (lower(*a) != lower(*b)) return 0; a++; b++; }
+    return *a == 0;
+}
+static const char *skip_to(const char *p, char c) { while (*p && *p != c) p++; return *p ? p + 1 : p; }
+static u32 number(const char **p) {
+    u32 n = 0;
+    while (**p == ' ') (*p)++;
+    while (**p >= '0' && **p <= '9') n = n * 10 + (u32)(*(*p)++ - '0');
+    return n;
+}
+static i32 lod_index(u32 size) { i32 e = 0; while (e < 8 && (256u >> e) > size) e++; return e; }
+
+/* Lit l'en-tête de `name` ; rend 0 s'il n'est pas reconnu, sinon la position des données. */
+static i32 read_3df(const char *name, Gu3dfInfo *info, u32 *data_at) {
+    static const struct { const char *name; i32 format; } formats[] = {
+        {"rgb332", 0}, {"yiq", 1}, {"a8", 2}, {"i8", 3}, {"ai44", 4}, {"p8", 5}, {"argb8332", 8},
+        {"ayiq8422", 9}, {"rgb565", 10}, {"argb1555", 11}, {"argb4444", 12}, {"ai88", 13}, {"ap88", 14},
+    };
+    char head[256], line[4][64];
+    u32 got = file_read(name, head, 0, sizeof head - 1);
+    if (got == 0xFFFFFFFFu || got < 20) return 0;
+    head[got] = 0;
+    u32 at = 0;
+    for (i32 k = 0; k < 4; k++) {
+        u32 n = 0;
+        while (at < got && head[at] != '\n') { if (head[at] != '\r' && n < 63) line[k][n++] = head[at]; at++; }
+        if (at >= got) return 0;
+        line[k][n] = 0;
+        at++;
+    }
+    if (!(line[0][0] == '3' && line[0][1] == 'd' && line[0][2] == 'f')) return 0;
+    i32 format = -1;
+    for (u32 k = 0; k < sizeof formats / sizeof formats[0]; k++) if (same(line[1], formats[k].name)) format = formats[k].format;
+    const char *p = skip_to(line[2], ':');
+    u32 small = number(&p), large = number(&p);
+    p = skip_to(line[3], ':');
+    u32 aw = number(&p), ah = number(&p), aspect = 3;
+    if (format < 0 || !small || !large) return 0;
+    if (aw >= ah) { u32 r = aw / (ah ? ah : 1); aspect = r >= 8 ? 0 : r >= 4 ? 1 : r >= 2 ? 2 : 3; }
+    else { u32 r = ah / aw; aspect = r >= 8 ? 6 : r >= 4 ? 5 : 4; }
+    memset(info, 0, sizeof *info);
+    info->header.small_lod = lod_index(small);
+    info->header.large_lod = lod_index(large);
+    info->header.aspect_ratio = (i32)aspect;
+    info->header.format = format;
+    u32 w, h;
+    level_size(info->header.large_lod, (i32)aspect, &w, &h);
+    info->header.width = w;
+    info->header.height = h;
+    info->mem_required = grTexCalcMemRequired(info->header.small_lod, info->header.large_lod, (i32)aspect, format);
+    if (format == 1 || format == 9) {
+        u8 t[64];
+        if (file_read(name, t, at, 64) != 64) return 0;
+        for (i32 k = 0; k < 16; k++) info->table.ncc.yRGB[k] = t[k];
+        for (i32 k = 0; k < 4; k++)
+            for (i32 c = 0; c < 3; c++) {
+                info->table.ncc.iRGB[k][c] = (i16)(t[16 + 6 * k + 2 * c] | t[17 + 6 * k + 2 * c] << 8);
+                info->table.ncc.qRGB[k][c] = (i16)(t[40 + 6 * k + 2 * c] | t[41 + 6 * k + 2 * c] << 8);
+            }
+        at += 64;
+    }
+    if (format == 5 || format == 14) {
+        if (file_read(name, info->table.palette, at, 1024) != 1024) return 0;
+        at += 1024;
+    }
+    *data_at = at;
+    return 1;
+}
+API i32 gu3dfGetInfo(const char *name, Gu3dfInfo *info) { u32 at; return read_3df(name, info, &at); }
+API i32 gu3dfLoad(const char *name, Gu3dfInfo *info) {
+    Gu3dfInfo n;
+    u32 at;
+    if (!info->data || !read_3df(name, &n, &at)) return 0;
+    u32 bytes = host_bytes(n.header.small_lod, n.header.large_lod, n.header.aspect_ratio, n.header.format);
+    if (file_read(name, info->data, at, bytes) != bytes) return 0;
+    /* Les texels de 16 bits sont rangés poids fort d'abord dans le fichier. */
+    if (n.header.format >= 8)
+        for (u8 *q = info->data, *e = q + bytes; q + 1 < e; q += 2) { u8 t = q[0]; q[0] = q[1]; q[1] = t; }
+    return 1;
 }
 
 API void guTexMemReset(void) {

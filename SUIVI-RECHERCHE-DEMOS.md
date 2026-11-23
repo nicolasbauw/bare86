@@ -340,3 +340,15 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 - **Remède** : slot KVM en lecture seule de 64 Ko en FFFF0000h, sur la ROM F0000h (`src/kvm.rs`, `ROM_ALIAS_SLOT`). Le magazine
   s'affiche (image « Shine 2 »). Ce n'est pas la cause de R_TV (même chargeur, autre problème : elle s'arrête toujours aussitôt).
 
+### shortcut (Takeover 98, 3dfx, 1er prix) réglée (2026-11-23)
+- **Lancement** : `dos4gw shortcut.exe` (START.BAT) ; écran IMS v0.6 (« 2*return:start ») : `{enter}{wait:500}{enter}`, et AUCUNE
+  touche ensuite (toute touche pendant la démo la quitte : code 255 après 15 s dans nos premiers essais, c'était mon profil).
+- **Bogue de Bare86** : `gu3dfGetInfo` / `gu3dfLoad` (chargement des textures .3DF) n'étaient pas implémentées dans
+  `glide2x.ovl` (« Cannot load 3DFX texture ») : ajoutées dans `guest/glide2x/glide2x.c` (+ `glide2x.dll`, `glide2x.ovl`
+  recompilés). Le fichier est lu par l'hôte (nouvelle commande `FILE_READ`, 45, `src/glide/proto.rs`, chemin DOS résolu par
+  `Dos::read_file`) ; l'en-tête texte du .3DF (`3df v1.1`, format, `lod range`, `aspect ratio`) est analysé côté invité.
+- **Pièges** : (1) `Gu3dfInfo.table` est une UNION de 1 024 octets (table NCC ou palette de 256 mots) : la structure fait 1 056 octets,
+  `mem_required` à +41Ch ; avec une table de 112 octets, `malloc(0)` donnait « Assertion failed: tdfInfo[nr].data ». (2) Les texels
+  de 16 bits des .3DF sont rangés poids fort d'abord : sans échange d'octets, textures en bruit coloré.
+- **Résultat** : 24 scènes, fin de la démo à 55 s. R_TV reste à examiner (même chargeur PMODE/W que SHINE#2, s'arrête aussitôt).
+

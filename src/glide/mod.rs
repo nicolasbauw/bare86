@@ -318,20 +318,20 @@ impl Glide {
     /// Exécute un tampon de commandes ; `read` lit la mémoire de l'invité à
     /// une adresse linéaire, `write` y écrit. Rend la valeur de la dernière
     /// commande.
-    pub fn execute(&mut self, words: &[u32], read: &mut dyn FnMut(u32, &mut [u8]), write: &mut dyn FnMut(u32, &[u8])) -> u32 {
+    pub fn execute(&mut self, words: &[u32], read: &mut dyn FnMut(u32, &mut [u8]), write: &mut dyn FnMut(u32, &[u8]), file: &mut dyn FnMut(&[u8]) -> Option<Vec<u8>>) -> u32 {
         let mut i = 0;
         let mut ret = 0;
         while i < words.len() {
             let op = (words[i] >> 16) as u16;
             let n = (words[i] & 0xFFFF) as usize;
             let Some(args) = words.get(i + 1..i + 1 + n) else { break };
-            ret = self.command(op, args, read, write);
+            ret = self.command(op, args, read, write, file);
             i += 1 + n;
         }
         ret
     }
 
-    fn command(&mut self, op: u16, a: &[u32], read: &mut dyn FnMut(u32, &mut [u8]), write: &mut dyn FnMut(u32, &[u8])) -> u32 {
+    fn command(&mut self, op: u16, a: &[u32], read: &mut dyn FnMut(u32, &mut [u8]), write: &mut dyn FnMut(u32, &[u8]), file: &mut dyn FnMut(&[u8]) -> Option<Vec<u8>>) -> u32 {
         use proto::*;
         let arg = |k: usize| a.get(k).copied().unwrap_or(0);
         let f = |k: usize| f32::from_bits(a.get(k).copied().unwrap_or(0));
@@ -469,6 +469,20 @@ impl Glide {
                     let row = w * texmem::bytes_per_texel(format);
                     self.store(addr as usize + first * row, &data[..data.len().min((last + 1 - first) * row)]);
                 }
+            }
+            FILE_READ => {
+                let mut name = [0u8; 260];
+                read(arg(0), &mut name);
+                let name = &name[..name.iter().position(|&b| b == 0).unwrap_or(name.len())];
+                let Some(data) = file(name) else { return u32::MAX };
+                let (off, max) = (arg(2) as usize, arg(3) as usize);
+                if max == 0 {
+                    return data.len() as u32;
+                }
+                let part = data.get(off..).unwrap_or(&[]);
+                let part = &part[..part.len().min(max)];
+                write(arg(1), part);
+                return part.len() as u32;
             }
             TEX_TABLE => {
                 // Palette : 256 mots 0x00RRGGBB. Tables NCC : ignorées (format YIQ non rendu).
@@ -939,7 +953,7 @@ mod tests {
             v.extend_from_slice(args);
             v
         };
-        if gl.execute(&cmd(proto::INIT, &[]), &mut nr, &mut nw) == 0 {
+        if gl.execute(&cmd(proto::INIT, &[]), &mut nr, &mut nw, &mut |_| None) == 0 {
             eprintln!("no offscreen OpenGL: test skipped");
             return;
         }
@@ -953,7 +967,7 @@ mod tests {
         tri.extend(v(100.0, 300.0));
         w.extend(cmd(proto::TRIANGLE, &tri));
         w.extend(cmd(proto::SWAP, &[0]));
-        gl.execute(&w, &mut nr, &mut nw);
+        gl.execute(&w, &mut nr, &mut nw, &mut |_| None);
         let (fw, fh, px) = gl.frame().expect("image");
         assert_eq!((fw, fh), (640, 480));
         assert_eq!(px[0], 0x0000FF, "fond");

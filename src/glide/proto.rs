@@ -85,5 +85,10 @@ pub const CHROMA_MODE: u16 = 43;
 /// couleur clé, au format de `WIN_OPEN`
 pub const CHROMA_VALUE: u16 = 44;
 
+/// Lecture d'un fichier du DOS par l'hôte (utilitaires `gu3df*`, la bibliothèque n'ayant pas d'E/S) :
+/// nom (chaîne ASCIIZ), adresse destination, déplacement, nombre d'octets maximal ; rend les octets
+/// copiés (avec 0 octet demandé : la taille du fichier), ou FFFFFFFFh si le fichier est introuvable
+pub const FILE_READ: u16 = 45;
+
 /// Sommet transmis : x, y, ooz, oow, r, g, b, a, sow, tow, oow (TMU 0).
 pub const VERTEX_WORDS: usize = 11;
