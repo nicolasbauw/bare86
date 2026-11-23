@@ -1614,13 +1614,24 @@ impl<B: Backend> Pc<B> {
                 // Signal (battement, débordement du compteur) : le bridage
                 // est servi en tête de boucle.
                 Exit::Interrupted => {
+                    let sleeps = self.stats.spin_sleeps;
+                    self.spin_check()?;
+                    // Profil : seuls comptent les battements où le vCPU n'a pas dormi
+                    // (une attente endormie ne coûte pas de CPU) ; rapport intermédiaire
+                    // toutes les 5000 mesures, puis remise à zéro (la sortie par Ctrl+C
+                    // ne passe pas par le rapport final).
                     if self.ip_profile.is_some()
+                        && self.stats.spin_sleeps == sleeps
                         && let Ok(cpu) = self.vm.state()
                     {
                         let at = cpu.linear(1, cpu.ip);
-                        *self.ip_profile.as_mut().unwrap().entry(at >> 4).or_default() += 1;
+                        let p = self.ip_profile.as_mut().unwrap();
+                        *p.entry(at >> 4).or_default() += 1;
+                        if p.values().sum::<u32>() >= 5000 {
+                            self.profile_report();
+                            self.ip_profile.as_mut().unwrap().clear();
+                        }
                     }
-                    self.spin_check()?
                 }
                 Exit::IrqWindow => {}
                 Exit::Step => return Ok(Event::Step),
@@ -2194,6 +2205,18 @@ impl<B: Backend> Pc<B> {
         eprintln!("profile: {total} samples");
         for (blk, n) in v.into_iter().take(15) {
             eprintln!("  {:08X}  {:5.1} %  ({n})", blk << 4, f64::from(*n) * 100.0 / f64::from(total.max(1)));
+        }
+        // Désassemblage des trois blocs les plus chauds (code 16 ou 32 bits selon le CS courant).
+        if let Ok(cpu) = self.vm.state() {
+            let bitness = if cpu.seg[1].db { 32 } else { 16 };
+            let mut v: Vec<_> = p.iter().collect();
+            v.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+            for (blk, _) in v.into_iter().take(3) {
+                eprintln!("  -- {:08X} ({bitness} bits)", blk << 4);
+                for l in crate::debug::disassemble_linear(&cpu, self.vm.mem(), blk << 4, bitness, 8) {
+                    eprintln!("     {l}");
+                }
+            }
         }
     }
 
