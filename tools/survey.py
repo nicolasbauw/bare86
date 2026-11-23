@@ -567,12 +567,19 @@ def run_one(item, args, src):
             except subprocess.TimeoutExpired as e:
                 return ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")), True
 
-        for attempt in range(2):
+        for attempt in range(3):
             out, timed = execute(cmd)
+            # Un gestionnaire de mémoire étendue présent est refusé (« KERNEL PANIC: EMM MANAGER DETECTED ») :
+            # nouvel essai sans EMS.
+            if not timed and re.search(r"emm manager|emm386|qemm|expanded memory manager|ems manager", out, re.I) and "--ems" not in cmd:
+                cmd.insert(1, "--ems")
+                cmd.insert(2, "0")
+                res["ems0"] = True
+                continue
             # « No DPMI host present » alors qu'un extendeur du dossier (DOS4GW.EXE…) y est :
             # on lance l'exécutable par lui (« dos4gw movie.exe », comme le dit le NOTE.TXT de
             # rpl_star), avant de se rabattre sur --dpmi.
-            if attempt == 0 and re.search(r"no dpmi host", out, re.I) and not extra:
+            if attempt < 2 and re.search(r"no dpmi host|syntax is dos4gw", out, re.I) and not extra and "args" not in res:
                 d = os.path.dirname(exe)
                 ext = next((f for f in sorted(os.listdir(d)) if os.path.splitext(f.lower())[0] in EXTENDERS and f.lower().endswith(".exe")), None)
                 if ext and ext.lower() != os.path.basename(exe).lower():
@@ -580,7 +587,7 @@ def run_one(item, args, src):
                     res["args"] = [ext, os.path.basename(exe)]
                     continue
             # Hôte DPMI demandé (« DPMI? », « no DPMI ») : un second essai avec --dpmi.
-            if attempt == 0 and re.search(r"dpmi", out, re.I) and "--dpmi" not in cmd:
+            if attempt < 2 and re.search(r"dpmi", out, re.I) and "--dpmi" not in cmd:
                 cmd.insert(1, "--dpmi")
                 res["dpmi"] = True
                 continue

@@ -385,3 +385,23 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 - `COPY` ajoutée au shell (2026-11-23) : motifs, `a+b`, destination fichier ou répertoire (`SUB`, `SUB\\`, `SUB\\*.*`), options ignorées ; messages
   « n file(s) copied », « File not found », « File cannot be copied onto itself ». `tools/survey.py` ne l'écarte plus des BAT lancés.
 
+### Balayage `--mips 60` des démos qui sortent en moins de 20 s (2026-11-23, `scan-m60` et `scan-m200`)
+- Échantillon : 88 éléments « exit » en < 20 s dans les anciens balayages, rejoués avec la version actuelle à 60 puis à 200 MIPS.
+- **59 ne sortent plus** : 55 à toute vitesse (corrigés par les travaux du jour : IMS, VBE, DOS…), 4 seulement à 60 MIPS. De ces
+  4 : `immort` (Takeover 98) quitte aussitôt au-dessus de ≈ 70 MIPS comme R_TV (profil `--mips 60`) ; EFC_DEEP, PLS-SKID et
+  ellenium durent plus de 40 s à 60 MIPS contre 13–18 s à 200 : intros cadencées par boucles, pas des pannes.
+- **28 sortent toujours**. Triées à la main : outils ou jeux sans rapport (ADDHELP, FLR_HELP, STARDATE, TRON, ZOBMAN, AXIA_SW =
+  auto-extractible Windows, GAME100K/1 = IPX), données manquantes dans l'archive (soepkip3 : `3txt.pcx`, matura97 :
+  `matura97.dta`, mfever : `mfever.xm`), « run setup first » (SBM_NDIG, REHASH : MIDAS), et **deux vrais problèmes réglés** :
+  * `moai` : `DOS/4GW fatal error (1004): syntax is DOS4GW <executable>` : à lancer par `dos4gw.exe moai.exe` : `tools/survey.py`
+    le fait désormais (même retry que « No DPMI host present »).
+  * `AI_OVERD` (Overdrive, Rage 97) : « KERNEL PANIC: EMM MANAGER DETECTED » : `--ems 0` (retry automatique du balayage sur
+    `EMM manager / EMM386 / QEMM`) ; menu de mode (flèches : 16 bits hicolor). Profil : `--ems 0` + `{down}×4{enter}`.
+- **Bogue de fond trouvé derrière AI_OVERD** : après « LOADING MUSIC », « unexpected VM exit: InternalError » : une instruction
+  x87 (`fcomp dword [eax+13DCA4h]`) lit par un pointeur fou (EAX = 32A7BA00h) hors RAM ; KVM ne sait pas émuler les x87 en MMIO
+  d'où l'erreur, alors qu'un PC rend FFh (bus ouvert). Remède (`src/kvm.rs`, `map_open_bus`, créneaux 26 et 27) : les plages sans
+  rien (RAM+1 → framebuffer, framebuffer+4 Mo → FFFF0000h) sont mappées en lecture seule sur des pages FFh. Overdrive passe le
+  point de plantage (71 scènes en 150 s). Les écritures y sont toujours ignorées (sondes de taille mémoire inchangées).
+- Restent douteuses (non examinées) : orthicon (« you fucked it up » après le chargement des .3ds), PW-BANAN (DOS32, sort après
+  lecture de son exe), INVALIDE/glamour/4kbugs (intros de 4 Ko qui s'arrêtent sans message), ms98/demo.zip (exige COMMAND.COM).
+

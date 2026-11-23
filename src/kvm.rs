@@ -34,6 +34,11 @@ const HMA_SLOT: u32 = 30;
 /// FFFFEC00h, et il lit et exécute la table là.
 const ROM_ALIAS_SLOT: u32 = 28;
 const ROM_ALIAS_ADDR: u64 = 0xFFFF_0000;
+/// Adresses sans mémoire ni périphérique (au-dessus de la RAM, de part et d'autre du framebuffer) : mappées
+/// en lecture seule sur des pages d'octets FFh, comme le bus ouvert d'un PC. Sans cela, une lecture par une
+/// instruction que l'émulateur de KVM ne sait pas faire (x87…) échouait en « InternalError » au lieu de
+/// rendre FFh (AI_OVERD lit par un pointeur fou).
+const OPEN_BUS_SLOTS: [u32; 2] = [26, 27];
 /// Framebuffer linéaire SVGA (VBE 2.0), à une adresse physique haute.
 const LFB_SLOT: u32 = 29;
 pub const LFB_ADDR: u64 = 0xE000_0000;
@@ -130,6 +135,54 @@ impl Drop for PostedRing {
     }
 }
 
+/// Mappe `start..end` (adresses invitées) en lecture seule sur des pages FFh : un mappage de réservation
+/// recouvert, par blocs de 2 Mo, d'un même memfd rempli de FFh.
+fn map_open_bus(vm: &VmFd, slot: u32, start: u64, end: u64) -> std::result::Result<(), String> {
+    const CHUNK: usize = 2 << 20;
+    static FF: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    let fd = *FF.get_or_init(|| {
+        // SAFETY: memfd créé et rempli ici, jamais fermé (vit autant que le processus).
+        unsafe {
+            let fd = libc::memfd_create(c"bare86-openbus".as_ptr(), libc::MFD_CLOEXEC);
+            if fd >= 0 {
+                let data = vec![0xFFu8; CHUNK];
+                if libc::write(fd, data.as_ptr().cast(), CHUNK) != CHUNK as isize {
+                    libc::close(fd);
+                    return -1;
+                }
+            }
+            fd
+        }
+    });
+    if fd < 0 || end <= start {
+        return Err("open bus: no memfd".into());
+    }
+    let len = (end - start) as usize;
+    // SAFETY: réservation anonyme puis recouvrement par blocs du même fichier, dans la plage réservée.
+    unsafe {
+        let base = libc::mmap(std::ptr::null_mut(), len, libc::PROT_NONE, libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE, -1, 0);
+        if base == libc::MAP_FAILED {
+            return Err("open bus: mmap".into());
+        }
+        let mut off = 0;
+        while off < len {
+            let n = CHUNK.min(len - off);
+            let r = libc::mmap(base.cast::<u8>().add(off).cast(), n, libc::PROT_READ, libc::MAP_SHARED | libc::MAP_FIXED, fd, 0);
+            if r == libc::MAP_FAILED {
+                libc::munmap(base, len);
+                return Err("open bus: remap".into());
+            }
+            off += n;
+        }
+        let region = kvm_userspace_memory_region { slot, flags: KVM_MEM_READONLY, guest_phys_addr: start, memory_size: len as u64, userspace_addr: base as u64 };
+        if let Err(e) = vm.set_user_memory_region(region) {
+            libc::munmap(base, len);
+            return Err(format!("open bus: {e}"));
+        }
+    }
+    Ok(())
+}
+
 impl KvmVm {
     /// `mem_size` octets de RAM, fenêtre graphique VGA non mappée.
     pub fn new(mem_size: usize) -> Result<Self> {
@@ -171,6 +224,12 @@ impl KvmVm {
             };
             // SAFETY: la région reste mappée tant que la VM vit.
             unsafe { vm.set_user_memory_region(region)? };
+        }
+        if mem_size >= 0x10_0000 {
+            let top = (mem_size as u64).next_multiple_of(0x1000);
+            // Un échec (adresses virtuelles refusées, par exemple) est sans gravité : le bus reste « vide ».
+            let _ = map_open_bus(&vm, OPEN_BUS_SLOTS[0], top, LFB_ADDR);
+            let _ = map_open_bus(&vm, OPEN_BUS_SLOTS[1], LFB_ADDR + crate::vga::FB_SIZE as u64, ROM_ALIAS_ADDR);
         }
         let vcpu = vm.create_vcpu(0)?;
         vcpu.set_cpuid2(&dos_era_cpuid(&kvm)?)?;
