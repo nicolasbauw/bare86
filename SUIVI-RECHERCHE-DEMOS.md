@@ -352,3 +352,12 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   de 16 bits des .3DF sont rangés poids fort d'abord : sans échange d'octets, textures en bruit coloré.
 - **Résultat** : 24 scènes, fin de la démo à 55 s. R_TV reste à examiner (même chargeur PMODE/W que SHINE#2, s'arrête aussitôt).
 
+### R_TV (Real TV, Evoke 97) réglée par un bridage (2026-11-23)
+- **Symptôme** : après l'écran IMS (v0.5, double Entrée), la démo choisit le mode VBE 129h (320×240×32), fait 4F06h, puis revient
+  aussitôt au texte, imprime ses crédits et sort avec le code 0A4h : ≈ 1 s de vie.
+- **Cause** : dépendance à la VITESSE. Sans changement de code : `--mips 20/40/60` : la démo tourne (52 scènes, « real TV », bruit
+  et logo) ; `--mips 80/100/200/0` : elle sort aussitôt (seuil entre 60 et 80 MIPS). Même famille que l'erreur 200 de Turbo
+  Pascal (MISG, au-dessus de ≈ 150 MIPS) : un test de vitesse interne que les processeurs rapides faussent. Non élucidé plus
+  avant (pas à pas lent : la démo ne quitte pas). Profil : `opts: ["--mips", "60"]`, clavier `{wait:8000}{enter}{wait:500}{enter}`.
+- **Piège de méthode** : deux démos « IMS » (INVIT, R_TV…) demandent deux Entrées à moins de 2 s ; un `{enter}` isolé ne démarre pas.
+
