@@ -101,6 +101,9 @@ pub trait Backend {
     fn holds_injection(&mut self) -> bool {
         false
     }
+    /// Rend les pages touchées du bus ouvert (lecture seule, mêmes octets FFh partout) : elles gonflent la
+    /// mémoire résidente du processus (jusqu'à 3,5 Go si l'invité balaie l'espace d'adresses) sans rien occuper.
+    fn trim_open_bus(&mut self) {}
     /// Injecte l'interruption externe `vector` avant la prochaine instruction.
     fn inject(&mut self, vector: u8) -> Result<()>;
     /// Demande une sortie dès que l'invité pourra recevoir une interruption.

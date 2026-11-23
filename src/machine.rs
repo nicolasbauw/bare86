@@ -571,6 +571,8 @@ pub struct Pc<B: Backend = KvmVm> {
     last_render: Option<Instant>,
     /// Pas à pas en cours : pas d'interruption injectée entre deux pas.
     stepping: bool,
+    /// Dernier allègement des pages du bus ouvert (`Backend::trim_open_bus`).
+    last_trim: Instant,
     interp: bool,
     /// Traducteur dynamique (`--jit`), créé au premier usage.
     jit: Option<crate::jit::Jit>,
@@ -829,6 +831,7 @@ impl<B: Backend> Pc<B> {
             input_paused_until: None,
             until_text: None,
             stepping: false,
+            last_trim: Instant::now(),
             stop_at_breakpoint: false,
             trace_int: cfg.trace_int,
             interp: cfg.interp,
@@ -1829,6 +1832,10 @@ impl<B: Backend> Pc<B> {
     /// Tour complet du haut de la boucle : limite de temps, minuteries,
     /// fenêtre, entrées, affichage, bridage, IRQ.
     fn loop_top(&mut self) -> Result<()> {
+        if self.last_trim.elapsed() >= Duration::from_secs(1) {
+            self.last_trim = Instant::now();
+            self.vm.trim_open_bus();
+        }
         if self.limit.is_some_and(|l| self.started.elapsed() >= l) {
             let cpu = self.vm.state()?;
             let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);

@@ -66,6 +66,8 @@ pub struct KvmVm {
     /// Slots de RAM (numéro, début, fin) et leur adresse hôte : journal des
     /// pages modifiées pour la surveillance du code traduit.
     ram_slots: Vec<(u32, usize, usize)>,
+    /// Mappages hôte (adresse, longueur) du bus ouvert, dont `trim_open_bus` retire les pages touchées.
+    open_bus: Vec<(u64, usize)>,
     /// Journal en place (`None` : pas encore essayé).
     dirty_log: Option<bool>,
     /// File des écritures de ports mises en attente par KVM (`POSTED_PORTS`).
@@ -137,7 +139,7 @@ impl Drop for PostedRing {
 
 /// Mappe `start..end` (adresses invitées) en lecture seule sur des pages FFh : un mappage de réservation
 /// recouvert, par blocs de 2 Mo, d'un même memfd rempli de FFh.
-fn map_open_bus(vm: &VmFd, slot: u32, start: u64, end: u64) -> std::result::Result<(), String> {
+fn map_open_bus(vm: &VmFd, slot: u32, start: u64, end: u64) -> std::result::Result<(u64, usize), String> {
     const CHUNK: usize = 2 << 20;
     static FF: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
     let fd = *FF.get_or_init(|| {
@@ -179,8 +181,8 @@ fn map_open_bus(vm: &VmFd, slot: u32, start: u64, end: u64) -> std::result::Resu
             libc::munmap(base, len);
             return Err(format!("open bus: {e}"));
         }
+        Ok((base as u64, len))
     }
-    Ok(())
 }
 
 impl KvmVm {
@@ -225,11 +227,12 @@ impl KvmVm {
             // SAFETY: la région reste mappée tant que la VM vit.
             unsafe { vm.set_user_memory_region(region)? };
         }
+        let mut open_bus: Vec<(u64, usize)> = Vec::new();
         if mem_size >= 0x10_0000 {
             let top = (mem_size as u64).next_multiple_of(0x1000);
             // Un échec (adresses virtuelles refusées, par exemple) est sans gravité : le bus reste « vide ».
-            let _ = map_open_bus(&vm, OPEN_BUS_SLOTS[0], top, LFB_ADDR);
-            let _ = map_open_bus(&vm, OPEN_BUS_SLOTS[1], LFB_ADDR + crate::vga::FB_SIZE as u64, ROM_ALIAS_ADDR);
+            open_bus.extend(map_open_bus(&vm, OPEN_BUS_SLOTS[0], top, LFB_ADDR));
+            open_bus.extend(map_open_bus(&vm, OPEN_BUS_SLOTS[1], LFB_ADDR + crate::vga::FB_SIZE as u64, ROM_ALIAS_ADDR));
         }
         let vcpu = vm.create_vcpu(0)?;
         vcpu.set_cpuid2(&dos_era_cpuid(&kvm)?)?;
@@ -272,6 +275,7 @@ impl KvmVm {
             injected: false,
             reset_sregs,
             ram_slots,
+            open_bus,
             dirty_log: None,
             posted,
         };
@@ -458,6 +462,14 @@ unsafe fn io_size(run: *const kvm_bindings::kvm_run) -> u8 {
 impl Backend for KvmVm {
     fn mem(&self) -> &GuestMem {
         &self.mem
+    }
+
+    fn trim_open_bus(&mut self) {
+        for &(base, len) in &self.open_bus {
+            // SAFETY: mappages anonymes/fichier créés par `map_open_bus`, jamais libérés ; MADV_DONTNEED sur du
+            // partagé en lecture seule ne perd rien (le memfd garde les octets).
+            unsafe { libc::madvise(base as *mut libc::c_void, len, libc::MADV_DONTNEED) };
+        }
     }
 
     fn run(&mut self, posted: &mut dyn FnMut(u16, &[u8])) -> Result<Exit<'_>> {
