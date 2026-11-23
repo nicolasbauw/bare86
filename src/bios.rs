@@ -110,7 +110,7 @@ const VBE_PM_LEN: u16 = 0x8A;
 /// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
 /// parcourent la liste et lisent les caractéristiques de chaque mode) : 32 bits
 /// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2), 320×240 et 320×200.
-const VBE_MODE_LIST: [(u16, usize, usize, usize); 30] = [
+const VBE_MODE_LIST: [(u16, usize, usize, usize); 31] = [
     (0x100, 640, 400, 8),
     (0x101, 640, 480, 8),
     (0x103, 800, 600, 8),
@@ -143,6 +143,7 @@ const VBE_MODE_LIST: [(u16, usize, usize, usize); 30] = [
     (0x12B, 320, 240, 16),
     (0x12C, 320, 240, 24),
     (0x12D, 320, 200, 8),
+    (0x136, 320, 240, 16),
 ];
 
 /// Mode VBE de la liste.

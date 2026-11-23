@@ -296,7 +296,9 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   de `profiles.json` sont corrigés (sauvegardes `profiles.json.bak`, `.bak-ims`). La sonde automatique ne les retrouvait pas
   toutes seule : les profils déjà mémorisés l'emportent (les retirer avant de relancer `--probe`).
 - Passé IMS mais bloqué plus loin (nouveaux bogues, pas IMS) :
-  * QD_FOCUS (Quad, BIZ97) et R_TV : « VESA LFB MODES CHECK … 320x240x16bit Failed », sortie au DOS après 10 s ;
+  * QD_FOCUS (Quad, BIZ97) : RÉGLÉ le 2026-11-23. Elle sonde le mode VBE 0136h (LFB) avant 0111h ; il manquait à notre
+    liste : `(0x136, 320, 240, 16)` ajouté dans `VBE_MODE_LIST` (src/bios.rs). La démo tourne (logo « Focus », 320×240).
+  * R_TV : n'est pas ce cas (aucun appel INT 10h : après l'écran IMS elle se termine aussitôt, silencieusement) ; à examiner ;
   * SHINE2 (MAGS) : « unexpected VM exit: InternalError » (erreur de l'hôte KVM, à reproduire) ;
   * shortcut (Takeover 98) : rendu au DOS après 15 s, sans message ;
   * rplbaker (movistar.exe, Evoke 98) : opcode invalide (INT 06h) comme MISG ;
