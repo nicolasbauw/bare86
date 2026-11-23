@@ -80,6 +80,8 @@ const IRQ_MASTER_DEFAULT: u16 = 0xE820;
 const IRQ_SLAVE_DEFAULT: u16 = 0xE830;
 /// INT 70h (IRQ 8, horloge) : lit le registre C du CMOS avant la fin d'interruption (asm/bios.S).
 const INT70: u16 = 0xEBE0;
+/// INT 71h (IRQ 9) : redirige vers INT 0Ah, comme le BIOS d'un AT (asm/bios.S).
+const INT71: u16 = 0xEBF0;
 const DUMMY_IRET: u16 = 0xE840;
 /// INT 09h (IRQ 1), à l'adresse de l'IBM AT.
 pub const INT09: u16 = 0xE987;
@@ -238,7 +240,11 @@ pub fn install_rom(mem: &GuestMem) {
         set(n, IRQ_MASTER_DEFAULT);
     }
     for n in 0x70..=0x77 {
-        set(n, if n == 0x70 { INT70 } else { IRQ_SLAVE_DEFAULT });
+        set(n, match n {
+            0x70 => INT70,
+            0x71 => INT71,
+            _ => IRQ_SLAVE_DEFAULT,
+        });
     }
     set(0x1C, DUMMY_IRET);
     set(0x74, INT74);

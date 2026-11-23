@@ -294,6 +294,18 @@ int70:
     pop ax
     iret
 
+    # INT 71h, IRQ 9 : comme le BIOS d'un AT, fin d'interruption à l'esclave puis INT 0Ah
+    # (la carte réglée sur « IRQ 2 » arrive ici ; le gestionnaire de l'IRQ 2 d'un programme
+    # est appelé, le défaut termine l'interruption au maître).
+    .org 0xEBF0, 0xFF
+int71:
+    push ax
+    mov al, 0x20
+    out 0xA0, al
+    pop ax
+    int 0x0A
+    iret
+
     .org 0xEC00, 0xFF
 vbe_pm:
     .word pm_window - vbe_pm, pm_start - vbe_pm, pm_palette - vbe_pm, pm_ports - vbe_pm
