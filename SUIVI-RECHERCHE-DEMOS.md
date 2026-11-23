@@ -330,3 +330,13 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
 - **MISG** : `scan-ims` 140 scènes. Profil `opts: ["--mips", "100"]` (Turbo Pascal : erreur 200 au-dessus de ≈ 150 MIPS) ;
   `tools/survey.py` : l'option `--mips` d'un profil remplace désormais le bridage par défaut.
 
+### SHINE#2 (diskmag, MAGS) : « unexpected VM exit: InternalError » réglé (2026-11-23)
+- **Cause** : le programme (PMODE/W 1.33) appelle INT 10h AX=4F0Ah, puis calcule le pointeur de l'interface protégée VBE par
+  `edx = [flags:ES] ; sar edx,10h ; shl edx,4 ; ptr = edx + DI + (mot signé lu en [edx+DI])` : le segment F000h, étendu avec son signe,
+  devient FFFFF000h puis FFFF0000h, et le pointeur tombe en FFFFEC00h : sur un vrai PC, c'est la copie de la ROM du BIOS au sommet de
+  l'espace de 4 Go (FFFF0000h–FFFFFFFFh = F0000h–FFFFFh). Rien n'y était mappé : la lecture rendait −1 et le saut allait en
+  FFFFEBFFh (KVM : emulation failure). Trouvé en désassemblant le code de l'invité autour de la référence au pointeur (recherche des
+  octets de l'adresse de la variable dans la mémoire de l'invité).
+- **Remède** : slot KVM en lecture seule de 64 Ko en FFFF0000h, sur la ROM F0000h (`src/kvm.rs`, `ROM_ALIAS_SLOT`). Le magazine
+  s'affiche (image « Shine 2 »). Ce n'est pas la cause de R_TV (même chargeur, autre problème : elle s'arrête toujours aussitôt).
+

@@ -27,6 +27,13 @@ const VGA_SLOT: u32 = 31;
 /// Slot de la HMA (100000h–10FFFFh) : la mémoire de 1 Mo, ou les 64
 /// premiers Ko quand la porte A20 est fermée (repliement).
 const HMA_SLOT: u32 = 30;
+/// Copie de la ROM du BIOS (F0000h–FFFFFh) au sommet de l'espace de 4 Go, comme sur un PC : le
+/// BIOS y est aussi visible en FFFF0000h–FFFFFFFFh. Des programmes l'utilisent sans le savoir :
+/// SHINE#2 convertit le segment réel F000h rendu par INT 10h AX=4F0Ah par `sar edx,10h` (F000h
+/// devient FFFFF000h) puis `shl edx,4` : son pointeur vers l'interface protégée de VBE tombe en
+/// FFFFEC00h, et il lit et exécute la table là.
+const ROM_ALIAS_SLOT: u32 = 28;
+const ROM_ALIAS_ADDR: u64 = 0xFFFF_0000;
 /// Framebuffer linéaire SVGA (VBE 2.0), à une adresse physique haute.
 const LFB_SLOT: u32 = 29;
 pub const LFB_ADDR: u64 = 0xE000_0000;
@@ -149,6 +156,18 @@ impl KvmVm {
                 memory_size: (r.end - r.start) as u64,
                 // SAFETY: start < mem_size, dans notre mappage.
                 userspace_addr: unsafe { mem.ptr.add(r.start) } as u64,
+            };
+            // SAFETY: la région reste mappée tant que la VM vit.
+            unsafe { vm.set_user_memory_region(region)? };
+        }
+        if mem_size >= 0x10_0000 {
+            let region = kvm_userspace_memory_region {
+                slot: ROM_ALIAS_SLOT,
+                flags: KVM_MEM_READONLY,
+                guest_phys_addr: ROM_ALIAS_ADDR,
+                memory_size: 0x1_0000,
+                // SAFETY: F0000h–FFFFFh, dans notre mappage (mem_size ≥ 1 Mo).
+                userspace_addr: unsafe { mem.ptr.add(0xF_0000) } as u64,
             };
             // SAFETY: la région reste mappée tant que la VM vit.
             unsafe { vm.set_user_memory_region(region)? };
