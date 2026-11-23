@@ -131,6 +131,9 @@ pub struct Dos {
     strategy: u16,
     /// Code de retour du dernier programme terminé (AH=4Dh) : type << 8 | code.
     last_return: u16,
+    /// PSP créés par AH=55h : cadre d'IRET de l'appelant (SS, SP, drapeaux), où revient la fin du
+    /// programme (DOS restaure la pile de l'appelant, que le fils ait ou non changé de pile).
+    child_frames: std::collections::HashMap<u16, (u16, u16, u16)>,
     last_error: u16,
     break_flag: bool,
     verify: bool,
@@ -164,6 +167,7 @@ impl Dos {
             dta: (0, 0x80),
             strategy: 0,
             last_return: 0,
+            child_frames: std::collections::HashMap::new(),
             last_error: 0,
             break_flag: false,
             verify: false,
@@ -495,7 +499,13 @@ impl Dos {
             let parent = mem.read_u16(psp_addr(child, psp::PARENT));
             self.current_psp = parent;
             self.dta = (parent, 0x80);
-            // Le cadre d'IRET de l'appel reprend à l'adresse de fin.
+            // Le cadre d'IRET de l'appelant d'AH=55h reprend à l'adresse de fin (sa pile est
+            // rétablie ; à défaut, celle de l'appel courant).
+            if let Some((ss, sp, flags)) = self.child_frames.remove(&child) {
+                cpu.set_sreg(SS, ss);
+                cpu.set_w(SP, sp);
+                mem.write_u16(lin(ss, sp) + 4, flags);
+            }
             let frame = lin(cpu.sreg(SS), cpu.w(SP));
             mem.write(frame, &v[..4]);
             return Out::Keep;
@@ -1369,6 +1379,8 @@ impl Dos {
                     fcb2: process::BLANK_FCB,
                 };
                 process::build_psp(mem, dx, &init);
+                let frame = lin(cpu.sreg(SS), cpu.w(SP));
+                self.child_frames.insert(dx, (cpu.sreg(SS), cpu.w(SP), mem.read_u16(frame + 4)));
                 self.current_psp = dx;
                 Out::Keep
             }
