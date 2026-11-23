@@ -207,6 +207,57 @@ def bat_args(exe):
     return []
 
 
+# Commandes que le shell intégré exécute lui-même (src/dos/batch.rs, shell.rs) ; toute autre
+# première ligne d'un .BAT est un programme à lancer.
+BAT_INTERNAL = {"echo", "rem", "set", "path", "cls", "cd", "chdir", "md", "mkdir", "rd", "rmdir", "del", "erase", "ren", "rename",
+                "type", "dir", "pause", "goto", "call", "shift", "if", "for", "lh", "loadhigh", "break", "verify", "prompt",
+                "mode", "ctty", "exit", "ver"}
+# Commandes externes ou internes que le shell intégré ne sait pas faire : le .BAT n'est pas lancé tel quel.
+BAT_UNSUPPORTED = {"choice", "copy", "xcopy", "deltree", "mem", "edit", "format", "fdisk", "scandisk", "attrib", "mkdir", "label", "date", "time"}
+
+
+def bat_script(exe):
+    """Un .BAT du dossier de `exe` qui lance cet exécutable et que le shell intégré sait exécuter :
+    (nom, nombre de programmes lancés), ou None. Les BAT d'installation ou de configuration, ou qui
+    emploient une commande qu'il ignore (COPY, CHOICE…), sont écartés."""
+    d = os.path.dirname(exe)
+    stem = os.path.splitext(os.path.basename(exe))[0].lower()
+    try:
+        bats = sorted(f for f in os.listdir(d) if f.lower().endswith(".bat") and not SKIP_NAMES.search(os.path.splitext(f)[0]))
+    except OSError:
+        return None
+    for b in bats:
+        try:
+            with open(os.path.join(d, b), encoding="latin-1") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        programs, mentions, ok = 0, False, True
+        for line in lines:
+            words = line.strip().lstrip("@").split()
+            if not words or words[0].startswith(":") or words[0].lower() == "rem":
+                continue
+            while words and words[0].lower() in ("call", "lh", "loadhigh", "start"):
+                words = words[1:]
+            if not words:
+                continue
+            name = words[0].lower()
+            if len(name) == 2 and name[1] == ":":  # changement de lecteur
+                continue
+            base = os.path.splitext(name)[0] if name.endswith((".exe", ".com")) else name
+            if base in BAT_UNSUPPORTED or "|" in line:
+                ok = False
+                break
+            if base in BAT_INTERNAL or base.rstrip(".") in BAT_INTERNAL or base.startswith("echo"):  # « echo. »
+                continue
+            programs += 1
+            if base == stem or (base in EXTENDERS and len(words) > 1 and os.path.splitext(words[1].lower())[0] == stem):
+                mentions = True
+        if ok and mentions:
+            return b, programs
+    return None
+
+
 def nearly_same(a, b):
     """Deux captures presque identiques (au plus 0,5 % de pixels différents :
     un curseur qui clignote ne compte pas)."""
@@ -472,7 +523,14 @@ def run_one(item, args, src):
         # le BAT peut aussi lancer un extendeur du dossier sur l'exécutable
         # (le premier mot est alors le programme à lancer).
         extra = bat_args(exe)
-        if extra and os.path.splitext(extra[0].lower())[0] in EXTENDERS:
+        script = bat_script(exe)
+        if script and (not extra or script[1] > 1):
+            # Le .BAT lance plus que l'exécutable (LOGO.EXE avant, réglages…) ou ses lignes échappent
+            # à `bat_args` (%1, redirections) : on le fait exécuter par le shell intégré.
+            cmd.append(script[0])
+            res["bat"] = script[0]
+            extra = []
+        elif extra and os.path.splitext(extra[0].lower())[0] in EXTENDERS:
             cmd += extra
         else:
             cmd.append(os.path.basename(exe))

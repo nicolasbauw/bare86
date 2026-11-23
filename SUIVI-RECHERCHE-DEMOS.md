@@ -377,6 +377,8 @@ Objectif : un échantillon fiable avant toute interrogation de Gemma (trop peu d
   `CHOICE` (commande externe absente).
 - Vérifié : `DUNE.BAT` (`logo`, `duneprg ENG VGA EMS 386`) lance Dune (désert à l'écran, sans mon essai précédent à la main) ; essai
   complet des constructions sur un `T.BAT` de test ; 2 tests unitaires (développement des paramètres, `SHIFT`).
-- À FAIRE ensuite : `tools/survey.py` pourrait désormais lancer les démos qui n'ont qu'un `.BAT` (aujourd'hui il lit leurs arguments
-  par `bat_args` et lance l'exécutable lui-même).
+- `tools/survey.py` (2026-11-23) : `bat_script(exe)` trouve le `.BAT` du dossier qui lance l'exécutable et que le shell sait exécuter (pas
+  de COPY/CHOICE/tubes ; les BAT d'installation sont écartés). Il est lancé tel quel (`res["bat"]`) quand ses lignes échappent à
+  `bat_args` (%1, redirections) ou qu'il lance plus d'un programme (`LOGO` avant `DUNEPRG`) ; sinon l'ancien chemin (exécutable +
+  arguments lus dans le BAT) est conservé, plus simple. Vérifié : Dune (`DUNE.BAT`, 8 captures, état ok) et shortcut (inchangée).
 
