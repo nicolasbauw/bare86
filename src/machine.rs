@@ -1838,7 +1838,14 @@ impl<B: Backend> Pc<B> {
         }
         if self.limit.is_some_and(|l| self.started.elapsed() >= l) {
             let cpu = self.vm.state()?;
-            let code = crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4);
+            // Code protégé : adresse linéaire et taille du segment (CS:IP tronqué à 16 bits
+            // désassemblerait ailleurs).
+            let code = if cpu.cr0 & 1 != 0 {
+                let bits = if cpu.seg[1].db { 32 } else { 16 };
+                crate::debug::disassemble_linear(&cpu, self.vm.mem(), cpu.linear(1, cpu.ip), bits, 14)
+            } else {
+                crate::debug::disassemble(self.vm.mem(), cpu.seg[1].selector, cpu.ip as u16, 4)
+            };
             let screen = bios::screen_text(self.vm.mem()).join("\n");
             return Err(format!(
                 "time limit reached\n{}\n{}\n{:?}\nscreen:\n{}",
