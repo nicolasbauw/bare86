@@ -557,6 +557,13 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   NN97_FST / NN97_MUL / NN97_GFX (NEITHE : peu de scènes, sans doute un magazine/galerie), RT-SPACE (4K statique), DR_5K (6 scènes en 389 s).
 - Idée (2026-11-24) : site web de captures pour les nostalgiques de la démoscène PC/DOS (lien pouet.net, pas d'exécutables, charte de ~/Dev/pageperso) — non décidé.
 
+### RESNOW (CD 32, jamm R « resurrection now / unfinished », MACGYVER.EXE) : NON RÉSOLU (2026-11-24)
+- Après le titre « RESURRECTION », l'image de l'œil reste figée > 100 s alors que le vCPU calcule (boucle par pixel en 0x110423, par ligne de 320 octets).
+  Seules 3 images utiles dans les planches. Menu MIDAS 0.7b1 : GUS = 3 Entrées (carte, 240h, mode) ; SB16 = 6 Entrées ; même blocage dans les deux cas.
+- Écarté : carte son, `--jit`/`--no-jit`, gel du compte PIT (FREEZE_MAX = 0), `--mips` 60/133/200. Le programme mesure la vitesse : à ≤ 40 MIPS il affiche
+  « you'll need p130 or such to run this correctly / read the .nfo file » et quitte ; l'auteur dit qu'il est « conçu pour la compomachine d'Assembly 97, un P133,
+  jamais corrigé ». Un seul `rdtsc` dans l'EXE (0x132135), jamais exécuté. Port 300h lu ≈ 800 fois/s (sans périphérique). À creuser : ce que la boucle attend.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
