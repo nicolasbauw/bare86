@@ -532,6 +532,10 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
 - Piste générale : une démo qui échoue avec « DOS/32A run-time … » = essayer le vrai DOS4GW.EXE ; la substitution DOS/32A n'a pas la
   tolérance de DOS/4GW aux débordements d'allocation. Pas de correction possible côté Bare86 sans fournir DOS/4GW (non redistribuable).
 
+### Reste du CD 29 (à voir éventuellement plus tard)
+- Démos à peu de scènes, surtout des intros courtes : CARDRIVE, DPH_HIGH, TMBE, EFC_DEEP, EVK-4K, ONC, KMU_KANN, BLUECALX (non examinées).
+- HYPNO2 : `kept 0` du balayage (démo pourtant complète en `--video`), artefact non élucidé.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
