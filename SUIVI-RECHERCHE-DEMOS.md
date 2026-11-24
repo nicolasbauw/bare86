@@ -491,6 +491,17 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   puis retiré. Non faits (sans effet connu) : IRQ 2–7 par défaut qui masquent la ligne comme le BIOS réel, drapeau 40:8E des IRQ 14/15.
 - **Non-régression CD 27** (`scan-cd27h` contre `scan-cd27g`) : aucun changement de statut ; SMEGMA est instable avec l'ancien binaire aussi.
 
+## CD 29 balayé sans Gemma (2026-11-24) — `scan-full/`, planches dans `sheets/` (revue à la main par l'utilisateur, xnview)
+- 96 éléments : 48 `exit`, 48 `ok` (beaucoup d'`ok` à ≈ 628 s = ANSI/images/1K qui n'« finissent » pas : normal).
+- **BTMNSCKS** (« Batman Sucks », Gardening 97) quittait en 28 s sans rien afficher : le programme (Pascal) fait `Halt(0)` si `MIDAS.CFG`
+  manque ; il faut lancer `SETUP.EXE` d'abord (MIDAS 0.50 : SB16, Entrée ×6 → « Configuration written to MIDAS.CFG »), puis la démo marche
+  (logo Draculians, « BATMAN SUCKS », 40 s+). Piste générale : des démos « courtes sans image » = SETUP à lancer avant (SB16 220h).
+- **MOTFIX** : pas une démo, un correctif qui ouvre `MOTIONS.EXE` (absent) : à ignorer.
+- À traiter ensuite (balayage CD 29) : statiques (IMAGE_, IGYJARAS, CHAOS, BALOOON, QUESTKHN ×2), `INT 68h AH=43h` (HYPNO2, BALOOON),
+  `INT 06h AH=B6h` (QD_FOCUS), `INT 03h AH=4Bh` (CORRUP, YOE-JOOK), `INT 10h AH=6Fh` (AI-MELON), peu de scènes (CARDRIVE, DPH_HIGH, TMBE,
+  EFC_DEEP, EVK-4K, ONC, KMU_KANN, BLUECALX).
+- `sweep.py --no-ask` : balayage sans modèle de vision.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
