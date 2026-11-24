@@ -502,6 +502,17 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   EFC_DEEP, EVK-4K, ONC, KMU_KANN, BLUECALX).
 - `sweep.py --no-ask` : balayage sans modèle de vision.
 
+### CD 29 : démos « statiques » examinées (2026-11-24)
+- **BTMNSCKS** : profil avec `prep` (SETUP.EXE, SB16) ajouté ; `survey.py` applique maintenant `prep` aussi aux archives : 28 scènes, 195 s.
+- **IMAGE!** / PARTYVER (intros 1K, 1 420 et 1 014 octets) et **CHAOS** (253 octets) : fonctionnent, s'animent ; le drapeau « static » vient de
+  scènes sombres ou très semblables. La vidéo « APNI » trouvée est une intro 4K différente : sans objet pour IMAGE!.
+- **BALOOON** : fonctionne (montgolfière, tunnel rouge). **IGYJARAS** (FiRG, hongrois, GUS) : presque tout noir par conception (texte gris minuscule,
+  gag de la tronçonneuse vers 75 s), pas de défaut constaté.
+- **QUESTKHN / KAHN.EXE** (The Quest of KaHN!, IDS) : figée à « Loading Data » : PIT corrigé (9230c07 : un compte du canal 0 figé, IRQ 0 non
+  acquittée à cause d'un `cli` pendant une temporisation sur le PIT, ne repartait jamais ; repart après 100 ms). Elle va maintenant plus loin,
+  puis DOS/32A s'arrête : « run-time (6004): extended memory blocks have been corrupted (#00B5EE90) » (même avec --mem 32/128). À CREUSER.
+- Non-régression CD 27 après le correctif PIT : seul TUROK passe de `ok` à `exit` (30 scènes dans les deux cas).
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
