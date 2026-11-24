@@ -545,6 +545,10 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   **SYS4KX** (intro 4K MMX) : n'affiche qu'un texte répété : NON RÉSOLU. RC_HALL : fonctionne.
 - Non-régression CD 27 (`scan-cd27j`) : statuts inchangés, seuls les nombres de scènes bougent.
 
+### Reste du CD 30 (KO, à reprendre éventuellement plus tard)
+- **HJB_NEON** : sort en silence (code 255) ≈ 3 s après la config MIDAS ; **ATMOZ2** : `INT 6Ch AX=0005` non géré puis « Can not unpack samples » ;
+  **SYS4KX** : texte répété seulement (intro 4K MMX).
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
