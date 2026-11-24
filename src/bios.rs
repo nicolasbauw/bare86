@@ -557,10 +557,57 @@ impl Bios {
                 cpu.set_lo(AX, 0x1A);
                 cpu.set_w(BX, 0x0008);
             }
+            0x1C => self.video_state(cpu, mem),
             0x4F => return self.vbe(cpu, mem),
             _ => return Flow::Unhandled(ah),
         }
         Flow::Continue
+    }
+
+    /// INT 10h AH=1Ch : sauvegarde et restauration de l'état vidéo. Ne couvre que le DAC
+    /// (bit 2 de CX) et la zone vidéo de la BDA (bit 1) : pas les registres matériels.
+    fn video_state(&mut self, cpu: &mut Cpu, mem: &GuestMem) {
+        const BDA_LEN: usize = 0x4A; // 40:49h–40:92h arrondi
+        let flags = cpu.w(CX);
+        let size = |f: u16| (if f & 2 != 0 { BDA_LEN } else { 0 }) + if f & 4 != 0 { 768 + 1 } else { 0 };
+        let sub = cpu.lo(AX);
+        if sub > 2 {
+            return;
+        }
+        cpu.set_lo(AX, 0x1C);
+        if sub == 0 {
+            cpu.set_w(BX, size(flags).div_ceil(64) as u16);
+            return;
+        }
+        let buf = lin(cpu.sreg(ES), cpu.w(BX));
+        let mut vga = self.vga.borrow_mut();
+        let mut at = buf;
+        if flags & 2 != 0 {
+            if sub == 1 {
+                let mut b = [0u8; BDA_LEN];
+                mem.read(0x449, &mut b);
+                mem.write(at, &b);
+            }
+            // Restauration : la BDA reste telle quelle (mode et registres matériels non
+            // refaits ici ; la réécrire désaccorderait le mode annoncé et le matériel).
+            at += BDA_LEN;
+        }
+        if flags & 4 != 0 {
+            for i in 0..256 {
+                if sub == 1 {
+                    mem.write(at + 3 * i, &vga.dac[i]);
+                } else {
+                    let mut c = [0u8; 3];
+                    mem.read(at + 3 * i, &mut c);
+                    vga.dac[i] = c;
+                }
+            }
+            if sub == 1 {
+                mem.write_u8(at + 768, vga.dac_mask);
+            } else {
+                vga.dac_mask = mem.read_u8(at + 768);
+            }
+        }
     }
 
     // ---- VBE 2.0 (SVGA) ----

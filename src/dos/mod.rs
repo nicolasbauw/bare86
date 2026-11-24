@@ -1443,6 +1443,11 @@ impl Dos {
             0x6C => self.ext_open(cpu, mem),
             // Noms longs (API de Windows 95).
             0x71 => self.lfn(cpu, mem),
+            // AH=FFh : fonction non documentée, traitée comme une fonction inconnue, sans avertissement.
+            0xFF => {
+                cpu.set_lo(AX, 0);
+                Out::Ok
+            }
             // Fonction inconnue : AL = 0, comme MS-DOS.
             _ => {
                 cpu.set_lo(AX, 0);
