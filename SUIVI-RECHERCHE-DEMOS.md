@@ -513,6 +513,16 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   puis DOS/32A s'arrête : « run-time (6004): extended memory blocks have been corrupted (#00B5EE90) » (même avec --mem 32/128). À CREUSER.
 - Non-régression CD 27 après le correctif PIT : seul TUROK passe de `ok` à `exit` (30 scènes dans les deux cas).
 
+### CD 29 : démos à appels non gérés, revues (2026-11-24)
+- **HYPNO2** (Hypnoman 2, tpolm) : fonctionne en entier (≈ 270 s : moutons, tunnels, « hypnoman », greetings) ; le balayage la comptait `kept 0`
+  (une seule image finale en texte, garbage après la sortie) : artefact de balayage, non élucidé (`--video` montre la démo complète).
+- **AI-MELON** (88 scènes), **CORRUP** (124), **QD_FOCUS** (196), **YOE-JOOK** (299) : vont jusqu'au bout ; les avertissements
+  (`INT 10h AH=6Fh`, `INT 03h AH=4Bh`, `INT 06h AH=B6h`) sont sans conséquence visible.
+- **QUESTKHN** : l'erreur DOS/32A 6004 (« extended memory blocks have been corrupted ») est déterministe : identique avec SB16/Pro/ESS/GUS,
+  `--mips` 60 à 400, `--vbe1`, `--dpmi`, `--mem` 16/32/128, `--ems 0` (seule l'adresse du bloc change). Une boucle de remplissage de zéros de la
+  démo (0x131720, EDX = 0) écrase l'en-tête du bloc (surveillance d'écriture `BARE86_HWBP=B5EE90 BARE86_HWBP_W=1` avec `--debug`, `--no-jit`).
+  Soupçon : débordement de tas de la démo (mode 12Dh 320×200×8 choisi dans notre liste VBE ?) ou bogue d'émulation non trouvé. À CREUSER.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
