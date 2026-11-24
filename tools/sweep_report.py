@@ -182,13 +182,31 @@ body{{background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif;margin
 table{{border-collapse:collapse;width:100%}}td,th{{padding:4px 8px;border-bottom:1px solid var(--bar);text-align:left}}
 .n{{text-align:right;font-variant-numeric:tabular-nums}}.bar{{display:flex;height:12px;background:var(--bar);border-radius:3px;overflow:hidden;min-width:160px}}
 .seg.exit{{background:var(--exit)}}.seg.ok{{background:var(--ok)}}.seg.bad{{background:var(--bad)}}
-small{{color:var(--mut)}}li{{margin:2px 0}}li.wait{{color:var(--mut)}}
+small{{color:var(--mut)}}li{{margin:2px 0}}li.wait{{color:var(--mut)}}.auto{{margin:0 0 8px}}
 </style>
 <h1>État du balayage</h1>
+<p class="auto"><label><input type="checkbox" id="auto"> rafraîchir automatiquement</label> <small id="count"></small></p>
 <p>{done} / {total} éléments traités ({100 * done // max(total, 1)} %) <small>— {datetime.datetime.now():%Y-%m-%d %H:%M}</small></p>
 <p><small>Barres : <span style="color:var(--exit)">■</span> sorti seul · <span style="color:var(--ok)">■</span> arrêté (inactif ou limite) · <span style="color:var(--bad)">■</span> autre.</small></p>
 <table><tr><th>CD</th><th>état</th><th>traités</th><th>statuts</th><th>scènes</th><th>à revoir</th></tr>{"".join(body)}</table>
-{running}<h2>À revoir</h2>{"".join(revs) or "<p>Rien.</p>"}</html>
+{running}<h2>À revoir</h2>{"".join(revs) or "<p>Rien.</p>"}<script>
+(function () {{
+  var box = document.getElementById("auto"), out = document.getElementById("count"), left = 0, EVERY = 20;
+  try {{ box.checked = localStorage.getItem("etat-auto") !== "0"; }} catch (e) {{ box.checked = true; }}
+  box.addEventListener("change", function () {{
+    try {{ localStorage.setItem("etat-auto", box.checked ? "1" : "0"); }} catch (e) {{}}
+    left = EVERY; show();
+  }});
+  function show() {{ out.textContent = box.checked ? "(dans " + left + " s)" : ""; }}
+  left = EVERY; show();
+  setInterval(function () {{
+    if (!box.checked) return;
+    left -= 1; show();
+    if (left <= 0) location.reload();
+  }}, 1000);
+}})();
+</script>
+</html>
 """
 
 
