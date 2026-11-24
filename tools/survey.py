@@ -526,7 +526,12 @@ def run_one(item, args, src):
         # (le premier mot est alors le programme à lancer).
         extra = bat_args(exe)
         script = bat_script(exe)
-        if script and (not extra or script[1] > 1):
+        forced = (args.profile_data.get(rel) or {}).get("run")  # profil : commande à lancer (BAT écrit par un SETUP…)
+        if forced:
+            cmd.append(forced)
+            res["bat"] = forced
+            extra = []
+        elif script and (not extra or script[1] > 1):
             # Le .BAT lance plus que l'exécutable (LOGO.EXE avant, réglages…) ou ses lignes échappent
             # à `bat_args` (%1, redirections) : on le fait exécuter par le shell intégré.
             cmd.append(script[0])

@@ -280,6 +280,9 @@ impl Dos {
             _ if eq(cmd, "DIR") => self.dir(mem, host, arg),
             _ => {
                 // Programme : tout le premier mot, chemin compris (« C:\JEU\X.EXE »).
+                // Les redirections (« >nul », « >> f », « < f ») ne font pas partie de la ligne de commande du programme.
+                let line = strip_redirections(line);
+                let line = &line[..];
                 let end = line.iter().position(|&c| c == b' ' || c == b'\t').unwrap_or(line.len());
                 let (word, args) = line.split_at(end);
                 return Ok(match self.find_program(word, mem) {
@@ -521,5 +524,47 @@ impl Dos {
             out(line.as_bytes());
         }
         out(format!("{files:>9} file(s) {bytes:>12} bytes\r\n\r\n").as_bytes());
+    }
+}
+
+/// Ligne de commande sans ses redirections `>`, `>>` et `<` (opérateur et nom de fichier). La sortie
+/// n'est pas détournée : seul ce que le programme verrait dans sa queue de commande change (GO.BAT de
+/// démos : « demovt … /sh:maindemo.exe>nul » passait « maindemo.exe>nul » comme nom de programme).
+fn strip_redirections(line: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(line.len());
+    let mut i = 0;
+    while i < line.len() {
+        if line[i] == b'>' || line[i] == b'<' {
+            i += 1;
+            if i < line.len() && line[i] == b'>' {
+                i += 1;
+            }
+            while i < line.len() && line[i] == b' ' {
+                i += 1;
+            }
+            while i < line.len() && !matches!(line[i], b' ' | b'\t' | b'>' | b'<') {
+                i += 1;
+            }
+        } else {
+            out.push(line[i]);
+            i += 1;
+        }
+    }
+    while out.last() == Some(&b' ') {
+        out.pop();
+    }
+    out
+}
+
+#[cfg(test)]
+mod redirection_tests {
+    use super::strip_redirections;
+
+    #[test]
+    fn redirections_are_removed() {
+        assert_eq!(strip_redirections(b"demovt a.s3m /sh:maindemo.exe>nul"), b"demovt a.s3m /sh:maindemo.exe");
+        assert_eq!(strip_redirections(b"prog x >> log.txt"), b"prog x");
+        assert_eq!(strip_redirections(b"prog < in.txt y"), b"prog  y");
+        assert_eq!(strip_redirections(b"prog a b"), b"prog a b");
     }
 }
