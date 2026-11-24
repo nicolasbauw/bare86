@@ -135,7 +135,9 @@ def main():
                and not survey.SKIP_NAMES.search(os.path.splitext(n)[0])]
         helpers = [n for n, s, sha, g, d in files if g in ("exe", "com") and sha in boiler]
         kinds = collections.Counter(g for _, _, _, g, _ in files)
-        if own:
+        if any(c.lower() in ("mags", "mag", "magazines", "docs") for c in rel.split("/")[1:-1]):
+            cat = "magazine"  # magazine disque : lecteur de texte, pas une démo
+        elif own:
             cat = "exécutable"
         elif kinds["module"]:
             cat = "musique"

@@ -589,6 +589,14 @@ Démos ou intros qui ont posé problème au balayage (le plus souvent une questi
   20 images, 17 musiques. `ETAT.md/.html` : colonne « hors score » ; les images et la musique ne sont plus dans « à revoir ».
 - Relancer : `python3 -I tools/classify.py --src "$PC/dos-demos" --items "$PC/scan-full/full-items.txt" --out "$PC/scan-full/categories.json"`.
 
+### Rapport : moins de « à revoir » (2026-11-24)
+- Constat : 110 éléments signalés sur 367, dont beaucoup sans objet : résultats PÉRIMÉS du CD 27 (ancien `survey.py` planté, balayage refait ensuite dans `scan-cd27j`),
+  « peu de scènes » pour des intros 1K/4K ou des jeux (courts par nature), avertissements `[int]` seuls, démos déjà jugées.
+- Corrigé dans `tools/sweep_report.py` : `overlays.txt` (dossiers de résultats plus récents qui remplacent les anciens : `scan-cd27j`), seuils selon le genre (dossiers 1KO/IN4K/4K… : < 2 scènes
+  seulement), un avertissement `[int]` seul ne signale plus, un élément portant un VERDICT est écarté. `scan-full/verdicts.json` : `{élément: {"verdict": ok|reprendre|hors-sujet, "note"}}`
+  (58 verdicts semés depuis les notes ci-dessus), à éditer à la main ou par moi ; section « Verdicts » dans `ETAT.md`. `classify.py` : catégorie « magazine » (dossiers MAGS…).
+- Restant à revoir : surtout des éléments non examinés (voir `ETAT.md`). À REFAIRE : CD 27 `WIR97/4K` (résultat périmé).
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 

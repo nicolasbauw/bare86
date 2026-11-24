@@ -37,7 +37,7 @@ def load_json(path, default):
         return default
 
 
-def last_results(path):
+def last_results(path, overlays=()):
     """Dernier résultat de chaque élément (un élément refait remplace le précédent)."""
     out = {}
     try:
@@ -50,22 +50,35 @@ def last_results(path):
                 out[x.get("item") or x.get("id")] = x
     except OSError:
         pass
+    for extra in overlays:  # balayages plus récents d'éléments déjà vus : leurs résultats remplacent les anciens
+        out.update(last_results(os.path.join(extra, "results.jsonl")))
     return out
 
 
-def to_review(x):
-    """Raisons pour lesquelles un résultat mérite un coup d'œil (liste vide : rien à signaler)."""
+TINY = {"1ko", "512b", "in4k", "4k", "4ko", "in16", "5k", "in4", "in1k", "1k"}  # dossiers d'intros minuscules : peu de scènes = normal
+
+
+def folder(rel):
+    p = rel.split("/")
+    return (p[2] if len(p) > 3 else "").lower()
+
+
+def to_review(x, rel=""):
+    """Raisons pour lesquelles un résultat mérite un coup d'œil (liste vide : rien à signaler).
+    Un avertissement `[int]` seul n'en est pas une (informatif) ; « peu de scènes » dépend du genre
+    (intros 1K/4K : moins de 2 scènes seulement)."""
     why = []
     if x.get("status") not in ("exit", "ok"):
         why.append(str(x.get("status")))
-    if x.get("message"):
-        why.append(x["message"].strip().splitlines()[0][:70])
-    if x.get("kept", 0) < 8:
+    few = 2 if folder(rel or x.get("item", "")) in TINY else 8
+    if x.get("kept", 0) < few:
         why.append(f"{x.get('kept', 0)} scène(s)")
     if x.get("static"):
         why.append("statique")
-    if x.get("status") == "exit" and x.get("seconds", 999) < 45:
+    if x.get("status") == "exit" and x.get("seconds", 999) < 45 and x.get("kept", 0) < few:
         why.append("arrêt rapide")
+    if why and x.get("message"):
+        why.append(x["message"].strip().splitlines()[0][:70])
     return why
 
 
@@ -81,7 +94,13 @@ def build(args):
         n = cd_number(rel)
         if n is not None:
             by_cd[n].append(rel)
-    results = last_results(os.path.join(args.out, "results.jsonl"))
+    overlays = list(args.overlay)
+    try:  # overlays.txt du dossier de résultats : un dossier de résultats plus récents par ligne
+        overlays += [l.strip() for l in open(os.path.join(args.out, "overlays.txt"), encoding="utf-8") if l.strip()]
+    except OSError:
+        pass
+    results = last_results(os.path.join(args.out, "results.jsonl"), overlays)
+    verdicts = load_json(os.path.join(args.out, "verdicts.json"), {})  # {élément: {"verdict": ok|reprendre|hors-sujet, "note": …}}
     progress = load_json(os.path.join(args.out, "progress.json"), {})
     profiles = load_json(args.profiles, {}) if args.profiles else {}
     cats = load_json(os.path.join(args.out, "categories.json"), {})  # tools/classify.py : exécutable, musique, image…
@@ -101,13 +120,15 @@ def build(args):
             "profiles": sum(1 for r in rels if r in profiles),
             "finished": progress.get(str(n), {}).get("finished", ""), "rels": rels, "results": results,
         })
-        review[n] = [(r, to_review(results[r]), results[r]) for r in rels
-                     if r in results and to_review(results[r]) and cats.get(r, {}).get("categorie", "exécutable") == "exécutable"]
+        review[n] = [(r, to_review(results[r], r), results[r]) for r in rels
+                     if r in results and to_review(results[r], r) and r not in verdicts
+                     and cats.get(r, {}).get("categorie", "exécutable") == "exécutable"]
+        rows[-1]["verdicts"] = collections.Counter(verdicts[r]["verdict"] for r in rels if r in verdicts)
         rows[-1]["hors"] = sum(1 for r in rels if cats.get(r, {}).get("categorie", "exécutable") != "exécutable")
     return rows, review
 
 
-def text(rows, review):
+def text(rows, review, verdicts=None):
     total = sum(r["items"] for r in rows)
     done = sum(r["done"] for r in rows)
     scenes = sum(r["scenes"] for r in rows)
@@ -115,13 +136,13 @@ def text(rows, review):
     lines = [f"# État du balayage — {datetime.datetime.now():%Y-%m-%d %H:%M}", "",
              f"Éléments traités : {done} / {total}  {bar(done, total, 30)}  {100 * done // max(total, 1)} %",
              f"Scènes capturées : {scenes} · temps d'exécution cumulé : {hours:.1f} h", "",
-             "| CD | état | traités | progression | exit | ok | autres | scènes | profils | à revoir | hors score |",
+             "| CD | état | traités | progression | exit | ok | autres | scènes | à revoir | vus (verdict) | hors score |",
              "|---:|:--|--:|:--|--:|--:|--:|--:|--:|--:|--:|"]
     for r in rows:
         other = r["done"] - r["status"].get("exit", 0) - r["status"].get("ok", 0)
         lines.append(f"| {r['cd']} | {r['state']} | {r['done']}/{r['items']} | {bar(r['done'], r['items'], 12)} | "
-                     f"{r['status'].get('exit', 0)} | {r['status'].get('ok', 0)} | {other} | {r['scenes']} | {r['profiles']} | "
-                     f"{len(review[r['cd']])} | {r.get('hors', 0)} |")
+                     f"{r['status'].get('exit', 0)} | {r['status'].get('ok', 0)} | {other} | {r['scenes']} | "
+                     f"{len(review[r['cd']])} | {sum(r.get('verdicts', {}).values())} | {r.get('hors', 0)} |")
     for r in rows:
         if r["state"] == "en cours":
             lines += ["", f"## CD {r['cd']} en cours : {r['done']}/{r['items']}  {bar(r['done'], r['items'], 20)}", "",
@@ -141,6 +162,14 @@ def text(rows, review):
         for rel, why, x in review[r["cd"]]:
             lines.append(f"- {os.path.basename(rel)} : {x.get('status')}, {x.get('seconds', 0):.0f} s — " + " ; ".join(why))
         lines.append("")
+    if verdicts:
+        lines += ["## Verdicts (éléments vus : écartés de « à revoir »)", ""]
+        for v, titre in (("reprendre", "À reprendre si la démo aux cochons n'est pas trouvée"), ("ok", "Vus, OK"), ("hors-sujet", "Hors sujet")):
+            sel = sorted((k, x) for k, x in verdicts.items() if x.get("verdict") == v)
+            if sel:
+                lines.append(f"### {titre} ({len(sel)})")
+                lines += [f"- {k.split('/', 1)[-1]} : {x.get('note', '')}" for k, x in sel]
+                lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -218,10 +247,11 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--items", required=True)
     ap.add_argument("--profiles")
+    ap.add_argument("--overlay", action="append", default=[], help="dossier de résultats plus récents pour des éléments déjà vus (répétable)")
     args = ap.parse_args()
     rows, review = build(args)
     with open(os.path.join(args.out, "ETAT.md"), "w", encoding="utf-8") as f:
-        f.write(text(rows, review))
+        f.write(text(rows, review, load_json(os.path.join(args.out, 'verdicts.json'), {})))
     with open(os.path.join(args.out, "ETAT.html"), "w", encoding="utf-8") as f:
         f.write(page(rows, review))
     print(f"{os.path.join(args.out, 'ETAT.md')} et ETAT.html écrits")
