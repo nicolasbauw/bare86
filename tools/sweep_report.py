@@ -84,6 +84,7 @@ def build(args):
     results = last_results(os.path.join(args.out, "results.jsonl"))
     progress = load_json(os.path.join(args.out, "progress.json"), {})
     profiles = load_json(args.profiles, {}) if args.profiles else {}
+    cats = load_json(os.path.join(args.out, "categories.json"), {})  # tools/classify.py : exécutable, musique, image…
     rows, review = [], {}
     for n in sorted(by_cd):
         rels = by_cd[n]
@@ -100,7 +101,9 @@ def build(args):
             "profiles": sum(1 for r in rels if r in profiles),
             "finished": progress.get(str(n), {}).get("finished", ""), "rels": rels, "results": results,
         })
-        review[n] = [(r, to_review(results[r]), results[r]) for r in rels if r in results and to_review(results[r])]
+        review[n] = [(r, to_review(results[r]), results[r]) for r in rels
+                     if r in results and to_review(results[r]) and cats.get(r, {}).get("categorie", "exécutable") == "exécutable"]
+        rows[-1]["hors"] = sum(1 for r in rels if cats.get(r, {}).get("categorie", "exécutable") != "exécutable")
     return rows, review
 
 
@@ -112,13 +115,13 @@ def text(rows, review):
     lines = [f"# État du balayage — {datetime.datetime.now():%Y-%m-%d %H:%M}", "",
              f"Éléments traités : {done} / {total}  {bar(done, total, 30)}  {100 * done // max(total, 1)} %",
              f"Scènes capturées : {scenes} · temps d'exécution cumulé : {hours:.1f} h", "",
-             "| CD | état | traités | progression | exit | ok | autres | scènes | profils | à revoir |",
-             "|---:|:--|--:|:--|--:|--:|--:|--:|--:|--:|"]
+             "| CD | état | traités | progression | exit | ok | autres | scènes | profils | à revoir | hors score |",
+             "|---:|:--|--:|:--|--:|--:|--:|--:|--:|--:|--:|"]
     for r in rows:
         other = r["done"] - r["status"].get("exit", 0) - r["status"].get("ok", 0)
         lines.append(f"| {r['cd']} | {r['state']} | {r['done']}/{r['items']} | {bar(r['done'], r['items'], 12)} | "
                      f"{r['status'].get('exit', 0)} | {r['status'].get('ok', 0)} | {other} | {r['scenes']} | {r['profiles']} | "
-                     f"{len(review[r['cd']])} |")
+                     f"{len(review[r['cd']])} | {r.get('hors', 0)} |")
     for r in rows:
         if r["state"] == "en cours":
             lines += ["", f"## CD {r['cd']} en cours : {r['done']}/{r['items']}  {bar(r['done'], r['items'], 20)}", "",
@@ -130,7 +133,7 @@ def text(rows, review):
                 else:
                     lines.append(f"| {os.path.basename(rel)} | {x.get('status')} | {x.get('kept', 0)} | {x.get('seconds', 0):.0f} s | "
                                  + " ; ".join(to_review(x)) + " |")
-    lines += ["", "## À revoir (statut inhabituel, avertissement, peu de scènes, statique, arrêt rapide)", ""]
+    lines += ["", "## À revoir (exécutables seulement : statut inhabituel, avertissement, peu de scènes, statique, arrêt rapide)", ""]
     for r in rows:
         if not review[r["cd"]]:
             continue
@@ -153,7 +156,7 @@ def page(rows, review):
         seg = lambda n, c: f'<span class="seg {c}" style="width:{100 * n / max(r["items"], 1):.1f}%"></span>'
         body.append(f'<tr><td class="n">{r["cd"]}</td><td>{esc(r["state"])}</td><td class="n">{r["done"]}/{r["items"]}</td>'
                     f'<td><div class="bar">{seg(ex, "exit")}{seg(ok, "ok")}{seg(oth, "bad")}</div></td>'
-                    f'<td class="n">{r["scenes"]}</td><td class="n">{len(review[r["cd"]])}</td></tr>')
+                    f'<td class="n">{r["scenes"]}</td><td class="n">{len(review[r["cd"]])}</td><td class="n">{r.get("hors", 0)}</td></tr>')
     running = ""
     for r in rows:
         if r["state"] == "en cours":
@@ -188,7 +191,7 @@ small{{color:var(--mut)}}li{{margin:2px 0}}li.wait{{color:var(--mut)}}.auto{{mar
 <p class="auto"><label><input type="checkbox" id="auto"> rafraîchir automatiquement</label> <small id="count"></small></p>
 <p>{done} / {total} éléments traités ({100 * done // max(total, 1)} %) <small>— {datetime.datetime.now():%Y-%m-%d %H:%M}</small></p>
 <p><small>Barres : <span style="color:var(--exit)">■</span> sorti seul · <span style="color:var(--ok)">■</span> arrêté (inactif ou limite) · <span style="color:var(--bad)">■</span> autre.</small></p>
-<table><tr><th>CD</th><th>état</th><th>traités</th><th>statuts</th><th>scènes</th><th>à revoir</th></tr>{"".join(body)}</table>
+<table><tr><th>CD</th><th>état</th><th>traités</th><th>statuts</th><th>scènes</th><th>à revoir</th><th>hors score</th></tr>{"".join(body)}</table>
 {running}<h2>À revoir</h2>{"".join(revs) or "<p>Rien.</p>"}<script>
 (function () {{
   var box = document.getElementById("auto"), out = document.getElementById("count"), left = 0, EVERY = 20;

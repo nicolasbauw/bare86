@@ -579,6 +579,16 @@ Démos ou intros qui ont posé problème au balayage (le plus souvent une questi
   (« Accept ») ; PW-BANAN sur un écran « DOS32 Version 3.5 unregistered » (étape à passer) ; ZOBMAN = une sorte de Pac-Man, un seul écran (normal).
   Profils de touches à écrire pour XTC_ASS (y), K_MLINK (Entrée) ; PW-BANAN à examiner.
 
+### Reconnaître ce qui n'est pas exécutable (2026-11-24, `tools/classify.py`)
+- Constat : les archives « GFX » / « M4CH » (MOV97) ne contiennent qu'une image ou un module + `CFXADV.COM` (publicité du groupe, identique partout) : le balayage
+  exécutait la pub (299 scènes) et la comptait `ok`.
+- Reconnaissance par le contenu : EXE = en-tête `MZ` (puis `LE`/`LX` = DOS étendu, `NE` = Windows 16 bits, `PE` = Win32) ; COM = pas d'en-tête (extension, ≤ 64 Ko) ;
+  modules = `Extended Module:` (XM), `SCRM` (S3M), `IMPM` (IT), `M.K.`… à l'octet 1080 (MOD) ; images = GIF, PCX, BMP, JPEG, PNG ; un exécutable de même empreinte (SHA-1)
+  dans ≥ 3 éléments de NOMS différents = fichier d'accompagnement (pub, DOS4GW…), pas l'exécutable de l'élément (les doublons d'une démo sur plusieurs CD ne comptent pas).
+- Résultat (`scan-full/categories.json`, 629 éléments) : 592 exécutables (439 DOS, 144 COM, 137 DOS étendu, 19 Win32, 3 Win16 ; un élément peut en avoir plusieurs),
+  20 images, 17 musiques. `ETAT.md/.html` : colonne « hors score » ; les images et la musique ne sont plus dans « à revoir ».
+- Relancer : `python3 -I tools/classify.py --src "$PC/dos-demos" --items "$PC/scan-full/full-items.txt" --out "$PC/scan-full/categories.json"`.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
