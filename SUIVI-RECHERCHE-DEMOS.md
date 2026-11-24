@@ -536,6 +536,15 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
 - Démos à peu de scènes, surtout des intros courtes : CARDRIVE, DPH_HIGH, TMBE, EFC_DEEP, EVK-4K, ONC, KMU_KANN, BLUECALX (non examinées).
 - HYPNO2 : `kept 0` du balayage (démo pourtant complète en `--video`), artefact non élucidé.
 
+## CD 30 balayé sans Gemma (2026-11-24) — `scan-full/` (31 éléments)
+- **SBM_NDIG** : SETUP.EXE d'abord (SB, 220h, DMA 1, IRQ 5, 22050 Hz) → `GO.BAT` (`demovt … /sh:maindemo.exe>nul`) ; le shell intégré retire maintenant les
+  redirections (`>nul`, `>>`, `<`) de la ligne de commande ; profil `prep` + `run: GO.BAT` : 55 scènes.
+- **X-398363** (EXTEND) : exige le mode VBE 0146h (320×200×32, numérotation SDD 5.3), ajouté ; MIDAS 1.1.0 : une Entrée ; 37 scènes.
+- **HJB_NEON** (Haujobb) : MIDAS 0.6.1 ; sous `--gus` une Entrée (GUS d'office), sans `--gus` six Entrées (SB16) ; sort ensuite en silence (code 255) au bout
+  de ≈ 3 s : NON RÉSOLU (2 scènes). **ATMOZ2** (Credex PI-mode) : `INT 6Ch AX=0005` non géré puis « Can not unpack samples » : NON RÉSOLU.
+  **SYS4KX** (intro 4K MMX) : n'affiche qu'un texte répété : NON RÉSOLU. RC_HALL : fonctionne.
+- Non-régression CD 27 (`scan-cd27j`) : statuts inchangés, seuls les nombres de scènes bougent.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
