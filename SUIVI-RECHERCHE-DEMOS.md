@@ -523,6 +523,15 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   démo (0x131720, EDX = 0) écrase l'en-tête du bloc (surveillance d'écriture `BARE86_HWBP=B5EE90 BARE86_HWBP_W=1` avec `--debug`, `--no-jit`).
   Soupçon : débordement de tas de la démo (mode 12Dh 320×200×8 choisi dans notre liste VBE ?) ou bogue d'émulation non trouvé. À CREUSER.
 
+### QUESTKHN élucidée (2026-11-24) : incompatibilité du DOS/32A de substitution, pas un défaut d'émulation
+- KAHN.EXE n'embarque pas DOS4GW.EXE : Bare86 présente son DOS4GW.EXE intégré (= DOS/32A 9.1.2, seul redistribuable). Avec lui, la démo écrase
+  l'en-tête d'un bloc de mémoire étendue (memset de 0xA40 octets en B5EE18 sur un bloc dont l'en-tête DOS/32A est à B5EE90) et DOS/32A
+  s'arrête sur l'erreur 6004. Indépendant du son, de la vitesse, du VBE, de la taille mémoire, de la voie XMS.
+- **Avec le vrai DOS/4GW 1.97** (`~/Dev/dos-progs/dos4g/DOS4GW.EXE`, copié dans le dossier de la démo) : la démo se déroule en entier (grenouille Kahn,
+  titre, gemme, scènes 3D). De même sous FreeDOS (`--boot`) avec ce DOS4GW.
+- Piste générale : une démo qui échoue avec « DOS/32A run-time … » = essayer le vrai DOS4GW.EXE ; la substitution DOS/32A n'a pas la
+  tolérance de DOS/4GW aux débordements d'allocation. Pas de correction possible côté Bare86 sans fournir DOS/4GW (non redistribuable).
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
