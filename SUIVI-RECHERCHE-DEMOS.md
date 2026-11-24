@@ -569,6 +569,16 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   thème clair/sombre). `sweep.py` le rafraîchit à la fin de chaque CD ; à la main, y compris pendant un balayage :
   `python3 -I tools/sweep_report.py --out "$PC/scan-full" --items "$PC/scan-full/full-items.txt" --profiles "$PC/profiles.json"`.
 
+## À REPRENDRE SI LA DÉMO AUX COCHONS N'EST PAS TROUVÉE (liste tenue au fil des CD, décision utilisateur 2026-11-24)
+Démos ou intros qui ont posé problème au balayage (le plus souvent une question, un menu ou un défaut à régler, pas un défaut d'émulation).
+- **CD 28** : SD_COLF (« buggy party release », exige `command.com` copié en `EASY.com`, triple faute) ; SNS_7GFN (durée instable) ; MINDTRAP/SEVEN/RETRO/FELIX (OK).
+- **CD 29** : QUESTKHN (marche avec le vrai DOS4GW.EXE) ; HYPNO2 (`kept 0` du balayage, démo OK) ; à peu de scènes non examinées : CARDRIVE, DPH_HIGH, TMBE, EFC_DEEP, EVK-4K, ONC, KMU_KANN, BLUECALX.
+- **CD 30** : HJB_NEON (sort en silence, code 255, ≈ 3 s après la config MIDAS) ; ATMOZ2 (`INT 6Ch AX=0005`, « Can not unpack samples ») ; SYS4KX (texte répété seulement).
+- **CD 32** : RESNOW (image de l'œil figée, boucle d'attente inconnue) ; à regarder : PLS-SKID, INTRO (ASTROS), NN97_*, RT-SPACE, DR_5K.
+- **CD 33** (verdicts de l'utilisateur) : XTC_ASS pose une question o/n (y/n) à laquelle il faut répondre ; XTC!PART (même famille, à vérifier) ; K_MLINK sur l'écran MIDAS qui attend Entrée
+  (« Accept ») ; PW-BANAN sur un écran « DOS32 Version 3.5 unregistered » (étape à passer) ; ZOBMAN = une sorte de Pac-Man, un seul écran (normal).
+  Profils de touches à écrire pour XTC_ASS (y), K_MLINK (Entrée) ; PW-BANAN à examiner.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
