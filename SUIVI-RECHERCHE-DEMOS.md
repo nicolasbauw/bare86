@@ -564,6 +564,11 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
   « you'll need p130 or such to run this correctly / read the .nfo file » et quitte ; l'auteur dit qu'il est « conçu pour la compomachine d'Assembly 97, un P133,
   jamais corrigé ». Un seul `rdtsc` dans l'EXE (0x132135), jamais exécuté. Port 300h lu ≈ 800 fois/s (sans périphérique). À creuser : ce que la boucle attend.
 
+### Suivi visuel des balayages (2026-11-24)
+- `tools/sweep_report.py` écrit `scan-full/ETAT.md` (texte : barre globale, tableau par CD, liste « à revoir ») et `scan-full/ETAT.html` (barres colorées,
+  thème clair/sombre). `sweep.py` le rafraîchit à la fin de chaque CD ; à la main, y compris pendant un balayage :
+  `python3 -I tools/sweep_report.py --out "$PC/scan-full" --items "$PC/scan-full/full-items.txt" --profiles "$PC/profiles.json"`.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 

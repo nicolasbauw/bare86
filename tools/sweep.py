@@ -59,6 +59,14 @@ def ident(rel):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", rel).strip("_")[:120]
 
 
+def report(args):
+    """Rafraîchit ETAT.md / ETAT.html (tools/sweep_report.py) dans le dossier de résultats."""
+    cmd = [sys.executable, "-I", os.path.join(HERE, "sweep_report.py"), "--out", args.out, "--items", args.items]
+    if args.profiles:
+        cmd += ["--profiles", args.profiles]
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--src", required=True)
@@ -115,6 +123,7 @@ def main():
                                  "finished": datetime.datetime.now().isoformat(timespec="seconds")})
         json.dump(progress, open(pfile, "w"), indent=1, ensure_ascii=False)
         print(f"=== CD {n} terminé : PIG yes {len(pig)}, DONTSMOKE yes {len(smoke)}", flush=True)
+        report(args)
         for i in pig + [x for x in smoke if x not in pig]:
             print("   à regarder :", i, flush=True)
         if args.one:
