@@ -114,7 +114,7 @@ const VBE_PM_LEN: u16 = 0x8A;
 /// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
 /// parcourent la liste et lisent les caractéristiques de chaque mode) : 32 bits
 /// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2), 320×240 et 320×200.
-const VBE_MODE_LIST: [(u16, usize, usize, usize); 33] = [
+const VBE_MODE_LIST: [(u16, usize, usize, usize); 34] = [
     (0x100, 640, 400, 8),
     (0x101, 640, 480, 8),
     (0x103, 800, 600, 8),
@@ -150,6 +150,8 @@ const VBE_MODE_LIST: [(u16, usize, usize, usize); 33] = [
     (0x136, 320, 240, 16),
     (0x12E, 320, 400, 8),
     (0x130, 320, 400, 16),
+    // 320×200 en 32 bits tel que SciTech Display Doctor 5.3 le numérote (X-398363 : « Linear frame buffer not found »).
+    (0x146, 320, 200, 32),
 ];
 
 /// Mode VBE de la liste.
