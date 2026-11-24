@@ -549,6 +549,14 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
 - **HJB_NEON** : sort en silence (code 255) ≈ 3 s après la config MIDAS ; **ATMOZ2** : `INT 6Ch AX=0005` non géré puis « Can not unpack samples » ;
   **SYS4KX** : texte répété seulement (intro 4K MMX).
 
+## CD 31 et CD 32 balayés sans Gemma (2026-11-24) — `scan-full/`
+- **CD 31** (39 éléments) : IHME et MUFSUX fonctionnent ; magazines disque (`MAGS_*`) = peu de scènes, normal ; `DH97_MISC` ADDHELP / FLR_HELP / STARDATE =
+  utilitaires qui s'arrêtent en 30 s. Rien à corriger apparemment.
+- **CD 32** (67 éléments, 55 `exit`, 12 `ok`) : AGENTO (version ARJ) avait le défaut de vitesse du CD 28 : profil `--mips 100` ajouté, 109 scènes.
+  SNS_7GFN = doublon du CD 28 (durée instable). À regarder à l'œil : RESNOW (7 scènes), PLS-SKID (court, 41 s), INTRO (ASTROS, 2 scènes),
+  NN97_FST / NN97_MUL / NN97_GFX (NEITHE : peu de scènes, sans doute un magazine/galerie), RT-SPACE (4K statique), DR_5K (6 scènes en 389 s).
+- Idée (2026-11-24) : site web de captures pour les nostalgiques de la démoscène PC/DOS (lien pouet.net, pas d'exécutables, charte de ~/Dev/pageperso) — non décidé.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
