@@ -109,6 +109,9 @@ impl Channel {
     }
 }
 
+/// Durée au-delà de laquelle un compte du canal 0 figé (IRQ 0 non acquittée) repart.
+const FREEZE_MAX: Duration = Duration::from_millis(100);
+
 pub struct Pit {
     ch: [Channel; 3],
     /// Port 61h : bits 0 (porte du canal 2) et 1 (haut-parleur).
@@ -160,7 +163,10 @@ impl Pit {
         // retenu dans un long appel à l'hôte, gestionnaire lent) : le compte
         // reste figé jusque-là, sans quoi la période montrée avancerait plus
         // vite que le compteur de tics et l'heure lue reculerait.
-        let stale = masked && self.shown_end.is_some_and(|e| e < due);
+        // Interruptions interdites (`cli`) pendant une temporisation lue sur le canal 0 :
+        // l'IRQ 0 n'est ni masquée ni acquittée, et le compte figé ne bougerait plus
+        // jamais (QUESTKHN). Au-delà de FREEZE_MAX, le compte repart.
+        let stale = self.shown_end.is_some_and(|e| e < due && (masked || now.saturating_duration_since(e) > FREEZE_MAX));
         let periodic = matches!(c.mode, 2 | 3 | 6 | 7);
         // Rechargement : le compte en attente prend effet à cette échéance.
         if periodic && let Some(r) = self.pending0.take() {

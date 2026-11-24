@@ -498,6 +498,8 @@ def run_one(item, args, src):
                 res["status"] = "bad-archive"
                 return res
             run_dir = work
+            if prep:
+                run_prep(prep, work, args)
         exe, k, others = pick(run_dir, os.path.basename(item))
         res["others"] = others[:12]
         if exe is None:
