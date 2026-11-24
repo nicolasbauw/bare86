@@ -111,9 +111,16 @@ def main():
         json.dump(progress, open(pfile, "w"), indent=1, ensure_ascii=False)
         listing = os.path.join(args.out, f"items-cd{n}.txt")
         open(listing, "w").write("\n".join(rels) + "\n")
-        subprocess.run([sys.executable, "-I", os.path.join(HERE, "survey.py"), "--src", args.src, "--out", args.out,
-                        "--items", listing, "--jobs", str(args.jobs), "--limit", str(args.limit), "--every", "2",
-                        "--full", "--idle", "60"] + (["--profiles", args.profiles] if args.profiles else []) + (["--probe", str(args.probe)] if args.probe else []), check=False)
+        survey = subprocess.Popen([sys.executable, "-I", os.path.join(HERE, "survey.py"), "--src", args.src, "--out", args.out,
+                                   "--items", listing, "--jobs", str(args.jobs), "--limit", str(args.limit), "--every", "2",
+                                   "--full", "--idle", "60"] + (["--profiles", args.profiles] if args.profiles else []) + (["--probe", str(args.probe)] if args.probe else []))
+        # Pendant le balayage, le rapport suit élément par élément (results.jsonl grossit à chaque démo terminée).
+        while True:
+            try:
+                survey.wait(timeout=20)
+                break
+            except subprocess.TimeoutExpired:
+                report(args)
         if not args.no_ask:
             subprocess.run([sys.executable, "-I", os.path.join(HERE, "survey_ask.py"), "--out", args.out, "--model", args.model,
                             "--question", QUESTION], check=False)

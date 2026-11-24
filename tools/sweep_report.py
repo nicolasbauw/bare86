@@ -98,7 +98,7 @@ def build(args):
             "cd": n, "state": state, "items": len(rels), "done": len(done), "status": status,
             "scenes": sum(x.get("kept", 0) for x in done), "seconds": sum(x.get("seconds", 0) for x in done),
             "profiles": sum(1 for r in rels if r in profiles),
-            "finished": progress.get(str(n), {}).get("finished", ""),
+            "finished": progress.get(str(n), {}).get("finished", ""), "rels": rels, "results": results,
         })
         review[n] = [(r, to_review(results[r]), results[r]) for r in rels if r in results and to_review(results[r])]
     return rows, review
@@ -119,6 +119,17 @@ def text(rows, review):
         lines.append(f"| {r['cd']} | {r['state']} | {r['done']}/{r['items']} | {bar(r['done'], r['items'], 12)} | "
                      f"{r['status'].get('exit', 0)} | {r['status'].get('ok', 0)} | {other} | {r['scenes']} | {r['profiles']} | "
                      f"{len(review[r['cd']])} |")
+    for r in rows:
+        if r["state"] == "en cours":
+            lines += ["", f"## CD {r['cd']} en cours : {r['done']}/{r['items']}  {bar(r['done'], r['items'], 20)}", "",
+                      "| démo | état | scènes | durée | remarque |", "|:--|:--|--:|--:|:--|"]
+            for rel in r["rels"]:
+                x = r["results"].get(rel)
+                if x is None:
+                    lines.append(f"| {os.path.basename(rel)} | … en attente ou en cours | | | |")
+                else:
+                    lines.append(f"| {os.path.basename(rel)} | {x.get('status')} | {x.get('kept', 0)} | {x.get('seconds', 0):.0f} s | "
+                                 + " ; ".join(to_review(x)) + " |")
     lines += ["", "## À revoir (statut inhabituel, avertissement, peu de scènes, statique, arrêt rapide)", ""]
     for r in rows:
         if not review[r["cd"]]:
@@ -143,6 +154,19 @@ def page(rows, review):
         body.append(f'<tr><td class="n">{r["cd"]}</td><td>{esc(r["state"])}</td><td class="n">{r["done"]}/{r["items"]}</td>'
                     f'<td><div class="bar">{seg(ex, "exit")}{seg(ok, "ok")}{seg(oth, "bad")}</div></td>'
                     f'<td class="n">{r["scenes"]}</td><td class="n">{len(review[r["cd"]])}</td></tr>')
+    running = ""
+    for r in rows:
+        if r["state"] == "en cours":
+            lis = []
+            for rel in r["rels"]:
+                x = r["results"].get(rel)
+                if x is None:
+                    lis.append(f'<li class="wait">{esc(os.path.basename(rel))} <small>… en attente ou en cours</small></li>')
+                else:
+                    why = " ; ".join(to_review(x))
+                    lis.append(f'<li>{esc(os.path.basename(rel))} — {esc(str(x.get("status")))}, {x.get("kept", 0)} scène(s), {x.get("seconds", 0):.0f} s'
+                               + (f' <small>({esc(why)})</small>' if why else "") + "</li>")
+            running += f'<h2>CD {r["cd"]} en cours : {r["done"]}/{r["items"]}</h2><ul>' + "".join(lis) + "</ul>"
     revs = []
     for r in rows:
         if review[r["cd"]]:
@@ -158,13 +182,13 @@ body{{background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif;margin
 table{{border-collapse:collapse;width:100%}}td,th{{padding:4px 8px;border-bottom:1px solid var(--bar);text-align:left}}
 .n{{text-align:right;font-variant-numeric:tabular-nums}}.bar{{display:flex;height:12px;background:var(--bar);border-radius:3px;overflow:hidden;min-width:160px}}
 .seg.exit{{background:var(--exit)}}.seg.ok{{background:var(--ok)}}.seg.bad{{background:var(--bad)}}
-small{{color:var(--mut)}}li{{margin:2px 0}}
+small{{color:var(--mut)}}li{{margin:2px 0}}li.wait{{color:var(--mut)}}
 </style>
 <h1>État du balayage</h1>
 <p>{done} / {total} éléments traités ({100 * done // max(total, 1)} %) <small>— {datetime.datetime.now():%Y-%m-%d %H:%M}</small></p>
 <p><small>Barres : <span style="color:var(--exit)">■</span> sorti seul · <span style="color:var(--ok)">■</span> arrêté (inactif ou limite) · <span style="color:var(--bad)">■</span> autre.</small></p>
 <table><tr><th>CD</th><th>état</th><th>traités</th><th>statuts</th><th>scènes</th><th>à revoir</th></tr>{"".join(body)}</table>
-<h2>À revoir</h2>{"".join(revs) or "<p>Rien.</p>"}</html>
+{running}<h2>À revoir</h2>{"".join(revs) or "<p>Rien.</p>"}</html>
 """
 
 
