@@ -477,6 +477,20 @@ qui acquitte la RTC (LowRes'97). Outils : `survey.py` (IMS, DOS4GW, `--ems 0`, `
 3. Démos douteuses restantes : PW-BANAN, INVALIDE, glamour, 4kbugs ; WIPE_N64 (rendu animé mais non vérifié) ; orthicon (archive incomplète).
 4. Idées : `CHOICE`/`XCOPY` et redirection `> NUL` des programmes dans le shell ; `INT 10h AH=1Ch` ; `INT 21h AH=FFh`.
 
+## CD 28 balayé (2026-11-24) — `scan-full/` (49 éléments)
+- Bilan : 39 `exit`, 9 `ok`, 1 `error`. Gemma : « PIG yes » 3 et « DONTSMOKE yes » 2, aucun net (à regarder à la main :
+  HELIUM, M_STREAM, FELIX, DSS_GNSS, NGON).
+- **AGENTO** : image sombre figée au-dessus de ~100 MIPS (chronologie bloquée, comme Carmageddon) ; profil `--mips 100` :
+  109 scènes, fin à 272 s. Voir `profiles.json` (sauvegarde `.bak-agento`).
+- **SD_COLF** (Children of the Light, version « buggy party release » de l'auteur) : triple faute avec EMS 4 Mo ; avec `--ems 0` la
+  démo réclame `command.com` copié en `EASY.com` dans le dossier (version de développement) puis exécute un opcode invalide (INT 06h).
+  Défaut de la démo / prérequis, pas d'émulation fautive à ce stade.
+- **Appels non gérés traités** : `INT 21h AH=FFh` (silencieux), `INT 10h AH=1Ch` (DAC sauvé/restauré ; pas les registres matériels).
+  Reste `INT 10h AH=6Fh` (SNS_7GFN, sonde de carte, sans effet). SNS_7GFN : durée instable (121 s à 719 s) avec ou sans ces changements.
+- **Audit des IRQ par défaut** : INT 71h redirige maintenant vers INT 0Ah (carte sur « IRQ 2 » = IRQ 9 : le GUS). `sti` en tête d'INT 08h essayé
+  puis retiré. Non faits (sans effet connu) : IRQ 2–7 par défaut qui masquent la ligne comme le BIOS réel, drapeau 40:8E des IRQ 14/15.
+- **Non-régression CD 27** (`scan-cd27h` contre `scan-cd27g`) : aucun changement de statut ; SMEGMA est instable avec l'ancien binaire aussi.
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
