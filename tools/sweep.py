@@ -71,6 +71,7 @@ def main():
     ap.add_argument("--limit", type=int, default=600)
     ap.add_argument("--profiles", help="profils de touches/options par élément (profiles.json de survey.py)")
     ap.add_argument("--probe", type=int, default=0, help="secondes par script de touches essayé pour les éléments sans profil (survey.py --probe)")
+    ap.add_argument("--no-ask", action="store_true", help="sans analyse du modèle de vision (revue des planches à la main)")
     ap.add_argument("--model", default="Gemma-4-12B-it-GGUF")
     args = ap.parse_args()
 
@@ -105,8 +106,9 @@ def main():
         subprocess.run([sys.executable, "-I", os.path.join(HERE, "survey.py"), "--src", args.src, "--out", args.out,
                         "--items", listing, "--jobs", str(args.jobs), "--limit", str(args.limit), "--every", "2",
                         "--full", "--idle", "60"] + (["--profiles", args.profiles] if args.profiles else []) + (["--probe", str(args.probe)] if args.probe else []), check=False)
-        subprocess.run([sys.executable, "-I", os.path.join(HERE, "survey_ask.py"), "--out", args.out, "--model", args.model,
-                        "--question", QUESTION], check=False)
+        if not args.no_ask:
+            subprocess.run([sys.executable, "-I", os.path.join(HERE, "survey_ask.py"), "--out", args.out, "--model", args.model,
+                            "--question", QUESTION], check=False)
         ids = {ident(r) for r in rels}
         pig, smoke = hits(args.out, ids, "PIG: yes"), hits(args.out, ids, "DONTSMOKE: yes")
         progress[str(n)].update({"state": "terminé", "pig": pig, "dontsmoke": smoke,
