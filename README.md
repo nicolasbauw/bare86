@@ -108,6 +108,9 @@ difference is under the hood, and shows with demanding late-90s games.
   (`opengl32.dll` in its directory) is removed. The context takes the size
   of the video mode the game has set. The Kingpin demo (OpenGL only) runs
   with `+set gl_driver opengl32`, in full screen up to 1024×768, with sound.
+  Bare86 also provides its own `glu32.dll` (`guest/glu32/`: the GLU 1.1
+  utilities on top of that OpenGL: `gluPerspective`, `gluLookAt`, quadrics,
+  mipmaps…; the polygon tessellator and NURBS are exported but do nothing).
 - **Video.** VGA text and graphics modes (mode 13h, mode X, 16-colour planar
   modes), SVGA through VESA VBE 2.0 with a linear framebuffer (or VBE 1.2 with
   banked windows): 320×200 to 1024×768 in 8, 15, 16, 24 and 32 bits per pixel,
@@ -609,6 +612,7 @@ DOS game calling a Glide function that Bare86 lacks gets a terminal line
 OpenGL 1.1 prototypes of `gl11.txt` and writes the DLL's functions
 (`gl_gen.c`), its export table (`opengl32.def`) and the host's replay table
 (`src/opengl/api.rs`); then clang and lld build `opengl32.dll` (committed).
+`guest/glu32/build.sh` builds `glu32.dll` the same way, from `glu32.c`.
 Calls that return a value or pass a pointer of variable size (images,
 vertex arrays, `glGet*`) send the buffer at once and the host reads or
 writes the game's memory; `src/opengl/mod.rs` handles them by hand.

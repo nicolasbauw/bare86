@@ -68,6 +68,8 @@ const BUILTIN: &[(&str, &[u8])] = &[
     ("glide2x.ovl", include_bytes!("../../guest/glide2x/glide2x.ovl")),
     // OpenGL 1.1 servi par l'hôte (Quake II, GLQuake…).
     ("opengl32.dll", include_bytes!("../../guest/opengl32/opengl32.dll")),
+    // GLU 1.1 au-dessus de cet OpenGL (gluPerspective, quadriques, mipmaps…).
+    ("glu32.dll", include_bytes!("../../guest/glu32/glu32.dll")),
 ];
 
 /// Contenu fourni par Bare86 pour ce chemin (fichier absent de l'hôte, dans
