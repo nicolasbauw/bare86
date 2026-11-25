@@ -304,15 +304,19 @@ def thumb_diff(a, b):
     return sum(abs(x - y) for x, y in zip(a, b)) / max(1, min(len(a), len(b)))
 
 
-def frame_cap(args, duration, loop):
+def frame_cap(args, duration, loop, n_scenes=0):
     """Nombre maximal de scènes gardées pour un programme : `--max-frames` s'il est donné ;
-    sinon `--min-frames` (48) pour une démo courte ou qui boucle, et une scène par
-    `--seconds-per-frame` secondes de démo au-delà, jusqu'à `--frames-cap`."""
+    sinon `--min-frames` (48) pour une démo courte ou qui boucle, une scène par
+    `--seconds-per-frame` secondes de démo au-delà, et, quand les scènes sont DENSES (une toutes
+    les `--dense-seconds` secondes ou moins), toutes celles vues, jusqu'à `--frames-cap`."""
     if args.max_frames:
         return args.max_frames
     if loop:
         return args.min_frames
-    return max(args.min_frames, min(args.frames_cap, round(duration / args.seconds_per_frame)))
+    cap = max(args.min_frames, min(args.frames_cap, round(duration / args.seconds_per_frame)))
+    if n_scenes and duration and duration / n_scenes <= args.dense_seconds:
+        cap = max(cap, min(args.frames_cap, n_scenes))
+    return cap
 
 
 def detect_loop(thumbs, n_match, eps):
@@ -722,7 +726,7 @@ def run_one(item, args, src):
             if args.full:
                 # Scènes distinctes : planches de 6 images (3 × 2, 320×200), `ID.png`
                 # (la première, pour la revue) puis `ID.2.png`, `ID.3.png`…
-                cap = frame_cap(args, getattr(LAST, "duration", 0), res.get("loop"))
+                cap = frame_cap(args, getattr(LAST, "duration", 0), res.get("loop"), len(files))
                 res["cap"] = cap
                 if len(files) > cap:
                     # Trop de scènes : on en retient `cap` réparties sur toute la
@@ -787,6 +791,7 @@ def main():
     ap.add_argument("--max-frames", type=int, default=0, help="--full : plafond FIXE de scènes par programme (défaut 0 : plafond adaptatif, voir --min-frames)")
     ap.add_argument("--min-frames", type=int, default=48, help="--full : plafond d'une démo courte ou qui boucle (défaut 48, soit 8 planches)")
     ap.add_argument("--seconds-per-frame", type=float, default=10, help="--full : au-delà, une scène de plus par tranche de SECONDES de démo (défaut 10)")
+    ap.add_argument("--dense-seconds", type=float, default=5, help="--full : une démo qui donne une scène distincte toutes les SECONDES ou moins garde toutes ses scènes, jusqu'à --frames-cap (défaut 5)")
     ap.add_argument("--frames-cap", type=int, default=300, help="--full : plafond absolu du plafond adaptatif (défaut 300, soit 50 planches)")
     ap.add_argument("--hard-limit", type=int, default=1800, help="--full : durée maximale (secondes) d'un programme qui produit encore de nouvelles scènes après --limit (défaut 1800)")
     ap.add_argument("--no-extend", dest="extend", action="store_false", help="--full : ne pas prolonger au-delà de --limit")
