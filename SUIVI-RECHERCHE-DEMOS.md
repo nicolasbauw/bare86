@@ -736,3 +736,13 @@ Pourquoi : Gemma relit chaque image à chaque question (lent, hallucine : « don
 - **CD 45** : l'ISO PRO est vide (listage), seul le CD Ludi a un contenu : même suspicion.
 - **CD 41, 44, 51, 68, 81, 84, 85** : téléchargés ; leurs dossiers « Demos » sont des démos de JEUX du commerce (CD Ludi) ou des images/musiques/logiciels (CD PRO) : pas de demoscene, ce n'est pas un trou.
 - 5 ISO tronqués à la source (« Unexpected end of archive ») : CD 71, 73, 74, 82, 83 : contenu partiel.
+
+### Recherche des CD 45, 61, 76 (2026-11-25, soir)
+- **CD 45 : PAS un trou.** L'ISO PRO est une image BRUTE (secteurs de 2 352 o, Mode 1) que `7z` ne liste pas directement (d'où mon « vide » de tout à l'heure) ; une fois « cuite » (2 048 o utiles par secteur), son contenu est : Creations (Anims, Images, Musique),
+  Demos = démos de LOGICIELS (AtGuard, Babylon, Callisto, eJay 2, Fex, Pager, SyGate), Divers, Hardware. Aucune demoscene. (Piège : un ISO « vide » à `7z l` peut être une image brute ; `cook()` de `fetch_cds.py` la convertit.)
+- **CD 61** : l'archive du site ne contient que « Ludi CD 61.iso » (jeux) ; pas de CD PRO. Le fichier existe bien sur le serveur (200), le PRO n'a vraisemblablement jamais été déposé.
+- **CD 76** : le serveur répond 302 vers la page 404 (aucune variante .7z/.rar/.iso essayée n'existe). La recherche web (archive.org, Korben, vogons) n'a rien donné de direct ; Internet Archive a une grande collection de CD-ROM de magazines (surtout PC Gamer) mais pas trouvé PC Team.
+  Pistes restantes : autres miroirs d'abandonware, forums (Vogons), ou demander au contributeur du site. Respecter les droits des CD de magazine.
+- **Repère de dates** (Team Palmtops est né comme supplément de PC Team n°46 = mai 1999 ; la numérotation est mensuelle, quelques numéros doubles possibles, donc ± 1 mois) :
+  CD 45 ≈ avril 1999 ; CD 61 ≈ août 2000 ; CD 76 ≈ novembre 2001. À recouper avec les parties de ces mois (pouet.net : calendrier des parties) pour savoir quelles démos ces CD ont pu contenir.
+  Parties à regarder (à VÉRIFIER sur pouet, non vérifié) : printemps 1999 (The Gathering est à Pâques), été 2000 (Assembly, début août), automne 2001. Les démos de ces parties peuvent se retrouver sur d'autres CD voisins (64-75 pour 2001).
