@@ -670,3 +670,11 @@ on décidera plus tard entre PR amont et fork. Ne pas viser trop ambitieux. Cré
 **Prochaines étapes, par ordre** : (1) vérifier que la chaîne se construit ici (JWasm, JWlink, makefiles de HX ; rien à modifier) ; (2) lire `scan-win32b` à la fin du balayage et relire les chiffres ;
 (3) HX corrigé : en-tête PE fidèle (Petite), DialogBoxParam minimal (WM_INITDIALOG puis IDOK), fonctions USER32/GDI32 manquantes ; (4) DirectDraw : relever les modes demandés par les 5 démos en échec ;
 (5) README : « publicité » de la prise en charge des démos Windows, une fois les chiffres arrêtés ; (6) Direct3D 8 (16 démos) : chercher un travail existant avant d'écrire ; (7) wininet/dplayx/msvcp50/msvcrt40/mfc40 : à décider.
+
+### Compilation de HX : chaîne validée (2026-11-25, soir)
+- JWasm 2.21 et JWlink 2.1 compilés depuis leurs sources (`make -f GccUnix.mak`, gcc seul). Script reproductible : `tools/hx-build/build-dpmild32.sh [DOSSIER]`
+  (clones de HX, JWasm, JWlink ; copie en minuscules des sources, car JWasm est sensible à la casse sous Linux ; 3 assemblages + édition de liens, exactement les commandes de `DPMILD32.MAK`).
+- **`DPMILD32.EXE` construit = IDENTIQUE octet pour octet à celui de HX 2.23** (18 246 o) : la chaîne est fiable, et le chargeur n'a pas changé depuis la 2.23.
+- Reste à construire/valider : `HDPMI32`, `DUSER32` (`SrcEmu/DUSER32`, boîtes de dialogue bouchonnées dans `Dlgbox.asm`), `DGDI32` ; chaque DLL a son `.MAK`.
+- Prochain pas pour Petite : modifier `PELOAD.ASM` (copie fidèle de l'en-tête PE, au lieu de `?CLEARHEADER`) et mesurer sur `taste` / `evolution`. Ne pas oublier qu'un HX modifié change la nature de la distribution (PR amont ou fork : à décider).
+- Dernière modification de `survey.py` : plafond de scènes à la densité (une scène toutes les 5 s ou moins : toutes gardées, jusqu'à 300).
