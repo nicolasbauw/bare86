@@ -642,3 +642,15 @@ Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur
   (`cmp [10026D08],0` → C0000005, « dkrnl32: fatal exit! »). Remède documenté : `DPMILDR=1024` (DLL à leur adresse préférée, via DPMI 0504h), SANS EFFET ici : la DLL reste à ≈ 0x36C000, même avec `--mem 512` et `--dpmi`. À élucider : pourquoi
   0504h à 0x10000000 échoue (HDPMI sous XMS de Bare86 ?). Piste de repli : bass.dll factice.
 - **DLL sans source officielle** (msvcp50, msvcrt40, mfc40) ; wininet/dplayx : voir la discussion (DLL factices ou dossier de DLL déposées par l'utilisateur) ; Direct3D 8 : 16 programmes, à chercher chez d'autres avant d'écrire.
+
+### Décisions du 2026-11-25 (utilisateur)
+- **Périmètre élargi** : on cherche aussi parmi les démos Windows (CD 64 à 85 téléchargés ; 17 CD ont une section démo, CD 76 absent du serveur, 68/81/84/85 sans démo ; 5 ISO tronqués à la source).
+  À « faire la publicité » dans le README une fois les chiffres arrêtés (pas encore fait).
+- **DLL Microsoft** : téléchargement vérifié (SHA-256) comme HX, pas d'hébergement sur GitHub (licence de VC6 : redistribuable AVEC une application ; voir `Redist.txt`, non relu). Source : copie Wayback de
+  `vc6redistsetup_enu.exe` (l'adresse Microsoft est morte). Fait : `src/runtime.rs` (`ensure_ms_runtime`), 6 DLL + `CRTDLL.DLL` (copie de MSVCRT) dans `HX/BIN`. Hors paquet : msvcp50, msvcrt40, mfc40, dplayx, wininet.
+- **GLU32** : écrite pour Bare86 (`guest/glu32/`). Tessellateur et NURBS : exportés, sans effet.
+- **HX plus récent** : examiné, rien d'utile (commits depuis la 2.23 = HDPMI et DKRNL32 seulement ; pas de DUSER32/DGDI32).
+- **Direct3D 8** (16 démos) : chercher chez d'autres avant d'écrire quoi que ce soit.
+- **BASS/Petite** : mis de côté (voir plus haut) ; reprendre éventuellement avec un DPMILD32 recompilé.
+- **Dossier de DLL déposées par l'utilisateur / DLL factices wininet et dplayx** : à décider après mesure du besoin réel.
+- Fichiers durables : `CD PC Team/runtime-pack/` (DLL de mes CD, hors dépôt), `scan-win32/diag/` (diagnostics), `tools/win32-diag/` (scripts).
