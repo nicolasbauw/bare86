@@ -765,3 +765,8 @@ La section « Writing DOS programs in C (gcc) » du README (≈ l. 700) deviendr
    une ligne sur l'obtention du compilateur (Open Watcom v2 : binaires Linux des versions de développement sur son dépôt GitHub ; ici construit dans `~/Dev/open-watcom-v2/rel`, variable `WATCOM`) ; mentionner sa licence (Sybase Open Watcom Public License).
 2. **« … with gcc (nothing to install) »**, raccourcie : on garde `crt0.S`, `com.ld`, `dos.h` comme alternative sans installation.
 **Avant d'écrire l'exemple : le compiler et le lancer avec Bare86** (non testé le 2026-11-25) ; l'exemple doit être vérifié, comme les tests de `c/tests`.
+
+### Balayage Win32 `scan-win32b/` TERMINÉ (2026-11-25, nuit) — chiffres exacts : voir `results.jsonl` ; planches dans `sheets/`
+- Binaire corrigé (DAC 8 bits), profils retirés puis sondés, règles de capture adaptatives (sans la règle de densité, ajoutée après son lancement).
+- Liste des démos denses plafonnées à 48 à refaire avec la règle de densité : `/tmp/claude-1000/dense-a-refaire.txt` (volatile ; la recalculer : `kept > 48`, `cap == 48`, pas de `loop`).
+- À lire demain : planches (à l'œil), familles d'échecs (messages dans les captures finales), comparaison avec `scan-win32` (ancien passage, bureau invisible).
