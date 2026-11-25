@@ -703,3 +703,13 @@ Essais sur `taste` (`bass.dll` Petite 2.3, 24 démos partagent cette DLL) :
 Win32 par CD : 28:1 31:1 34:2 35:3 36:4 37:1 42:1 46:1 48:2 49:3 50:8 52:1 53:17 54:4 55:4 56:13 57:9 58:6 59:21 60:12 62:10 63:4 64:6 65:23 66:6 67:6 69:6 70:6 71:10 72:3 73:16 74:5 75:6 77:10 78:5 79:6 82:16 83:6.
 Lecture : la bascule vers Windows se fait fin 1998 / début 1999 ; avant, tout est DOS (le balayage DOS des CD 27 à 63 la couvre). Si la démo aux cochons est de 1999 ou après, il y a une vraie chance qu'elle soit Win32.
 Réserve : une partie des démos récentes est hors de portée (Direct3D 8 : 16 éléments ; Petite : ≈ 45). Biais à éviter : `categories.json` de `scan-full` ne contient que les éléments NON Windows pour les CD 27-63.
+
+## Démos « vides » : causes mesurées (2026-11-25, soir) — CHANTIER À FAIRE
+Exemple du CD 27 (Wired 97). Ce qui est vide, et pourquoi :
+1. **Archives à plusieurs exécutables dont UN SEUL est lancé** : 213 éléments sur 774 (`scan-full/results.jsonl`, champ `others`), soit **au moins 354 exécutables jamais capturés**.
+   Exemple : `WIR97/4K` contient 6 intros (`deaf.exe`, `green.com`, `mc4k.com`, `no_fear!.com`, `partyver.com`, `poorguy!.com`) : seule `MC4K.COM` a été capturée (62 scènes). Gros foyers : CD 29 (46 éléments), 32 (16), 36 (16), 59 (14), 31 (13), 35, 50 (10), 28 (9).
+   Cas extrêmes : `cd36/ms98/demo.zip` (12 autres, 0 scène), `cd36/tg98/demo.zip` (12 autres), `cd71/.../juggler_2001_final.zip` (12 versions d'une 4K).
+   **À faire** : étendre `survey.py` pour lancer CHAQUE exécutable (un sous-élément par exécutable, ou une boucle sur `others`), puis revoir les planches.
+2. **Anciennes erreurs « pick »** (survey planté, jamais refaites) : 12 éléments, tous au CD 27 (dont `WIR97/4K`, `GAME100K/3`, `MULTICHA/5`) : à relancer (corrigé depuis).
+3. **Catégories qui ne sont pas des démos** : `GAME100K` (jeux de 100 Ko, souvent `INT 10h AH=1Ch` non géré, 0 scène), `MULTICHA` (musique) ; à jauger avant de s'y acharner.
+Le reste du CD 27 est correct : 29 éléments sur 38 ont entre 11 et 297 scènes.
