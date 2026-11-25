@@ -654,3 +654,19 @@ Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur
 - **BASS/Petite** : mis de côté (voir plus haut) ; reprendre éventuellement avec un DPMILD32 recompilé.
 - **Dossier de DLL déposées par l'utilisateur / DLL factices wininet et dplayx** : à décider après mesure du besoin réel.
 - Fichiers durables : `CD PC Team/runtime-pack/` (DLL de mes CD, hors dépôt), `scan-win32/diag/` (diagnostics), `tools/win32-diag/` (scripts).
+
+## État en fin de session du 2026-11-25 (soir) — À REPRENDRE DEMAIN
+**Corrigé aujourd'hui** (commits sur master) : détection PE par KERNEL32 ; modes VBE 0x164/0x1F8 ; téléchargement vérifié des DLL VC6 ; `glu32.dll` ; DAC VESA commutable 6/8 bits (`7e0b56c`) ;
+test d'intégration `tests/hx_desktop.rs` (bureau de HX) ; `survey.py` : plafond adaptatif, détection de boucle, prolongation des longues démos (`c559e42`).
+**Régression trouvée et corrigée** : depuis le 22/11 (interface VESA protégée 4F0Ah, commit `afba888`) le bureau de HX restait NOIR : toutes les boîtes de dialogue et fenêtres de HX étaient invisibles dans nos captures.
+Bissection automatique (git worktree + script), cause = HX envoie la palette en 8 bits à la fonction protégée, notre DAC n'avait que 6 bits.
+**Balayage Win32 en cours** (peut avoir fini) : `CD PC Team/scan-win32b/` (264 programmes, binaire figé `/tmp/claude-1000/bare86-sweep`, script `/tmp/claude-1000/run-win2.sh`, profils Win32 retirés de `profiles.json`, sauvegardes `.bak-win32b`
+et `.bak-avant-retrait-win32`). Si interrompu : relancer le même script (il saute les éléments faits). Planches : `scan-win32b/sheets/`. Ancien passage (bureau invisible) : `scan-win32/`, à ne plus utiliser.
+**Constat des 109 démos à peu de scènes, binaire corrigé** (messages enfin lisibles, regroupés par contenu) : 45 « This file has been tampered with… VIRUS » (Petite, contrôle d'intégrité) ; ~10 `DialogBoxParam/IndirectParam(...) called`
+(bouchons de DUSER32, `SrcEmu/DUSER32/Dlgbox.asm`) ; ~5 DirectDraw (`SetDisplayMode FAILED`, `unsupported bits per pixel`, `Something went wrong with DDRAW`, `unknown error`) ; ~15 fonctions USER32/GDI32 absentes de HX
+(CheckRadioButton, CreatePenIndirect, SetMessageQueue, GetStretchBltMode…) ; Entrée ne débloque rien (TRAUMATI → « unknown error », TRANSCEN → boîte de réglages bouchonnée).
+**Décisions de l'utilisateur (soir)** : OK pour COMPILER HX (JWasm + JWlink à compiler d'abord) ; contributions probablement bienvenues chez l'auteur (le dépôt a déjà des contributions faites avec Claude) :
+on décidera plus tard entre PR amont et fork. Ne pas viser trop ambitieux. Crédits de jetons presque épuisés (reset demain).
+**Prochaines étapes, par ordre** : (1) vérifier que la chaîne se construit ici (JWasm, JWlink, makefiles de HX ; rien à modifier) ; (2) lire `scan-win32b` à la fin du balayage et relire les chiffres ;
+(3) HX corrigé : en-tête PE fidèle (Petite), DialogBoxParam minimal (WM_INITDIALOG puis IDOK), fonctions USER32/GDI32 manquantes ; (4) DirectDraw : relever les modes demandés par les 5 démos en échec ;
+(5) README : « publicité » de la prise en charge des démos Windows, une fois les chiffres arrêtés ; (6) Direct3D 8 (16 démos) : chercher un travail existant avant d'écrire ; (7) wininet/dplayx/msvcp50/msvcrt40/mfc40 : à décider.
