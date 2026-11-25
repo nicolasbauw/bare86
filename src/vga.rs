@@ -245,6 +245,8 @@ pub struct Vga {
     pub dac: [[u8; 3]; 256],
     pub dac_mask: u8,
     dac_write: (u8, usize),
+    /// DAC en mode 8 bits (VBE 4F08h) : les écritures et lectures de 3C9h portent 8 bits, le DAC en garde 6.
+    pub dac8: bool,
     dac_read: (u8, usize),
     /// Dernière opération sur le DAC : 3 = écriture, 0 = lecture (3C7h).
     dac_state: u8,
@@ -284,6 +286,7 @@ impl Vga {
             dac: default_dac(),
             dac_mask: 0xFF,
             dac_write: (0, 0),
+            dac8: false,
             dac_read: (0, 0),
             dac_state: 0,
             cga_mode: 0x29,
@@ -671,7 +674,7 @@ impl Vga {
             0x3C8 => self.dac_write.0,
             0x3C9 => {
                 let (i, c) = self.dac_read;
-                let v = self.dac[usize::from(i)][c];
+                let v = self.dac[usize::from(i)][c] << if self.dac8 { 2 } else { 0 };
                 self.dac_read = if c == 2 { (i.wrapping_add(1), 0) } else { (i, c + 1) };
                 v
             }
@@ -720,7 +723,7 @@ impl Vga {
             }
             0x3C9 => {
                 let (i, c) = self.dac_write;
-                self.dac[usize::from(i)][c] = v & 0x3F;
+                self.dac[usize::from(i)][c] = (if self.dac8 { v >> 2 } else { v }) & 0x3F;
                 self.dac_write = if c == 2 { (i.wrapping_add(1), 0) } else { (i, c + 1) };
             }
             0x3CE => self.gc_index = v,
@@ -772,6 +775,7 @@ impl Vga {
         self.attr[..21].copy_from_slice(&p.attr);
         self.attr_data = false;
         self.dac = default_dac();
+        self.dac8 = false; // un changement de mode remet le DAC à 6 bits
         // Modes 16 couleurs et texte : palette EGA de 64 couleurs dans le DAC.
         if mode != 0x13 {
             for (i, c) in self.dac.iter_mut().enumerate().take(64) {
@@ -992,6 +996,25 @@ mod tests {
     fn set(v: &mut Vga, port: u16, idx: u8, val: u8) {
         v.port_write(port, idx);
         v.port_write(port + 1, val);
+    }
+
+    #[test]
+    fn dac_width_8_bits_scales_port_3c9() {
+        let mut v = Vga::new().unwrap();
+        // DAC à 6 bits (défaut) : la valeur est gardée telle quelle (6 bits).
+        v.port_write(0x3C8, 5);
+        v.port_write(0x3C9, 0x30);
+        assert_eq!(v.dac[5][0], 0x30);
+        // DAC à 8 bits (VBE 4F08h) : 0xC0 vaut 0x30 sur 6 bits, et la lecture rend 8 bits.
+        v.dac8 = true;
+        v.port_write(0x3C8, 6);
+        v.port_write(0x3C9, 0xC0);
+        assert_eq!(v.dac[6][0], 0x30);
+        v.port_write(0x3C7, 6);
+        assert_eq!(v.port_read(0x3C9), 0xC0);
+        // Un changement de mode remet le DAC à 6 bits.
+        v.set_mode(0x13, false);
+        assert!(!v.dac8);
     }
 
     #[test]

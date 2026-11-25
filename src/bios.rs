@@ -632,6 +632,8 @@ impl Bios {
                 mem.write(es_di, b"VESA");
                 mem.write_u16(es_di + 4, if self.vbe2 { 0x0200 } else { 0x0102 });
                 mem.write_u32(es_di + 6, rom(VBE_OEM));
+                // Capacités : bit 0, DAC commutable en 8 bits (4F08h).
+                mem.write_u32(es_di + 10, u32::from(self.vbe2));
                 mem.write_u32(es_di + 14, rom(VBE_MODES));
                 mem.write_u16(es_di + 18, (crate::vga::FB_SIZE >> 16) as u16);
                 if vbe2 {
@@ -737,22 +739,39 @@ impl Bios {
                     None => false,
                 }
             }
-            // DAC fixe à 6 bits.
+            // Largeur du DAC : BL=0 fixe BH bits (6, ou 8 en VBE 2.0), BL=1 la lit ; rend BH.
             0x08 => {
-                cpu.set_hi(BX, 6);
-                true
+                let mut vga = self.vga.borrow_mut();
+                match cpu.lo(BX) {
+                    0 => {
+                        let wanted = cpu.hi(BX);
+                        if wanted == 8 && self.vbe2 {
+                            vga.dac8 = true;
+                        } else if wanted == 6 {
+                            vga.dac8 = false;
+                        }
+                        cpu.set_hi(BX, if vga.dac8 { 8 } else { 6 });
+                        true
+                    }
+                    1 => {
+                        cpu.set_hi(BX, if vga.dac8 { 8 } else { 6 });
+                        true
+                    }
+                    _ => false,
+                }
             }
-            // Palette : entrées de 4 octets (bleu, vert, rouge, alignement).
+            // Palette : entrées de 4 octets (bleu, vert, rouge, alignement), à la largeur courante du DAC.
             0x09 => {
                 let (count, first) = (usize::from(cpu.w(CX)), usize::from(cpu.w(DX)));
                 let mut vga = self.vga.borrow_mut();
+                let shift = if vga.dac8 { 2 } else { 0 };
                 for i in 0..count.min(256usize.saturating_sub(first)) {
                     let at = es_di + i * 4;
                     let e = &mut vga.dac[first + i];
                     if cpu.lo(BX) & 0x7F == 0 {
-                        *e = [mem.read_u8(at + 2) & 0x3F, mem.read_u8(at + 1) & 0x3F, mem.read_u8(at) & 0x3F];
+                        *e = [(mem.read_u8(at + 2) >> shift) & 0x3F, (mem.read_u8(at + 1) >> shift) & 0x3F, (mem.read_u8(at) >> shift) & 0x3F];
                     } else {
-                        mem.write(at, &[e[2], e[1], e[0], 0]);
+                        mem.write(at, &[e[2] << shift, e[1] << shift, e[0] << shift, 0]);
                     }
                 }
                 true
