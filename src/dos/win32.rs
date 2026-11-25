@@ -37,7 +37,14 @@ pub fn is_win32(image: &[u8]) -> bool {
     }
     let Some(pe) = dword(0x3C).map(|o| o as usize) else { return false };
     image.get(pe..pe + 4) == Some(b"PE\0\0")
-        && WINDOWS_STUBS.iter().any(|s| image[..pe].windows(s.len()).any(|w| w == *s))
+        && (WINDOWS_STUBS.iter().any(|s| image[..pe].windows(s.len()).any(|w| w == *s)) || imports_kernel32(image))
+}
+
+/// Stub inconnu (Watcom : « this is a Windows NT windowed executable », MASM, outils de démo…) : le PE est
+/// pour Windows s'il importe KERNEL32.DLL ; un PE de DOS étendu (WDOSX…) n'importe rien de Windows.
+fn imports_kernel32(image: &[u8]) -> bool {
+    const NAME: &[u8] = b"KERNEL32.DLL";
+    image.windows(NAME.len()).any(|w| w.eq_ignore_ascii_case(NAME))
 }
 
 /// Chargeur de HX pour `image` (chemin DOS `path`, arguments `tail`), cherché
@@ -135,6 +142,11 @@ mod tests {
         assert!(is_win32(&pe(b"DPMILD32.EXE")));
         // PE à extendeur DOS intégré, exécutable DOS ordinaire.
         assert!(!is_win32(&pe(b"WDOSX")));
+        // Stub inconnu (Watcom : « this is a Windows NT windowed executable ») : Windows si le PE importe KERNEL32.DLL.
+        let mut watcom = pe(b"this is a Windows NT windowed executable");
+        assert!(!is_win32(&watcom));
+        watcom.extend_from_slice(b"\0KERNEL32.dll\0");
+        assert!(is_win32(&watcom));
         let mut mz = pe(b"cannot be run in DOS mode");
         mz[0x18] = 0x1E;
         assert!(!is_win32(&mz));
