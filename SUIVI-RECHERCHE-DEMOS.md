@@ -688,3 +688,18 @@ Essais sur `taste` (`bass.dll` Petite 2.3, 24 démos partagent cette DLL) :
 - **Aussi à examiner** : `?SETSECATTR` (protection des sections après chargement), `?SKIPCOMMENTS`, et ce que Petite 2.3 contrôle exactement (analyse statique du décompresseur ; la chaîne « tampered » est dans les données compressées).
 - **Piste de test directe** : DPMILD32 construit (`tools/hx-build/build-dpmild32.sh`) avec une variante qui lit tout `SizeOfHeaders` du fichier dans la première page (sans toucher aux champs HX hors de la plage contrôlée), à comparer sur `taste`/`evolution`.
 - Fichier de travail : `scratchpad/w11/` (volatil) ; `bass.dll.orig` = copie intacte.
+
+## Part des démos Windows selon la période (2026-11-25) — à garder en tête pour l'hypothèse « démo tardive »
+Éléments exécutables par CD (DOS = au moins un exécutable DOS/COM ; Win32 = uniquement Windows ; liste réelle des 264 éléments Win32, y compris ceux de l'ancien balayage) :
+
+| CD | Période | DOS | Win32 | Part Win32 |
+|---|---|--:|--:|--:|
+| 27 à 33 | sept. 1997 → mars 1998 | 299 | 2 | 0 % |
+| 34 à 45 | avr. 1998 → mars 1999 | 126 | 11 | 8 % |
+| 46 à 55 | 1999 | 69 | 40 | 36 % |
+| 56 à 63 | 2000 | 74 | 75 | 50 % |
+| 64 à 85 | 2001 → 2002 | 58 | 136 | 70 % |
+
+Win32 par CD : 28:1 31:1 34:2 35:3 36:4 37:1 42:1 46:1 48:2 49:3 50:8 52:1 53:17 54:4 55:4 56:13 57:9 58:6 59:21 60:12 62:10 63:4 64:6 65:23 66:6 67:6 69:6 70:6 71:10 72:3 73:16 74:5 75:6 77:10 78:5 79:6 82:16 83:6.
+Lecture : la bascule vers Windows se fait fin 1998 / début 1999 ; avant, tout est DOS (le balayage DOS des CD 27 à 63 la couvre). Si la démo aux cochons est de 1999 ou après, il y a une vraie chance qu'elle soit Win32.
+Réserve : une partie des démos récentes est hors de portée (Direct3D 8 : 16 éléments ; Petite : ≈ 45). Biais à éviter : `categories.json` de `scan-full` ne contient que les éléments NON Windows pour les CD 27-63.
