@@ -631,7 +631,14 @@ Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur
 - **Résultats** : 42 éléments ≥ 10 scènes (vérifiés à l'œil : 41 vraies images, `remedy00/in64/bitwise-array` toute noire sur 4 vues), 2 de 5 à 9, 109 à moins de 5.
 - **Diagnostic des 109** (`low109.jsonl`, scratchpad) : 48 tournent à l'écran noir (`ptc.dll` 9, `ddraw.dll` 26, MIDAS 12, FMOD 9) ; 48 quittent sans message dont **41 sur 45 importent `bass.dll`** ;
   6 tournent non noirs ; 3 OpenGL sans erreur ; 2 `INT 06h AH=02h` (mushca, blocc_final) ; 2 GLU32 sans `gluProject` (corrigé, commit 2b15df0).
-- **Cause BASS** : `bass.dll` est empaquetée par **Petite**, sans relocation exploitable : HX la charge à une autre adresse que son `ImageBase` (0x10000000) et le code lit des globales à l'adresse absolue
+- **CORRECTION (2026-11-25, soir)** : le groupe « quitte sans message » était en partie un artefact des touches de la sonde (Entrée → sortie → décharge de la DLL → saut dans des données). Le vrai symptôme de ≈ 40 démos à `bass.dll` :
+  Petite 2.3 affiche « ERROR! This file has been tampered with and MAY BE INFECTED BY A VIRUS! » au démarrage (contrôle d'intégrité) et la démo reste sur écran noir ; Petite 2.2 (`evolution`, `rpl_dun`) n'a pas ce contrôle.
+  Les deux `INT 06h` (mushca, blocc_final) sont aussi des exécutables Petite : le décompresseur écrit en bas de la mémoire (adresse 0x78…0x178).
+- **Ce qui est établi** : (1) `DPMILDR=1024` marche (essai avec une DLL à base 0x30000000) mais la base 0x10000000 est déjà prise par `DKRNL32.DLL` (signature `PX`) et par toutes les DLL de HX (même `ImageBase`) ;
+  (2) rebaser ces DLL (relocations appliquées, script `/tmp/claude-1000/rebase.py`, bases 0x60000000 + 4 Mo × n) libère 0x10000000 : `bass.dll` s'y charge, `evolution` et `rpl_dun` ne plantent plus (mais restent noires) ;
+  (3) le contrôle « tampered » échoue encore : hypothèse non vérifiée = HX ne mappe pas l'en-tête PE comme dans le fichier (doc DPMILD32 : seules les structures NT et la table d'objets sont chargées ; reste de la page effacé, `?CLEARHEADER`).
+  Remède envisagé : recompiler DPMILD32 (JWasm + JWlink à compiler) pour mapper l'en-tête fidèlement. Rien de tout cela n'est dans Bare86 (essais à la main, copie de HX dans /tmp).
+- **Cause BASS (première analyse, incomplète)** : `bass.dll` est empaquetée par **Petite**, sans relocation exploitable : HX la charge à une autre adresse que son `ImageBase` (0x10000000) et le code lit des globales à l'adresse absolue
   (`cmp [10026D08],0` → C0000005, « dkrnl32: fatal exit! »). Remède documenté : `DPMILDR=1024` (DLL à leur adresse préférée, via DPMI 0504h), SANS EFFET ici : la DLL reste à ≈ 0x36C000, même avec `--mem 512` et `--dpmi`. À élucider : pourquoi
   0504h à 0x10000000 échoue (HDPMI sous XMS de Bare86 ?). Piste de repli : bass.dll factice.
 - **DLL sans source officielle** (msvcp50, msvcrt40, mfc40) ; wininet/dplayx : voir la discussion (DLL factices ou dossier de DLL déposées par l'utilisateur) ; Direct3D 8 : 16 programmes, à chercher chez d'autres avant d'écrire.
