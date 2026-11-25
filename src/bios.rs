@@ -323,7 +323,8 @@ impl Bios {
             0x1A => self.int1a(cpu, mem),
             0x33 => self.mouse.int33(cpu, mem),
             // Impression d'écran, Ctrl-Break, tic utilisateur : rien à faire.
-            0x05 | 0x1B | 0x1C => Flow::Continue,
+            // INT 68h : sondée par l'hôte DPMI (HDPMI32), vecteur sans service.
+            0x05 | 0x1B | 0x1C | 0x68 => Flow::Continue,
             _ => Flow::Unhandled(ah),
         })
     }

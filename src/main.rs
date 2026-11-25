@@ -630,7 +630,9 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
                 }
                 None => o.tail.clone(),
             };
-            if o.dpmi {
+            // Un exécutable DJGPP (stub « go32stub ») cherche un hôte DPMI et s'arrête sur « no DPMI - Get
+            // csdpmi*b.zip » sans lui : on en charge un d'office, comme `--dpmi`.
+            if o.dpmi || is_djgpp(path) {
                 pc.load_dpmi_host()?;
             }
             if dos.rsplit(|&b| b == b'.').next().is_some_and(|e| e.eq_ignore_ascii_case(b"BAT")) {
@@ -673,4 +675,13 @@ fn launch(o: &RunOptions, host: Host) -> Result<u8, String> {
         }
     }
     Ok(code?)
+}
+
+/// Exécutable DJGPP : en-tête MZ et stub « go32stub » dans les premiers kilo-octets.
+fn is_djgpp(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4096];
+    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    let n = f.read(&mut head).unwrap_or(0);
+    head[..n].starts_with(b"MZ") && head[..n].windows(8).any(|w| w == b"go32stub")
 }
