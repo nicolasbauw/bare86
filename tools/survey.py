@@ -304,6 +304,30 @@ def thumb_diff(a, b):
     return sum(abs(x - y) for x, y in zip(a, b)) / max(1, min(len(a), len(b)))
 
 
+def frame_cap(args, duration, loop):
+    """Nombre maximal de scènes gardées pour un programme : `--max-frames` s'il est donné ;
+    sinon `--min-frames` (48) pour une démo courte ou qui boucle, et une scène par
+    `--seconds-per-frame` secondes de démo au-delà, jusqu'à `--frames-cap`."""
+    if args.max_frames:
+        return args.max_frames
+    if loop:
+        return args.min_frames
+    return max(args.min_frames, min(args.frames_cap, round(duration / args.seconds_per_frame)))
+
+
+def detect_loop(thumbs, n_match, eps):
+    """Boucle dans la suite des scènes gardées : les `n_match` dernières scènes
+    ressemblent (écart < `eps`) à `n_match` scènes consécutives plus anciennes,
+    dans le même ordre, sans recouvrement. Rend la période (en scènes) ou None."""
+    n = len(thumbs)
+    if n < 2 * n_match:
+        return None
+    for j in range(n - 1 - n_match, n_match - 2, -1):
+        if all(thumb_diff(thumbs[n - 1 - i], thumbs[j - i]) < eps for i in range(n_match)):
+            return n - 1 - j
+    return None
+
+
 class CpuSampler(threading.Thread):
     """Échantillonne le CPU du processus (utime + stime de /proc, tous threads) toutes
     les 0,5 s : une moyenne sur la durée cacherait un pic. Résumé : `cpu` moyenne,
@@ -356,9 +380,10 @@ def watch_run(command, cwd, shots, args, timeout):
     chunks = []
     reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()), daemon=True)
     reader.start()
-    kept, last_thumb, seen = [], None, set()
+    kept, kept_thumbs, kept_t, last_thumb, seen = [], [], [], None, set()
     t0 = last_new = time.time()
     killed = timed = False
+    LAST.loop = None
     cpu = CpuSampler(proc.pid)
     cpu.start()
     while proc.poll() is None:
@@ -372,14 +397,32 @@ def watch_run(command, cwd, shots, args, timeout):
             t = thumb(path)
             if last_thumb is None or thumb_diff(t, last_thumb) > args.change:
                 kept.append(f)
+                kept_thumbs.append(t)
+                kept_t.append(now - t0)
                 last_thumb, last_new = t, now
+                period = detect_loop(kept_thumbs, args.loop_scenes, args.loop_eps) if args.loop_stop else None
+                if period:
+                    # Le programme boucle : on garde le premier tour, sans les scènes qui le recommencent.
+                    LAST.loop = {"scenes": period, "seconds": round(kept_t[-1] - kept_t[-1 - period], 1)}
+                    for g in kept[-args.loop_scenes:]:
+                        os.remove(os.path.join(shots, g))
+                    del kept[-args.loop_scenes:]
+                    del kept_thumbs[-args.loop_scenes:]
+                    del kept_t[-args.loop_scenes:]
+                    proc.terminate()
+                    killed = "loop"
+                    break
             else:
                 os.remove(path)
+        if killed:
+            break
         if args.idle and now - last_new > args.idle and now - t0 > 30:
             proc.terminate()
             killed = True
             break
-        if now - t0 > timeout:
+        # Échéance : `timeout`, repoussée jusqu'à `--hard-limit` tant que de nouvelles scènes arrivent.
+        deadline = args.hard_limit if args.extend and now - last_new < 60 else timeout
+        if now - t0 > deadline:
             proc.kill()
             timed = True
             break
@@ -390,7 +433,7 @@ def watch_run(command, cwd, shots, args, timeout):
     reader.join(timeout=10)
     out = (chunks[0] if chunks else b"").decode(errors="replace")
     if killed:
-        out += "\ntime limit reached (idle: screen unchanged)\n"
+        out += "\ntime limit reached (%s)\n" % ("loop detected" if killed == "loop" else "idle: screen unchanged")
     # Captures restantes non encore traitées (fin de course) : même tri.
     for f in sorted(os.listdir(shots)):
         path = os.path.join(shots, f)
@@ -404,6 +447,7 @@ def watch_run(command, cwd, shots, args, timeout):
     cpu.stop = True
     cpu.join(timeout=2)
     LAST.cpu = cpu.summary()
+    LAST.duration = time.time() - t0
     return out, timed, len(kept), killed
 
 
@@ -532,7 +576,8 @@ def run_one(item, args, src):
         wav = os.path.join(shots, "sound.wav")
         # --screen : le texte de l'écran est aussi dans la sortie, même quand le
         # programme rend la main au DOS avant la limite (message de DPMI absent…).
-        cmd = [args.bare86, "--no-realtime", "--limit", str(args.limit), "--shot", os.path.join(shots, "f.png"),
+        cmd = [args.bare86, "--no-realtime", "--limit", str(args.hard_limit if args.full and args.extend else args.limit),
+               "--shot", os.path.join(shots, "f.png"),
                "--shot-every", str(args.every), "--keys", args.keys, "--screen"]
         if not args.full:
             cmd += ["--wav", wav]
@@ -587,7 +632,10 @@ def run_one(item, args, src):
         def execute(command):
             if args.full:
                 out, timed, kept, killed = watch_run(command, os.path.dirname(exe), shots, args, args.limit + 90)
-                res["kept"], res["idle_killed"] = kept, killed
+                res["kept"], res["idle_killed"] = kept, bool(killed)
+                res["duration"] = round(LAST.duration)
+                if LAST.loop:
+                    res["loop"] = LAST.loop
                 res.update(LAST.cpu)
                 return out, timed
             try:
@@ -674,10 +722,12 @@ def run_one(item, args, src):
             if args.full:
                 # Scènes distinctes : planches de 6 images (3 × 2, 320×200), `ID.png`
                 # (la première, pour la revue) puis `ID.2.png`, `ID.3.png`…
-                if len(files) > args.max_frames:
-                    # Trop de scènes : on en retient `max_frames` réparties sur toute la
+                cap = frame_cap(args, getattr(LAST, "duration", 0), res.get("loop"))
+                res["cap"] = cap
+                if len(files) > cap:
+                    # Trop de scènes : on en retient `cap` réparties sur toute la
                     # durée (et non les premières : la fin de la démo compte autant).
-                    chosen = sorted({i * len(files) // args.max_frames for i in range(args.max_frames)})
+                    chosen = sorted({i * len(files) // cap for i in range(cap)})
                     for k, f in enumerate(files):
                         if k not in chosen:
                             os.remove(f)
@@ -734,7 +784,15 @@ def main():
     ap.add_argument("--full", action="store_true", help="durée complète : captures denses (--every), seules les scènes distinctes sont gardées, arrêt si l'écran ne change plus (--idle)")
     ap.add_argument("--change", type=float, default=5.0, help="--full : écart moyen (0-255, vignettes 32×20) pour compter comme une nouvelle scène (défaut 5)")
     ap.add_argument("--idle", type=int, default=60, help="--full : secondes sans nouvelle scène avant d'arrêter le programme (défaut 60, 0 : jamais)")
-    ap.add_argument("--max-frames", type=int, default=48, help="--full : scènes gardées au plus par programme (défaut 48, soit 8 planches)")
+    ap.add_argument("--max-frames", type=int, default=0, help="--full : plafond FIXE de scènes par programme (défaut 0 : plafond adaptatif, voir --min-frames)")
+    ap.add_argument("--min-frames", type=int, default=48, help="--full : plafond d'une démo courte ou qui boucle (défaut 48, soit 8 planches)")
+    ap.add_argument("--seconds-per-frame", type=float, default=10, help="--full : au-delà, une scène de plus par tranche de SECONDES de démo (défaut 10)")
+    ap.add_argument("--frames-cap", type=int, default=300, help="--full : plafond absolu du plafond adaptatif (défaut 300, soit 50 planches)")
+    ap.add_argument("--hard-limit", type=int, default=1800, help="--full : durée maximale (secondes) d'un programme qui produit encore de nouvelles scènes après --limit (défaut 1800)")
+    ap.add_argument("--no-extend", dest="extend", action="store_false", help="--full : ne pas prolonger au-delà de --limit")
+    ap.add_argument("--loop-scenes", type=int, default=4, help="--full : une boucle est reconnue quand les N dernières scènes recommencent d'anciennes scènes (défaut 4)")
+    ap.add_argument("--loop-eps", type=float, default=2.5, help="--full : écart moyen (0-255) en dessous duquel deux scènes sont « la même » pour la boucle (défaut 2,5)")
+    ap.add_argument("--no-loop-stop", dest="loop_stop", action="store_false", help="--full : ne pas arrêter un programme qui boucle")
     ap.add_argument("--probe", type=int, default=0, help="sonde les scripts de touches (KEY_CANDIDATES), SECONDES chacun, pour les éléments sans profil ; le meilleur est mémorisé dans --profiles")
     ap.add_argument("--profiles", help="fichier JSON des profils par élément (clavier `keys`, options `opts`, notes) : lu, et complété par --probe")
     ap.add_argument("--keys", default=DEFAULT_KEYS, help="script de touches (défaut : aucune touche, entrée gardée ouverte)")
