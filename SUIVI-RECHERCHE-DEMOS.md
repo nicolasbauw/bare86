@@ -615,3 +615,23 @@ Démos ou intros qui ont posé problème au balayage (le plus souvent une questi
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
+
+## Reprise des éléments à 0 ou peu de captures (2026-11-25)
+- **Plafond de 48 scènes** (`--max-frames`) : voulu, réparti sur toute la durée (pas les 48 premières).
+- **Réglés** : MATURA97 (`MATURA97.CFG` d'auteur visait `e:\escape\...` : étape `prep` `sub` ajoutée à `survey.py`, DIRECTORY=DATA + Entrées MIDAS ; 127 scènes) ;
+  BAZAR (Bare86 : modes VBE `0x164`/`0x1F8` = 320×240×8 ajoutés dans `VBE_MODE_LIST` ; AUCUNE touche, Entrée quitte ; 21 scènes) ;
+  PW-BANAN (DOS32 3.5 s'arrête aussitôt avec la GUS : profil `opts: ["--no-gus"]`, nouvelle pseudo-option de `survey.py` ; 18 scènes ; piste Bare86 : sonde GUS 746h/24Fh/340h).
+- **Hors sujet** (archives incomplètes) : SOEPKIP3 (3TXT.PCX absent), MILLENIUMFEVER (mfever.xm absent), ORTHICON (DEMO.EXE seul), TKOVER99/IN64 (AXIA_SW.EXE Windows).
+- **Non résolu** : MINDCTRL (Bad Demo Engine : après l'énumération VBE, bloquée en `F000:E862`, ROM BIOS `cli ; jmp`).
+- **Reste** à 1–3 scènes avec verdict « reprendre » : voir `ETAT.md` ; beaucoup sont des 4K/512 octets statiques par conception.
+- Modifs de code (`src/bios.rs`, `tools/survey.py`) non commitées.
+
+## Démos Win32 par HX (2026-11-25) — `scan-win32/`, 153 éléments
+- **Chaîne** : `tools/survey.py --win32 --dll-pack runtime-pack --probe 25 --full` ; Bare86 télécharge les DLL VC6 de Microsoft à côté de HX (SHA-256, `src/runtime.rs`), fournit sa propre `glu32.dll` (`guest/glu32/`). Les démos attendent presque toutes une touche : SANS `--probe`, une seule scène noire.
+- **Résultats** : 42 éléments ≥ 10 scènes (vérifiés à l'œil : 41 vraies images, `remedy00/in64/bitwise-array` toute noire sur 4 vues), 2 de 5 à 9, 109 à moins de 5.
+- **Diagnostic des 109** (`low109.jsonl`, scratchpad) : 48 tournent à l'écran noir (`ptc.dll` 9, `ddraw.dll` 26, MIDAS 12, FMOD 9) ; 48 quittent sans message dont **41 sur 45 importent `bass.dll`** ;
+  6 tournent non noirs ; 3 OpenGL sans erreur ; 2 `INT 06h AH=02h` (mushca, blocc_final) ; 2 GLU32 sans `gluProject` (corrigé, commit 2b15df0).
+- **Cause BASS** : `bass.dll` est empaquetée par **Petite**, sans relocation exploitable : HX la charge à une autre adresse que son `ImageBase` (0x10000000) et le code lit des globales à l'adresse absolue
+  (`cmp [10026D08],0` → C0000005, « dkrnl32: fatal exit! »). Remède documenté : `DPMILDR=1024` (DLL à leur adresse préférée, via DPMI 0504h), SANS EFFET ici : la DLL reste à ≈ 0x36C000, même avec `--mem 512` et `--dpmi`. À élucider : pourquoi
+  0504h à 0x10000000 échoue (HDPMI sous XMS de Bare86 ?). Piste de repli : bass.dll factice.
+- **DLL sans source officielle** (msvcp50, msvcrt40, mfc40) ; wininet/dplayx : voir la discussion (DLL factices ou dossier de DLL déposées par l'utilisateur) ; Direct3D 8 : 16 programmes, à chercher chez d'autres avant d'écrire.
