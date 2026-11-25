@@ -28,6 +28,7 @@ include = [
 ]
 
 [dependencies]
+cab = "0.6.0"
 flate2 = "1.1.11"
 glow = "0.17.0"
 iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder", "instr_info", "intel", "encoder", "block_encoder", "code_asm"] }

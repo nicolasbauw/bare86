@@ -74,7 +74,12 @@ difference is under the hood, and shows with demanding late-90s games.
   DirectSound and GDI. HX is taken from the game's `PATH` or `C:\HX`; if there
   is none, Bare86 downloads the official HXRT and HXGUI 2.23 archives once
   (with `curl`, SHA-256 checked) into `~/.local/share/bare86/HX` and shows it
-  as drive Z:. The Quake II demo
+  as drive Z:. Programs of the late 1990s also expect Microsoft's Visual C++ 6.0
+  runtime (`MSVCRT.DLL`, `MSVCP60.DLL`, `MFC42.DLL`…), which HX does not have:
+  Bare86 downloads Microsoft's `vc6redistsetup_enu.exe` once (SHA-256 checked;
+  Microsoft's own address is gone, so from the Wayback Machine's copy), takes
+  those DLLs out of it and puts them next to HX's. Nothing of Microsoft's is
+  shipped with Bare86. The Quake II demo
   runs full screen at 640×480 (`--mem 64`; it also needs HX's dummy
   `UNSUPP\WSOCK32.DLL` copied next to `quake2.exe`). There is no Windows
   itself: no Windows 95/98 desktop, no Direct3D.

@@ -24,6 +24,15 @@ const HX_ARCHIVES: [(&str, &str); 2] = [
     ("HXGUI223.zip", "d9f1962369d609c492ed534d886e697fc6bb0f3f94152674d64ab5f06e663b50"),
 ];
 
+/// Bibliothèques d'exécution de Visual C++ 6.0 (MSVCRT, MSVCP60, MFC42…), que les programmes Windows des années
+/// 1998-2001 supposent présentes et que HX ne fournit pas. Microsoft les distribuait à part (`vc6redistsetup_enu.exe`,
+/// SP4, novembre 2000, KB Q259403) ; l'adresse d'origine est morte, Bare86 prend la copie de la Wayback Machine
+/// (fichier identique, octet pour octet, à ce que Microsoft publiait : empreinte vérifiée).
+const MSRT_URL: &str = "https://web.archive.org/web/20120707155520id_/http://download.microsoft.com/download/vc60pro/update/1/w9xnt4/en-us/vc6redistsetup_enu.exe";
+const MSRT_SHA256: &str = "cf9d0dd968e78d5e685a6ea6ab58ec438ac0ac24316b14d271b02cf3cced67d9";
+/// DLL retenues du paquet (HX a déjà ses OLEAUT32, etc.).
+const MSRT_FILES: [&str; 6] = ["msvcrt.dll", "msvcirt.dll", "msvcp60.dll", "mfc42.dll", "mfc42u.dll", "olepro32.dll"];
+
 /// DOS/32A 9.1.2 : paquet du dépôt de FreeDOS 1.3 et son empreinte.
 const DOS32A_URL: &str = "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/util/dos32a.zip";
 const DOS32A_SHA256: &str = "f9094975c61d03a5c3fffc778f49f46995d4a9ade0ec0c9b2e9750f987198f86";
@@ -72,12 +81,79 @@ fn patch_hx(dir: &Path) -> Result<(), String> {
 pub fn hx_dir_or_install() -> Result<PathBuf, String> {
     if let Some(d) = hx_dir() {
         patch_hx(&d)?;
+        ensure_ms_runtime(&d);
         return Ok(d);
     }
     let base = data_dir().ok_or("no home directory")?;
     eprintln!("[win32] downloading HX DOS Extender {HX_VERSION} (Japheth, freeware) from {HX_RELEASE} into {}", base.join("HX").display());
     install_hx(&base)?;
-    hx_dir().ok_or_else(|| "HX: DPMILD32.EXE missing after installation".to_string())
+    let dir = hx_dir().ok_or_else(|| "HX: DPMILD32.EXE missing after installation".to_string())?;
+    ensure_ms_runtime(&dir);
+    Ok(dir)
+}
+
+/// Ajoute à `hx/BIN` les DLL d'exécution de Visual C++ 6.0 si `MSVCRT.DLL` y manque (un échec n'empêche pas
+/// de lancer le programme : message seulement).
+fn ensure_ms_runtime(hx: &Path) {
+    let bin = hx.join("BIN");
+    if bin.join("MSVCRT.DLL").exists() || bin.join("msvcrt.dll").exists() {
+        return;
+    }
+    eprintln!("[win32] downloading the Visual C++ 6.0 runtime (MSVCRT, MSVCP60, MFC42…, Microsoft) from {MSRT_URL}");
+    if let Err(e) = install_ms_runtime(&bin) {
+        eprintln!("[win32] Visual C++ runtime: {e} (programs that need MSVCRT.DLL will not start)");
+    }
+}
+
+/// Position d'un cabinet CAB (`MSCF`, réservé à zéro, taille plausible) dans `data`.
+fn find_cab(data: &[u8]) -> Option<usize> {
+    let u32_at = |o: usize| data.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    (0..data.len().saturating_sub(16)).find(|&o| &data[o..o + 4] == b"MSCF" && u32_at(o + 4) == Some(0) && u32_at(o + 8).is_some_and(|n| o + n <= data.len()))
+}
+
+/// Contenu du fichier `name` (sans tenir compte de la casse) d'un cabinet.
+fn cab_file(cab_data: &[u8], name: &str) -> Result<Vec<u8>, String> {
+    let mut cab = cab::Cabinet::new(std::io::Cursor::new(cab_data)).map_err(|e| format!("cab: {e}"))?;
+    let found = cab
+        .folder_entries()
+        .flat_map(|f| f.file_entries().map(|e| e.name().to_string()).collect::<Vec<_>>())
+        .find(|n| n.eq_ignore_ascii_case(name))
+        .ok_or_else(|| format!("cab: {name} not found"))?;
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut cab.read_file(&found).map_err(|e| format!("cab: {found}: {e}"))?, &mut out).map_err(|e| format!("cab: {found}: {e}"))?;
+    Ok(out)
+}
+
+/// Télécharge `vc6redistsetup_enu.exe`, vérifie son empreinte, en extrait (deux cabinets imbriqués, compression LZX)
+/// les DLL de `MSRT_FILES` et les écrit dans `bin`, sans écraser un fichier existant. `CRTDLL.DLL` (la bibliothèque C
+/// de Windows 95, absente de HX) est une copie de `MSVCRT.DLL`, dont elle est un sous-ensemble.
+fn install_ms_runtime(bin: &Path) -> Result<(), String> {
+    let tmp = std::env::temp_dir().join(format!("bare86-msrt{}.exe", std::process::id()));
+    let status = std::process::Command::new("curl").args(["-fsSL", "--retry", "2", "-o"]).arg(&tmp).arg(MSRT_URL).status().map_err(|e| format!("curl: {e}"))?;
+    let data = std::fs::read(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    if !status.success() {
+        return Err(format!("download failed ({status})"));
+    }
+    let data = data.map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let got = format!("{:x}", Sha256::digest(&data));
+    if got != MSRT_SHA256 {
+        return Err(format!("unexpected SHA-256 {got}"));
+    }
+    let outer = &data[find_cab(&data).ok_or("no cabinet in the package")?..];
+    let inner = cab_file(outer, "vcredist.exe")?;
+    let inner_cab = &inner[find_cab(&inner).ok_or("no inner cabinet in the package")?..];
+    for name in MSRT_FILES {
+        let content = cab_file(inner_cab, name)?;
+        let out = bin.join(name.to_ascii_uppercase());
+        if !out.exists() {
+            std::fs::write(&out, &content).map_err(|e| format!("{}: {e}", out.display()))?;
+        }
+        if name == "msvcrt.dll" && !bin.join("CRTDLL.DLL").exists() {
+            std::fs::write(bin.join("CRTDLL.DLL"), &content).map_err(|e| format!("CRTDLL.DLL: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Télécharge, vérifie et décompresse les archives de HX dans `base/HX`
