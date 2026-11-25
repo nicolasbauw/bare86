@@ -168,8 +168,7 @@ static int mat_inv(const GLdouble *m, GLdouble *out)
     return 1;
 }
 
-GLUAPI GLint gluProject(GLdouble ox, GLdouble oy, GLdouble oz, const GLdouble model[16], const GLdouble proj[16], const GLint view[4],
-                        GLdouble *wx, GLdouble *wy, GLdouble *wz)
+GLUAPI GLint gluProject(GLdouble ox, GLdouble oy, GLdouble oz, const GLdouble model[16], const GLdouble proj[16], const GLint view[4], GLdouble *wx, GLdouble *wy, GLdouble *wz)
 {
     GLdouble in[4] = { ox, oy, oz, 1.0 }, t[4], o[4];
     for (int i = 0; i < 4; i++) t[i] = model[i] * in[0] + model[4 + i] * in[1] + model[8 + i] * in[2] + model[12 + i] * in[3];
@@ -182,8 +181,7 @@ GLUAPI GLint gluProject(GLdouble ox, GLdouble oy, GLdouble oz, const GLdouble mo
     return 1;
 }
 
-GLUAPI GLint gluUnProject(GLdouble wx, GLdouble wy, GLdouble wz, const GLdouble model[16], const GLdouble proj[16], const GLint view[4],
-                          GLdouble *ox, GLdouble *oy, GLdouble *oz)
+GLUAPI GLint gluUnProject(GLdouble wx, GLdouble wy, GLdouble wz, const GLdouble model[16], const GLdouble proj[16], const GLint view[4], GLdouble *ox, GLdouble *oy, GLdouble *oz)
 {
     GLdouble pm[16], inv[16], in[4], o[4];
     mat_mul(proj, model, pm);

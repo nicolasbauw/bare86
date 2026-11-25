@@ -5,6 +5,8 @@ EXPORTS
     gluOrtho2D=_gluOrtho2D@32
     gluLookAt=_gluLookAt@72
     gluPickMatrix=_gluPickMatrix@36
+    gluProject=_gluProject@48
+    gluUnProject=_gluUnProject@48
     gluErrorString=_gluErrorString@4
     gluErrorUnicodeStringEXT=_gluErrorUnicodeStringEXT@4
     gluGetString=_gluGetString@4
