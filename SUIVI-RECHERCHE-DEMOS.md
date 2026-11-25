@@ -713,3 +713,8 @@ Exemple du CD 27 (Wired 97). Ce qui est vide, et pourquoi :
 2. **Anciennes erreurs « pick »** (survey planté, jamais refaites) : 12 éléments, tous au CD 27 (dont `WIR97/4K`, `GAME100K/3`, `MULTICHA/5`) : à relancer (corrigé depuis).
 3. **Catégories qui ne sont pas des démos** : `GAME100K` (jeux de 100 Ko, souvent `INT 10h AH=1Ch` non géré, 0 scène), `MULTICHA` (musique) ; à jauger avant de s'y acharner.
 Le reste du CD 27 est correct : 29 éléments sur 38 ont entre 11 et 297 scènes.
+
+### Vivier à exploiter (chiffré le 2026-11-25) — côté DOS, scan-full
+- 628 éléments exécutables DOS ; **103 à moins de 5 scènes** (hors « hors-sujet ») ; **161 éléments à plusieurs exécutables, soit 262 exécutables jamais lancés** (chiffre resserré aux éléments exécutables ; 354 en comptant tout `results.jsonl`).
+- **Vivier distinct : 238 éléments DOS** (peu de scènes OU exécutables zappés), à ajouter aux 109 démos Win32 à peu de scènes et aux Win32 non lancées.
+- Ordre conseillé : (1) lancer CHAQUE exécutable des éléments à plusieurs exécutables (avec les nouvelles règles de capture) ; (2) reprendre les 103 à peu de scènes (causes déjà notées dans `verdicts.json` pour beaucoup) ; (3) Win32 selon l'avancement de HX.
