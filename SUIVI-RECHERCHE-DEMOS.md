@@ -678,3 +678,13 @@ on décidera plus tard entre PR amont et fork. Ne pas viser trop ambitieux. Cré
 - Reste à construire/valider : `HDPMI32`, `DUSER32` (`SrcEmu/DUSER32`, boîtes de dialogue bouchonnées dans `Dlgbox.asm`), `DGDI32` ; chaque DLL a son `.MAK`.
 - Prochain pas pour Petite : modifier `PELOAD.ASM` (copie fidèle de l'en-tête PE, au lieu de `?CLEARHEADER`) et mesurer sur `taste` / `evolution`. Ne pas oublier qu'un HX modifié change la nature de la distribution (PR amont ou fork : à décider).
 - Dernière modification de `survey.py` : plafond de scènes à la densité (une scène toutes les 5 s ou moins : toutes gardées, jusqu'à 300).
+
+### Petite « tampered » : hypothèses éliminées (2026-11-25, fin de soirée)
+Essais sur `taste` (`bass.dll` Petite 2.3, 24 démos partagent cette DLL) :
+- **ÉLIMINÉ : relocation** (la DLL est à 0x10000000 avec HX rebasé + `DPMILDR=1024`, donc aucune relocation appliquée) : « tampered » persiste.
+- **ÉLIMINÉ : sections « discardable »** (`0xE2000060` & 0x02000000 ; HX a `?DISCARDSECTION`) : en retirant le drapeau dans une copie de la DLL, « tampered » persiste (testé DLL à son adresse ET sans).
+- **RESTE : en-tête PE** (le contrôle d'intégrité porterait sur l'image y compris la première page). HX ne la recopie pas fidèlement : il y met ses propres champs (`MZHDR.wCnt`, `dwStack`), place les en-têtes NT à base+0x40 et efface le reste
+  (`?CLEARHEADER`, `PELOAD.ASM` ~l. 600-660 et 775-800). Si c'est la cause, aucun correctif simple : les champs internes de HX occupent l'en-tête MZ.
+- **Aussi à examiner** : `?SETSECATTR` (protection des sections après chargement), `?SKIPCOMMENTS`, et ce que Petite 2.3 contrôle exactement (analyse statique du décompresseur ; la chaîne « tampered » est dans les données compressées).
+- **Piste de test directe** : DPMILD32 construit (`tools/hx-build/build-dpmild32.sh`) avec une variante qui lit tout `SizeOfHeaders` du fichier dans la première page (sans toucher aux champs HX hors de la plage contrôlée), à comparer sur `taste`/`evolution`.
+- Fichier de travail : `scratchpad/w11/` (volatil) ; `bass.dll.orig` = copie intacte.
