@@ -718,3 +718,13 @@ Le reste du CD 27 est correct : 29 éléments sur 38 ont entre 11 et 297 scènes
 - 628 éléments exécutables DOS ; **103 à moins de 5 scènes** (hors « hors-sujet ») ; **161 éléments à plusieurs exécutables, soit 262 exécutables jamais lancés** (chiffre resserré aux éléments exécutables ; 354 en comptant tout `results.jsonl`).
 - **Vivier distinct : 238 éléments DOS** (peu de scènes OU exécutables zappés), à ajouter aux 109 démos Win32 à peu de scènes et aux Win32 non lancées.
 - Ordre conseillé : (1) lancer CHAQUE exécutable des éléments à plusieurs exécutables (avec les nouvelles règles de capture) ; (2) reprendre les 103 à peu de scènes (causes déjà notées dans `verdicts.json` pour beaucoup) ; (3) Win32 selon l'avancement de HX.
+
+## Reconnaissance d'image sans jetons : CLIP à la place de Gemma (décision de l'utilisateur, 2026-11-25) — À FAIRE
+Pourquoi : Gemma relit chaque image à chaque question (lent, hallucine : « don't smoke » à tort). CLIP/SigLIP calcule UNE fois un vecteur par image, puis toute requête (texte ou image) se fait en quelques secondes sur les vecteurs stockés.
+- **Outil 1 `tools/survey_clip.py`** : découper les planches de `sheets/` (6 scènes, 3×2) en images, ou lire `shots/`, calculer les vecteurs (ViT-B/32 ou SigLIP, CPU ≈ 20-40 min pour ≈ 55 000 scènes ; plus rapide sur GPU), les ranger dans un fichier `.npy` + index (item, scène).
+- **Outil 2 de requête** : par texte (plusieurs formulations : « a cartoon pig », « a pink pig », « pig face », « a pig with a cigarette ») ou par IMAGE DE RÉFÉRENCE (souvent plus fiable) ; CLASSEMENT par score, pas de seuil oui/non ; on regarde le haut du classement à l'œil.
+- **Texte « don't smoke »** : OCR (Tesseract, ou EasyOCR/PaddleOCR) avec recherche approximative, plus fiable que tout modèle de vision (Tesseract : l'anglais `eng.traineddata` de tessdata_fast est à télécharger, le paquet système ne l'a pas).
+- **Pré-tri** : part de pixels roses (déjà utilisée) avant CLIP.
+- **Validation** : sur une scène où l'on sait qu'un cochon apparaît (ex. le cochon 3D de `lyvuoto`, Assembly 98, écarté comme hors sujet) avant de se fier aux scores. Limites : pixel art et 3D très stylisés de 1997 (faux positifs/négatifs), objets petits.
+- **Confirmation du haut du classement** (si besoin) : détecteur à vocabulaire ouvert (OWL-ViT, Grounding DINO), plus précis mais plus lent.
+- Avantage décisif : les vecteurs sont réutilisables pour toute question future (« cochon », « fumée », « personnage rose »…) sans repasser sur les images.
