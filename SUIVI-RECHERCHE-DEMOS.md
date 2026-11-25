@@ -746,3 +746,9 @@ Pourquoi : Gemma relit chaque image à chaque question (lent, hallucine : « don
 - **Repère de dates** (Team Palmtops est né comme supplément de PC Team n°46 = mai 1999 ; la numérotation est mensuelle, quelques numéros doubles possibles, donc ± 1 mois) :
   CD 45 ≈ avril 1999 ; CD 61 ≈ août 2000 ; CD 76 ≈ novembre 2001. À recouper avec les parties de ces mois (pouet.net : calendrier des parties) pour savoir quelles démos ces CD ont pu contenir.
   Parties à regarder (à VÉRIFIER sur pouet, non vérifié) : printemps 1999 (The Gathering est à Pâques), été 2000 (Assembly, début août), automne 2001. Les démos de ces parties peuvent se retrouver sur d'autres CD voisins (64-75 pour 2001).
+
+### Décision (2026-11-25) : parties manquées — SEULEMENT si la démo aux cochons reste introuvable
+- Les CD 61 (≈ août 2000) et 76 (≈ novembre 2001) manquent, plus les CD 25/26 (avant sept. 1997). Statistiquement peu probable que la démo aux cochons soit sur l'un d'eux (2 CD sur ≈ 60) : **ne pas s'y consacrer maintenant**.
+- Si, et seulement si, la démo reste introuvable après les chantiers prioritaires (exécutables jamais lancés, peu de scènes, Windows/HX, recherche CLIP) :
+  recouper les mois de ces CD avec les parties de l'époque (pouet.net, calendrier des parties), lister les démos sorties à ces dates absentes de nos CD voisins, et les chercher (pouet.net, scene.org, demozoo).
+- Noté pour mémoire, on ne sait jamais.
