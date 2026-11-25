@@ -597,6 +597,21 @@ Démos ou intros qui ont posé problème au balayage (le plus souvent une questi
   (58 verdicts semés depuis les notes ci-dessus), à éditer à la main ou par moi ; section « Verdicts » dans `ETAT.md`. `classify.py` : catégorie « magazine » (dossiers MAGS…).
 - Restant à revoir : surtout des éléments non examinés (voir `ETAT.md`). À REFAIRE : CD 27 `WIR97/4K` (résultat périmé).
 
+## Balayage terminé et reprise des échecs (nuit du 2026-11-24 au 25)
+- **Balayage complet** : 629 éléments (CD 27 à 63), 54 000+ scènes, ≈ 57 h d'exécution. Rapport : `scan-full/ETAT.md` / `ETAT.html`. Aucune démo aux cochons trouvée
+  (Gemma n'a été utilisée que jusqu'au CD 29 ; revue à l'œil par l'utilisateur ensuite).
+- **Cause commune réglée** : plusieurs démos s'arrêtaient figées à ≈ 93 s avec `INT 68h AH=43h` : programmes DJGPP (stub « go32stub ») qui cherchent un hôte DPMI
+  (« no DPMI - Get csdpmi*b.zip »). Bare86 charge maintenant HDPMI32 d'office pour ces exécutables (`is_djgpp`, src/main.rs) ; `INT 68h` (sonde de l'hôte DPMI) ne
+  signale plus rien. REVOLUTI, ARSE, IDLE_BY_, MAFIA, DIST, 23… sortent de la liste ; 49 éléments rejoués avec re-sondage des touches.
+- **Profils posés** (`profiles.json`, sauvegardes `.bak-night*`) : NEWWOMAN (F1 = SBlaster) 61 scènes ; EUPHORIA (touche 1) 112 ; PRSC-PI (`--ems 16`, y) 88 ; K_MLINK (Entrée, MIDAS 1.x « Accept ») 132 ;
+  REHASH (prep SETUP.EXE MIDAS 0.40a, 3 Entrées + `--mips 100` : Crt « Runtime error 200 »).
+- **Classés hors sujet** : conteneurs d'archives imbriquées (AM98/in4k, MS98/demo), intros 4K Windows (DMA_GLMR), magazines, images, musiques (`classify.py`).
+- **Reste à reprendre** (`scan-full/verdicts.json`, verdict « reprendre », avec la cause connue) : SOEPKIP3 (« File not found: 3txt.pcx »), MATURA97 (« .dta not found or corrupted »),
+  ORTHICON (archive incomplète ?), MILLENIUMFEVER (« MIDAS error: File does not exist »), MINDCTRL (sonde « VESA 2.0 » de JVideo, 0 scène), PAST (« Video mode does not exist »),
+  BAZAR (choix de mode VESA), DIFFERENTIAL (barres bleues), BREEZE (caractères illisibles), 4KBUGS, PW-BANAN (DOS32 3.5 quitte en silence), XTC_ASS / XTC!PART (SFX LHA : texte seulement ?),
+  BEL_WAZO / ELE (menu de carte), I_WANT_T / ACIDMIES / 3DFX (MIDAS : séquence d'Entrées), GOATZILL, PRETZEL32K, RPL_CLIN (« No DPMI host present » même avec `--dpmi`),
+  HJB_NEON, ATMOZ2, SYS4KX, RESNOW, QUESTKHN (vrai DOS4GW), SD_COLF, SNS_7GFN ; CD 27 `WIR97/4K` (résultat périmé).
+
 ### Piège rappelé
 Les profils (`profiles.json`, hors dépôt, sauvegardes `.bak*`) l'emportent sur `--probe` : pour re-sonder une démo, retirer son profil.
 
