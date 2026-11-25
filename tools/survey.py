@@ -500,6 +500,9 @@ def run_one(item, args, src):
             shutil.copytree(item, work)
             run_dir = work
             run_prep(prep, work, args)
+        elif os.path.isdir(item) and args.dll_pack:
+            shutil.copytree(item, work)  # des DLL vont être ajoutées : jamais dans la collection
+            run_dir = work
         elif os.path.isdir(item):
             run_dir = item
         else:
@@ -519,6 +522,13 @@ def run_one(item, args, src):
         if k == "win32" and not args.win32:
             res["status"] = "win32"
             return res
+        if k == "win32" and args.dll_pack:
+            # Programmes Windows : DLL d'exécution de Microsoft (MSVCRT…) que HX ne fournit pas, ajoutées à côté de
+            # l'exécutable si le programme ne les apporte pas lui-même.
+            have = {f.lower() for f in os.listdir(os.path.dirname(exe))}
+            for f in os.listdir(args.dll_pack):
+                if f.lower() not in have:
+                    shutil.copy(os.path.join(args.dll_pack, f), os.path.join(os.path.dirname(exe), f))
         wav = os.path.join(shots, "sound.wav")
         # --screen : le texte de l'écran est aussi dans la sortie, même quand le
         # programme rend la main au DOS avant la limite (message de DPMI absent…).
@@ -730,6 +740,7 @@ def main():
     ap.add_argument("--keys", default=DEFAULT_KEYS, help="script de touches (défaut : aucune touche, entrée gardée ouverte)")
     ap.add_argument("--no-gus", dest="gus", action="store_false", help="sans Gravis UltraSound")
     ap.add_argument("--win32", action="store_true", help="lancer aussi les programmes Windows (par HX)")
+    ap.add_argument("--dll-pack", help="dossier de DLL ajoutées à côté des programmes Windows qui ne les apportent pas (MSVCRT, MSVCP50, GLU32…)")
     ap.add_argument("--filter", help="expression régulière sur le chemin relatif des éléments")
     ap.add_argument("--items", help="fichier : un chemin relatif d'élément par ligne (comme `item` dans results.jsonl)")
     ap.add_argument("--max", type=int, help="au plus N éléments (essais)")
