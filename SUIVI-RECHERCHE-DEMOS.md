@@ -728,3 +728,11 @@ Pourquoi : Gemma relit chaque image à chaque question (lent, hallucine : « don
 - **Validation** : sur une scène où l'on sait qu'un cochon apparaît (ex. le cochon 3D de `lyvuoto`, Assembly 98, écarté comme hors sujet) avant de se fier aux scores. Limites : pixel art et 3D très stylisés de 1997 (faux positifs/négatifs), objets petits.
 - **Confirmation du haut du classement** (si besoin) : détecteur à vocabulaire ouvert (OWL-ViT, Grounding DINO), plus précis mais plus lent.
 - Avantage décisif : les vecteurs sont réutilisables pour toute question future (« cochon », « fumée », « personnage rose »…) sans repasser sur les images.
+
+## Trous dans la collection des CD (vérifié le 2026-11-25)
+- **CD 76** : INTROUVABLE sur le serveur (abandonware-magazines.org renvoie 404) : vrai trou entre les CD 75 et 77. À chercher ailleurs (autre miroir, archive.org, ou chez l'utilisateur).
+- **CD 25 et 26** : jamais téléchargés (la plage commençait à 27) ; CD 24 téléchargé sans section démo. À tenter si besoin (période antérieure à sept. 1997).
+- **CD 61** : une seule image dans l'archive, « Ludi CD 61.iso » (CD jeux) : le **CD PRO (celui des démos) semble absent de l'archive** : second vrai trou possible, à confirmer.
+- **CD 45** : l'ISO PRO est vide (listage), seul le CD Ludi a un contenu : même suspicion.
+- **CD 41, 44, 51, 68, 81, 84, 85** : téléchargés ; leurs dossiers « Demos » sont des démos de JEUX du commerce (CD Ludi) ou des images/musiques/logiciels (CD PRO) : pas de demoscene, ce n'est pas un trou.
+- 5 ISO tronqués à la source (« Unexpected end of archive ») : CD 71, 73, 74, 82, 83 : contenu partiel.
