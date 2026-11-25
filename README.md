@@ -51,8 +51,9 @@ difference is under the hood, and shows with demanding late-90s games.
   native execution as soon as it stops touching the card. Doom's `timedemo
   demo1` goes from about 105 to about 1,150 frames per second; Rise of the
   Triad, capped at 35, uses about half the processor. Games that do not need
-  it (mode 13h, VESA, 16-bit code) never see it; `--no-jit` (or `jit = off`
-  in a profile) turns it off. How it all fits together, with measurements:
+  it (mode 13h, VESA) never see it; 16-bit and real-mode code, which it cannot
+  translate, only has its bursts of emulated video accesses handed to the
+  interpreter; `--no-jit` (or `jit = off` in a profile) turns it off. How it all fits together, with measurements:
   [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 - **Idle when the game waits.** A game that busy-waits for its next frame
   (polling the timer, the VGA status register, or a tick counter in memory)
@@ -889,10 +890,12 @@ among what does not, yet:
   SHSUCDX drivers (the built-in DOS sees it).
 - Fonts loaded by programs (code pages, text-mode games that redefine
   characters) are not shown yet in text mode.
-- The dynamic translator is new: it only serves 32-bit code without
-  paging whose CS, DS and SS share a base (ES may have its own), and has
-  been tried on Doom, Rise of the Triad and demos using Tran's PMODE. If a
-  program misbehaves where it did not before, try `--no-jit` (`jit = off`).
+- The dynamic translator only serves 32-bit code without paging whose CS,
+  DS and SS share a base (ES may have its own); Windows programs under HX,
+  whose DPMI host turns paging on, never use it. It has been tried on Doom,
+  Rise of the Triad, demos using Tran's PMODE and, for its emulated VGA
+  accesses, Second Reality. If a program misbehaves where it did not
+  before, try `--no-jit` (`jit = off`; it has no effect on Windows programs).
 - OpenGL is version 1.1 with a few extensions (multitexture ARB and SGIS,
   point parameters, compiled vertex arrays); paletted textures, hardware
   gamma, `wglUseFontBitmaps` and `wglUseFontOutlines` are missing.
