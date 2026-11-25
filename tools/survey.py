@@ -458,7 +458,7 @@ def status_exit(res):
 
 def run_prep(prep, root, args):
     """Étapes de préparation d'un profil (`prep`), dans le dossier de travail : `remove` (fichiers
-    à supprimer), `run` (programme DOS à lancer dans Bare86 avec `keys`, `limit` secondes ; par
+    à supprimer), `sub` (substitutions dans un fichier de config), `run` (programme DOS à lancer dans Bare86 avec `keys`, `limit` secondes ; par
     exemple le SETUP.EXE d'une démo pour écrire une configuration adaptée à la machine émulée)."""
     for step in prep:
         for name in step.get("remove", []):
@@ -466,6 +466,15 @@ def run_prep(prep, root, args):
                 for f in files:
                     if f.lower() == name.lower():
                         os.remove(os.path.join(dirpath, f))
+        for sub in step.get("sub", []):  # {"file", "pattern", "repl"} : ligne de config d'auteur à corriger
+            for dirpath, _, files in os.walk(root):
+                for f in files:
+                    if f.lower() == sub["file"].lower():
+                        p = os.path.join(dirpath, f)
+                        with open(p, "r", encoding="latin-1", newline="") as fh:
+                            text = fh.read()
+                        with open(p, "w", encoding="latin-1", newline="") as fh:
+                            fh.write(re.sub(sub["pattern"], sub["repl"], text, flags=re.M | re.I))
         if "run" in step:
             exe = next((os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs if f.lower() == step["run"].lower()), None)
             if exe:
@@ -556,6 +565,10 @@ def run_one(item, args, src):
             if "--mips" in opts and "--mips" in cmd:
                 i = cmd.index("--mips")  # le bridage du profil remplace celui par défaut
                 del cmd[i:i + 2]
+            if "--no-gus" in opts:  # pseudo-option : démo qui s'arrête dès qu'elle voit la GUS
+                opts = [o for o in opts if o != "--no-gus"]
+                if "--gus" in cmd:
+                    cmd.remove("--gus")
             cmd[1:1] = opts
             res["profile"] = {k: v for k, v in profile.items() if k != "probe"}
         out = ""
