@@ -17,3 +17,10 @@ for src in *.c; do
     fi
 done
 rm -f ./*.o
+# Programmes Win32 (tests/hx_*.rs, lancés sous HX) : c/tests/win32/*.c -> .exe
+export INCLUDE="$WATCOM/h:$WATCOM/h/nt"
+cd win32
+for src in *.c; do
+    wcl386 -q -bt=nt -l=nt_win -fe="${src%.c}.exe" "$src"
+done
+rm -f ./*.o

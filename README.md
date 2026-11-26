@@ -81,7 +81,8 @@ difference is under the hood, and shows with demanding late-90s games.
   [a fork of HX](https://github.com/nicolasbauw/HX) (same download rules): the
   loader maps the executable's own header, without which programs packed with
   Petite 2.3 stop with “This file has been tampered with”, and the GDI
-  emulation fixes `SetDIBits` and declares `StretchBlt`. Programs of the late 1990s also expect Microsoft's Visual C++ 6.0
+  emulation fixes `SetDIBits` and `StretchDIBits`, and scales `StretchBlt`/`StretchDIBits`
+  (nearest neighbour). Programs of the late 1990s also expect Microsoft's Visual C++ 6.0
   runtime (`MSVCRT.DLL`, `MSVCP60.DLL`, `MFC42.DLL`…), which HX does not have:
   Bare86 downloads Microsoft's `vc6redistsetup_enu.exe` once (SHA-256 checked;
   Microsoft's own address is gone, so from the Wayback Machine's copy), takes
