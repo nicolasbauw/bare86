@@ -806,3 +806,14 @@ Ordre suggéré : Petite (50) ≫ exceptions DKRNL32 (26) ≫ DialogBoxParam (13
 - Ensuite : écran noir (bureau HX et curseur), 4,7 millions de sorties vers le port 20h en 25 s (boucle ? ou l'effet du saccage du nom du module et du tas du chargeur par la recopie, qui couvre 0x3C–0x3FF) : NON élucidé. C'est l'étape suivante.
 - Plan robuste : (a) déplacer le nom du module et le tas du chargeur après SizeOfHeaders (si SectionAlignment ≥ 0x1000) ; (b) ne plus supposer les structures NT à base+0x40 (ou garder une copie à 0x40 uniquement si l'en-tête d'origine n'y met rien d'utile : la chaîne Petite et le PE sont au-dessus de 0x80) ;
   (c) mesurer sur les 50 programmes « tampered » et sur les démos qui marchent déjà (aucune régression).
+
+### Petite 2.3 : VERSION ROBUSTE (2026-11-26) — fonctionne ; reste à décider comment la distribuer
+- `tools/hx-build/petite-faithful-header.patch` (remplace l'essai jetable) : patch de `Src/DPMILDR/PELOAD.ASM` de HX 2.23. Principe : le chargeur garde SA copie des structures NT (+ table des sections, nom du module, tas) à `base + NTOFS` (= 0x600),
+  et les 0x600 premiers octets du fichier sont recopiés tels quels à la base (stub, Rich, chaîne Petite, PE d'origine à `e_lfanew`). Seuls 0x20–0x3B restent au chargeur (mis à zéro puis remplis comme avant). Tous les `sizeof MZHDR` qui voulaient dire
+  « décalage NT » deviennent `NTOFS` (45 sites) ; les 2 lectures de `ofsPEhdr` du chargeur aussi. Si `e_lfanew` est hors de 0x40–0x300, retour à l'ancien comportement (en-tête non fidèle, `e_lfanew` = `NTOFS`).
+  Application : `cd HX/Src/DPMILDR && patch -p3 < …` (sources de `build-dpmild32.sh`), puis relancer le script ; installer dans une copie de `HX/BIN` et lancer avec `XDG_DATA_HOME`.
+- **Mesures** : les 50 programmes « tampered » : plus AUCUN message (NoExit passe, atteint sa propre erreur `USER32.dll:GetClipCursor`) ; 45 démos qui marchaient (≥ 10 scènes) : AUCUNE différence de contenu entre l'ancien et le nouveau chargeur (critère grossier : capture finale > 4 ko) ;
+  `tests/hx_desktop.rs` passe avec le nouveau `DPMILD32.EXE` ; GDITEST normal. Outils jetables : `/tmp/claude-1000/reg/{run,ocr}.py` (à recréer si perdus).
+- **Ce qui vient ensuite pour ces 50** : nouvelles familles visibles (échantillon de 45 captures) : `DialogBoxParam called` (7), « Fullscreen? / Run in fullscreen » (3), `joySetThresh` absent de WINMM (3), `unsupported bits per pixel` (2), `GetClipCursor` absent de USER32 (NoExit),
+  DirectDraw call failed (evolution), exception DKRNL32 (hwpf), « abnormal program termination » (superstar), reste : images sans texte à regarder à l'œil.
+- **Distribution (à décider avec l'utilisateur)** : Bare86 télécharge HX 2.23 (SHA-256) ; un DPMILD32 modifié change cela : PR amont chez Japheth, fork de HX, ou patch binaire/construction locale avec JWasm+JWlink (chaîne validée, mais l'utilisateur final n'a pas ces outils).
