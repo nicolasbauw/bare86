@@ -2073,8 +2073,13 @@ impl<B: Backend> Pc<B> {
             (0x21, 0x2C | 0x2A) => self.idle_poll(false),
             // Lecture de la souris en boucle (Dune) : même attente.
             (0x33, 0x00) if cpu.gpr[0] as u8 == 3 => self.idle_poll(false),
-            // Compatibles avec une boucle d'attente : curseur, horloge, veille.
-            (0x10, 0x02 | 0x03) | (0x1A, 0x00) | (0x28, _) | (0x2F, 0x16) => {}
+            // « Libérer la tranche de temps » (INT 2Fh AX=1680h) : le programme dit qu'il n'a rien à faire. La boucle d'attente
+            // de HX (boîte de message, écran d'erreur) l'appelle sans cesse, en alternance avec la lecture des attributs de
+            // la console (INT 21h AH=44h) : même attente que ci-dessus.
+            (0x2F, 0x16) => self.idle_poll(false),
+            // Compatibles avec une boucle d'attente : curseur, horloge, veille, attributs d'un périphérique (IOCTL, que HX
+            // lit en alternance avec l'appel ci-dessus pour savoir si une touche attend).
+            (0x10, 0x02 | 0x03) | (0x1A, 0x00) | (0x28, _) | (0x21, 0x44) => {}
             // Autre travail (disque, texte…) : ce n'est pas une attente. Le
             // noyau FreeDOS scrute le clavier (Ctrl-C) à chaque appel DOS.
             _ => self.idle_polls = None,
