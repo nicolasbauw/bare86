@@ -75,6 +75,9 @@ PROFILE_LOCK = threading.Lock()
 LAST = threading.local()  # résultat annexe de watch_run (CPU), par thread
 EXTENDERS = ("dos4gw", "dos32a", "dos4g", "pmodew")
 SKIP_NAMES = re.compile(r"(setup|install|config|cfg|unp|pkunzip|pkunpak|unzip|arj|lha|readme|view|info|nfo|dos4gw|cwsdpmi|pmode|uvconfig|sndsetup|catalog|vesa|univbe|uninst)", re.I)
+# Exécutables « publicitaires » d'un groupe (écran fixe ou animé identique d'une archive à l'autre) : jamais choisis comme exécutable
+# principal quand l'archive en contient d'autres (cas AMB98 : `exc-whq.exe`, « Future Dimension », choisi à la place de la démo).
+AD_NAMES = re.compile(r"^(exc[-_]?whq|cfxadv)$", re.I)
 DEFAULT_KEYS = "{wait:900000}"
 
 
@@ -140,7 +143,7 @@ def kind(path):
     return "dos"
 
 
-def pick(work, name_hint):
+def pick(work, name_hint, only=None):
     """Exécutable principal : nom proche de celui de l'archive, puis le plus
     gros ; rend (chemin, genre, autres)."""
     found = []
@@ -151,6 +154,14 @@ def pick(work, name_hint):
                 k = kind(p)
                 if k:
                     found.append((p, k))
+    if only:
+        # un exécutable précis de l'élément (chemin relatif, sans tenir compte de la casse) : le reste est « others »
+        want = only.replace("\\", "/").lower()
+        sel = [e for e in found if os.path.relpath(e[0], work).replace("\\", "/").lower() == want]
+        if not sel:
+            return None, None, []
+        rest = [e for e in found if e is not sel[0]]
+        return sel[0][0], sel[0][1], [os.path.relpath(p, work) for p, _ in rest]
     if not found:
         return None, None, []
     hint = re.sub(r"[^a-z0-9]", "", name_hint.lower())[:5]
@@ -160,6 +171,7 @@ def pick(work, name_hint):
         base = os.path.splitext(os.path.basename(p))[0].lower()
         return (
             k == "dos",
+            not AD_NAMES.search(base),
             not SKIP_NAMES.search(base),
             bool(hint) and base.startswith(hint[:3]),
             os.path.getsize(p),
@@ -531,10 +543,12 @@ def run_prep(prep, root, args):
                 subprocess.run(cmd, cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, capture_output=True, timeout=step.get("limit", 20) + 60)
 
 
-def run_one(item, args, src):
+def run_one(item, args, src, only=None):
     rel = os.path.relpath(item, src)
-    iid = ident(rel)
+    iid = ident(rel) + (("__" + ident(only)) if only else "")
     res = {"id": iid, "item": rel, "status": None}
+    if only:
+        res["only"] = only
     work = os.path.join(args.out, "work", iid)
     shots = os.path.join(args.out, "shots", iid)
     shutil.rmtree(work, ignore_errors=True)
@@ -560,7 +574,7 @@ def run_one(item, args, src):
             run_dir = work
             if prep:
                 run_prep(prep, work, args)
-        exe, k, others = pick(run_dir, os.path.basename(item))
+        exe, k, others = pick(run_dir, os.path.basename(item), only)
         res["others"] = others[:12]
         if exe is None:
             res["status"] = "no-exe"
@@ -806,6 +820,7 @@ def main():
     ap.add_argument("--dll-pack", help="dossier de DLL ajoutées à côté des programmes Windows qui ne les apportent pas (MSVCRT, MSVCP50, GLU32…)")
     ap.add_argument("--filter", help="expression régulière sur le chemin relatif des éléments")
     ap.add_argument("--items", help="fichier : un chemin relatif d'élément par ligne (comme `item` dans results.jsonl)")
+    ap.add_argument("--exe-list", help="fichier : « chemin relatif de l'élément<TAB>exécutable dans l'élément » par ligne ; lance CET exécutable (un résultat par ligne, identifiant « élément__exécutable ») au lieu de l'exécutable principal")
     ap.add_argument("--max", type=int, help="au plus N éléments (essais)")
     ap.add_argument("--redo", action="store_true", help="refaire les éléments déjà traités")
     ap.add_argument("--retry-static", metavar="KEYS", help="relancer seulement les éléments figés (dernier résultat), avec ce script de touches")
@@ -829,6 +844,7 @@ def main():
             r = json.loads(l)
             last[r["id"]] = r
     items = collect(src)
+    all_items = items
     if args.filter:
         items = [i for i in items if re.search(args.filter, os.path.relpath(i, src), re.I)]
     if args.items:
@@ -840,14 +856,26 @@ def main():
     elif not args.redo:
         items = [i for i in items if ident(os.path.relpath(i, src)) not in last]
     done = last
+    pairs = [(i, None) for i in items]
+    if args.exe_list:
+        # un exécutable précis par ligne : on ignore le choix de l'exécutable principal
+        byrel = {os.path.relpath(i, src): i for i in all_items}
+        pairs = []
+        for l in open(args.exe_list):
+            if "\t" not in l:
+                continue
+            r, e = l.rstrip("\n").split("\t", 1)
+            if r in byrel and (args.redo or (ident(r) + "__" + ident(e)) not in last):
+                pairs.append((byrel[r], e))
     if args.max:
-        items = items[:args.max]
+        pairs = pairs[:args.max]
+    items = pairs
     print(f"{len(items)} éléments à traiter ({len(done)} déjà faits)", flush=True)
     lock = threading.Lock()
     count = [0]
 
-    def job(item):
-        r = run_one(item, args, src)
+    def job(pair):
+        r = run_one(pair[0], args, src, pair[1])
         with lock:
             with open(results, "a") as f:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
