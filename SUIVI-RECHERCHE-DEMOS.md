@@ -772,3 +772,17 @@ La section « Writing DOS programs in C (gcc) » du README (≈ l. 700) deviendr
 - Binaire corrigé (DAC 8 bits), profils retirés puis sondés, règles de capture adaptatives (sans la règle de densité, ajoutée après son lancement).
 - Liste des démos denses plafonnées à 48 à refaire avec la règle de densité : `/tmp/claude-1000/dense-a-refaire.txt` (volatile ; la recalculer : `kept > 48`, `cap == 48`, pas de `loop`).
 - À lire demain : planches (à l'œil), familles d'échecs (messages dans les captures finales), comparaison avec `scan-win32` (ancien passage, bureau invisible).
+
+### Lecture de `scan-win32b` : familles d'échecs (2026-11-26, OCR de la dernière capture de chacun des 264)
+Outil : `tesseract` + `eng.traineddata` (tessdata_fast, téléchargé dans le scratchpad, à re-télécharger si perdu) ; résultat volatil `/tmp/claude-1000/ocr-win32b.json`.
+Statuts : 131 exit, 128 ok, 4 error (3dnoid, ts_4k_ms, gerbera, kolor : triple faute / HLT IF=0), 1 no-exe (Woest bh-02). Seulement 45 démos gardent ≥ 10 scènes (42 dans l'ancien passage `scan-win32`) :
+le correctif du bureau noir n'a presque rien changé au nombre de scènes (164 avec ≥ 1 scène contre 146 ; 2 régressions : zeekm32k, stars_by_acid_rain ; 1 amélioration à ≥ 4).
+- **50** « tampered with… VIRUS » (Petite, intégrité de l'en-tête PE) → chantier HX n°1 : PELOAD.ASM, copie fidèle de l'en-tête.
+- **26** exceptions dans DKRNL32 (`C0000005` accès mémoire, `C000001D` instruction illégale ; EIP variés) → famille à instruire (plantages de notre HX ou de nos instructions ?).
+- **13** `DialogBoxParam(A/W) called` (bouchon DUSER32) → DialogBoxParam minimal.
+- **~12** choix de plein écran / 16 bits / 32 bits (« Fullscreen? », « force 16-bit rendering », « Run the demo in FULLSCREEN mode ? », TRANSCEN « Cancel ») : une touche (Y/Entrée) suffirait, profils à régler.
+- **~8** DirectDraw / DirectX : `SetDisplayMode FAILED` (dash), `Couldn't create DirectDrawFactory` (MS2K1FI), `DDEnumCallbackEx: QueryInterface FAILED` (medium), « unknown error » (TRAUMATI, discoteque, lada), « Can't access your whiteboard / Try changing desktop to 24/32 bits » (forsake).
+- **4** glide2x.dll : imports `_grLfbWriteRegion@32`, `_grLfbReadRegion@28` absents (STARSYST…) → compléter notre glide2x.
+- **~10** divers : `Runtime Error! abnormal program termination` (helium, jeg_er), « could not set window hook » (furious), « Unable to start the application » (dozen), PAK « Not enough memory » (racer), `out of memory` DPMILD32 (alphab), « Bad command or file name » (bustrip), « Can't open x! » (3dsrdr : fichier absent).
+- **125** captures SANS texte (97 avec < 4 scènes : écrans noirs, dont 95 « exit » : le programme se termine sans rien afficher) → première cible de l'inspection à l'œil / `--trace-int`.
+Ordre suggéré : Petite (50) ≫ exceptions DKRNL32 (26) ≫ DialogBoxParam (13) ≫ profils de touches plein écran (~12) ≫ écrans noirs « exit » (95, à échantillonner).
