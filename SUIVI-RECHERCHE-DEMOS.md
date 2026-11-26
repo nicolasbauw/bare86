@@ -761,7 +761,7 @@ Test rapide : lancer `GDITEST.EXE` (ou une démo Win32 qui marche, ex. `under`) 
 Si ce n'est pas le cas, corriger les deux phrases du README (fonctionnalités, ligne 54 ; limites, en bas).
 Même vérification pour `--no-jit` « sans effet sur les programmes Windows ».
 
-### README : exemple C avec Open Watcom (décision de l'utilisateur, 2026-11-25) — À FAIRE
+### README : exemple C avec Open Watcom (décision de l'utilisateur, 2026-11-25) — FAIT le 2026-11-26 (hello.com et hello.exe compilés et lancés avec Bare86)
 La section « Writing DOS programs in C (gcc) » du README (≈ l. 700) deviendrait deux sections :
 1. **« … in C (Open Watcom) » en premier** : `hello.c` avec `printf` ; commandes `.COM` (`wcl -q -bt=dos -mt -fe=hello.com hello.c -"l=com"`) et `.EXE` (`wcl -q -bt=dos -ms -fe=hello.exe hello.c`), exactement celles de `c/build.sh` ;
    une ligne sur l'obtention du compilateur (Open Watcom v2 : binaires Linux des versions de développement sur son dépôt GitHub ; ici construit dans `~/Dev/open-watcom-v2/rel`, variable `WATCOM`) ; mentionner sa licence (Sybase Open Watcom Public License).

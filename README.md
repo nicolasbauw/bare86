@@ -27,7 +27,8 @@ difference is under the hood, and shows with demanding late-90s games.
 - [Scripted and windowless sessions](#scripted-and-windowless-sessions)
 - [Developer corner](#developer-corner)
   - [Writing DOS programs in assembly (GNU as)](#writing-dos-programs-in-assembly-gnu-as)
-  - [Writing DOS programs in C (gcc)](#writing-dos-programs-in-c-gcc)
+  - [Writing DOS programs in C (Open Watcom)](#writing-dos-programs-in-c-open-watcom)
+  - [Writing DOS programs in C with gcc (nothing to install)](#writing-dos-programs-in-c-with-gcc-nothing-to-install)
 - [Status and limits](#status-and-limits)
 - [License](#license)
 
@@ -722,9 +723,45 @@ With the [binfmt rules](#running-programs-directly) installed,
 `./HELLO.COM` works too. Drive C: is the program's directory, so it can
 open the files next to it.
 
-### Writing DOS programs in C (gcc)
+### Writing DOS programs in C (Open Watcom)
 
-The host's gcc can also produce real-mode code: `-m16` emits 32-bit code
+[Open Watcom v2](https://github.com/open-watcom/open-watcom-v2) is a real DOS
+C compiler with a C library (`printf`, `fopen`, `malloc`…). It is free
+software (Sybase Open Watcom Public License); the repository offers Linux
+binaries of its development builds, or you can build it from the sources.
+Point `WATCOM` at its release directory:
+
+```sh
+export WATCOM=$HOME/open-watcom-v2/rel
+export INCLUDE=$WATCOM/h PATH=$WATCOM/binl64:$PATH
+```
+
+`hello.c`:
+
+```c
+#include <stdio.h>
+
+int main(void)
+{
+    printf("Hello from C!\n");
+    return 0;
+}
+```
+
+As a `.COM` program (tiny model) or as an `.EXE` (small model):
+
+```sh
+wcl -q -bt=dos -mt -fe=hello.com hello.c -"l=com"
+wcl -q -bt=dos -ms -fe=hello.exe hello.c
+bare86 hello.com
+bare86 hello.exe
+```
+
+`c/build.sh` builds the test programs in `c/tests` the same way.
+
+### Writing DOS programs in C with gcc (nothing to install)
+
+If you would rather install nothing, the host's gcc can also produce real-mode code: `-m16` emits 32-bit code
 with the prefixes that make it run in a 16-bit segment (a 386 or later is
 required, which the guest is). There is no C library: the program calls DOS
 and the BIOS through inline assembly. Four small files make a `.COM`
