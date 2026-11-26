@@ -57,7 +57,7 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// Petite 2.3 le vérifient) ; `DGDI32.DLL` : `SetDIBits` copie `cScanLines` lignes, `RASTERCAPS` déclare
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.6";
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.7";
 const HX_FORK_FILES: [(&str, &str, &[&str]); 4] = [
     (
         "DPMILD32.EXE",
@@ -82,8 +82,11 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 4] = [
     ),
     (
         "DUSER32.DLL",
-        "7f09774905555f067936d68577249dac71e1cbd1efe6864a58453f772d7659f8",
-        &["5e28a471df2a623c399e5d61a02dc2181e4ec233b0d3fb3f70bd15c0711d1e0a"],
+        "3cc6c4d516aa7723aa1aaa970d37356a53643c337271b3afb66c7e6848ec7cac",
+        &[
+            "5e28a471df2a623c399e5d61a02dc2181e4ec233b0d3fb3f70bd15c0711d1e0a",
+            "7f09774905555f067936d68577249dac71e1cbd1efe6864a58453f772d7659f8",
+        ],
     ),
 ];
 
