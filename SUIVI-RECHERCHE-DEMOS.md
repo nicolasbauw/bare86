@@ -786,3 +786,14 @@ le correctif du bureau noir n'a presque rien changé au nombre de scènes (164 a
 - **~10** divers : `Runtime Error! abnormal program termination` (helium, jeg_er), « could not set window hook » (furious), « Unable to start the application » (dozen), PAK « Not enough memory » (racer), `out of memory` DPMILD32 (alphab), « Bad command or file name » (bustrip), « Can't open x! » (3dsrdr : fichier absent).
 - **125** captures SANS texte (97 avec < 4 scènes : écrans noirs, dont 95 « exit » : le programme se termine sans rien afficher) → première cible de l'inspection à l'œil / `--trace-int`.
 Ordre suggéré : Petite (50) ≫ exceptions DKRNL32 (26) ≫ DialogBoxParam (13) ≫ profils de touches plein écran (~12) ≫ écrans noirs « exit » (95, à échantillonner).
+
+### Petite 2.3 : analyse du 2026-11-26 (rien de modifié dans HX pour l'instant)
+- `NoExit.exe` (CD 49, Petite 2.3) : sections `.text` / `.rsrc` / `.petite` (le décompresseur, à l'`ImageBase` + 0x140000, point d'entrée dedans). L'en-tête du fichier n'est PAS celui d'un éditeur de liens ordinaire :
+  stub DOS, en-tête Rich (0x80–0xE0), puis la chaîne « Compressed by Petite, (c) 1998-99 Ian Luck. » à 0xF0, et l'en-tête PE à `e_lfanew` = 0x11C. SizeOfHeaders = 0x400.
+- HX (`PELOAD.ASM`) recopie seulement les 0x40 premiers octets, met le reste de la page à zéro (`?CLEARHEADER`), range les structures NT à 0x40 (donc la chaîne Petite et le PE à 0x11C disparaissent), écrase 0x20–0x3B avec ses champs
+  (`MZHDR` : liste de modules, comptes, pile…) et force `e_lfanew` à 0x40. Le nom du module et le petit tas du chargeur suivent la table des sections (dans la même page).
+- Hypothèse la plus probable pour le « tampered with… VIRUS » : contrôle (CRC ?) de cette zone d'en-tête par le décompresseur. NON vérifiée : la chaîne du message n'est pas en clair dans l'exécutable (décompressée ou masquée) ; les messages en clair sont « ERROR! » / « Corrupt Data! ».
+- **Obstacle** : le reste de HX suppose les structures NT à base + 0x40 (`lea … [esi - sizeof MZHDR]` dans PELOAD.ASM, `SearchModuleInAppModList`, `dwMod32`…, et probablement DKRNL32) : déplacer le PE à `e_lfanew` d'origine est INVASIF.
+- Outil utile : le débogueur de Bare86 (`--debug`, commandes `x` puis `dv ADRESSE N` : mémoire post-mortem ; `BARE86_HWBP`, points d'arrêt matériels) ; stdin doit rester ouvert (`x` attend la fin du programme).
+- Pistes, du moins au plus invasif : (1) essai jetable : à la fin de `LoadPEModule`, restaurer l'en-tête d'origine (octets lus du fichier avant sa fermeture, stockés dans la page libre après SizeOfHeaders) et voir si le contrôle passe sur NoExit (confirme ou infirme l'hypothèse, sans viser la robustesse) ;
+  (2) si confirmé : conserver nos champs hors de l'en-tête (ex. bloc à base − 0x1000 ou après SizeOfHeaders) et ne plus supposer base + 0x40 ; (3) sinon : suivre le décompresseur pas à pas (HWBP au point d'entrée 0x4140CE, dump de la pile).
