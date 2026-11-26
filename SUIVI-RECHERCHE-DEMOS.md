@@ -753,7 +753,9 @@ Pourquoi : Gemma relit chaque image à chaque question (lent, hallucine : « don
   recouper les mois de ces CD avec les parties de l'époque (pouet.net, calendrier des parties), lister les démos sorties à ces dates absentes de nos CD voisins, et les chercher (pouet.net, scene.org, demozoo).
 - Noté pour mémoire, on ne sait jamais.
 
-### À VÉRIFIER demain : le traducteur dynamique n'est jamais utilisé par les programmes Windows sous HX
+### VÉRIFIÉ (2026-11-26) : le traducteur dynamique n'est jamais utilisé par les programmes Windows sous HX
+**Résultat** : `GDITEST.EXE` et `under.exe` (Win32, OpenGL, 2204 échanges) : tous les compteurs `jit_*` à 0 par défaut et avec `--no-jit` ; même avec `--jit` (forcé), 0 instruction traduite (`jit_bursts` = 2, tout interprété). README exact, rien à corriger.
+Texte d'origine :
 Affirmé dans le README le 2026-11-25 (commit `4cf16b3`) d'après la lecture du code seulement (`common_base` de `src/jit/mod.rs` exige l'absence de pagination ; HDPMI active la pagination) : NON vérifié par un essai.
 Test rapide : lancer `GDITEST.EXE` (ou une démo Win32 qui marche, ex. `under`) avec `--stats`, avec et sans `--no-jit`, et vérifier que les compteurs du traducteur (`jit_bursts`, `jit_engagements`, `jit_interpreted`…) sont à ZÉRO.
 Si ce n'est pas le cas, corriger les deux phrases du README (fonctionnalités, ligne 54 ; limites, en bas).
