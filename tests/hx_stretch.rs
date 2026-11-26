@@ -4,9 +4,10 @@
 //! `c/tests/win32/stretch.exe` ouvre une fenêtre plein écran sur le bureau de HX (VESA 800×600, 256 couleurs)
 //! et étire une image de 4×4 pixels en 32 bits, de bas en haut, aux coins colorés (haut-gauche rouge, haut-droite
 //! vert, bas-gauche bleu, bas-droite blanc) : en 160×160 en (100, 100), puis son carré 2×2 inférieur gauche en
-//! 160×160 en (400, 100). La palette de 256 couleurs de HX déforme les teintes (le rouge devient presque noir) :
-//! on compare des dominantes. Le test vérifie l'échelle (blocs de 40 pixels), l'orientation et le sous-rectangle.
-//! Avec le DGDI32 de HX 2.23, `StretchDIBits` ne mettait rien à l'échelle. Ignoré (sans échec) sans KVM ni HX.
+//! 160×160 en (400, 100). Le test vérifie l'échelle (blocs de 40 pixels), l'orientation, le sous-rectangle et les
+//! couleurs : sur le bureau de 256 couleurs, le rouge, le vert, le bleu et le blanc purs doivent sortir purs (avec le
+//! DGDI32 et le VESA32 de HX 2.23, la palette système était fausse et la recherche de la couleur la plus proche
+//! cherchait dans 20 entrées : le rouge sortait presque noir). Ignoré (sans échec) sans KVM ni HX.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,16 +95,18 @@ fn stretch_dibits_scales_and_keeps_orientation() {
         .expect("bare86");
     let png = std::fs::read(&shot).expect("capture absente");
     let px = |x, y| png_pixel(&png, x, y);
-    let (tl, tr, bl) = (px(120, 120), px(240, 120), px(120, 240));
+    let (tl, tr, bl, br) = (px(120, 120), px(240, 120), px(120, 240), px(240, 240));
     let (mid, outside) = (px(180, 180), px(300, 300));
     let (sub_bl, sub_top, sub_right) = (px(440, 220), px(440, 120), px(520, 220));
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(tl[0] > tl[1] && tl[0] > tl[2], "haut-gauche devrait être rouge : {tl:?}");
-    assert!(tr[1] > 200, "haut-droite devrait être vert : {tr:?}");
-    assert!(bl[2] > 200, "bas-gauche devrait être bleu : {bl:?}");
+    let near = |c: [u8; 3], want: [u8; 3]| c.iter().zip(want).all(|(&a, b)| (i32::from(a) - i32::from(b)).abs() <= 8);
+    assert!(near(tl, [255, 0, 0]), "haut-gauche devrait être rouge : {tl:?}");
+    assert!(near(tr, [0, 255, 0]), "haut-droite devrait être vert : {tr:?}");
+    assert!(near(bl, [0, 0, 255]), "bas-gauche devrait être bleu : {bl:?}");
+    assert!(near(br, [255, 255, 255]), "bas-droite devrait être blanc : {br:?}");
     assert_eq!(mid, [0, 0, 0], "le milieu (pixels noirs de l'image) : {mid:?}");
     assert_eq!(outside, [0, 0, 0], "hors du rectangle : {outside:?}");
-    assert!(sub_bl[2] > 200, "le carré 2×2 inférieur gauche étiré devrait avoir son coin bas-gauche bleu : {sub_bl:?}");
+    assert!(near(sub_bl, [0, 0, 255]), "le carré 2×2 inférieur gauche étiré devrait avoir son coin bas-gauche bleu : {sub_bl:?}");
     assert_eq!(sub_top, [0, 0, 0], "partie haute du sous-rectangle : {sub_top:?}");
     assert_eq!(sub_right, [0, 0, 0], "partie droite du sous-rectangle : {sub_right:?}");
 }
