@@ -58,8 +58,8 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
 /// vide) est installé s'il manque ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.9";
-const HX_FORK_FILES: [(&str, &str, &[&str]); 5] = [
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.10";
+const HX_FORK_FILES: [(&str, &str, &[&str]); 6] = [
     (
         "DPMILD32.EXE",
         "02a94dbbc79b05bd06f54845cb6d1b143337ecc7265a7c17bc1539c61c978ec3",
@@ -67,8 +67,9 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 5] = [
     ),
     (
         "DGDI32.DLL",
-        "d41ae9fcb7de5d693da0bf6b91649b889801ef3416e78ca12c2994c0c6e8c8c3",
+        "39ef30e57b498ea829eb10670d3164b11ecf805fc886e1a32fa3730733ec2a58",
         &[
+            "d41ae9fcb7de5d693da0bf6b91649b889801ef3416e78ca12c2994c0c6e8c8c3",
             "19674b98e36ed5b87eac7fbed400179266a0687764ed4cd59631795706025af3",
             "1e17bac09e2f38655d7a90310cae5bf7a30483bde592cc97d23dc02d51bba924",
             "e298f7f5da1e678317b25a144b610739cc42fc285e05c17f28a29071f28bd6e0",
@@ -83,12 +84,18 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 5] = [
     ),
     (
         "DUSER32.DLL",
-        "9f8dd1357ae981d27ea564536977911cf8b830acbf915991ae68ef880f272082",
+        "247c9b03ecc058ac8f5e9bf800a88e7f735e5c3b657735f1ca8c62e7a014f7ae",
         &[
+            "9f8dd1357ae981d27ea564536977911cf8b830acbf915991ae68ef880f272082",
             "3cc6c4d516aa7723aa1aaa970d37356a53643c337271b3afb66c7e6848ec7cac",
             "5e28a471df2a623c399e5d61a02dc2181e4ec233b0d3fb3f70bd15c0711d1e0a",
             "7f09774905555f067936d68577249dac71e1cbd1efe6864a58453f772d7659f8",
         ],
+    ),
+    (
+        "WINMM.DLL",
+        "feef20a07d4cff7201dc828a1e039e767756cb36a6cd6e16004785f316595b74",
+        &["569ecc69f6300dd646a14e28a920eb504e7a14ca0f8076693640ea913a9c6048"],
     ),
     // sans équivalent dans HX : installée si elle manque (liste de binaires officiels vide)
     (

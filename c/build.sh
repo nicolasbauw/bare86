@@ -23,6 +23,6 @@ cd win32
 for src in *.c; do
     # sous-système : « cible : console » dans le source, sinon fenêtre (nt_win)
     if grep -q "wcl386 -bt=nt -l=nt)" "$src"; then sub=nt; else sub=nt_win; fi
-    wcl386 -q -bt=nt -l=$sub -fe="${src%.c}.exe" "$src"
+    wcl386 -q -bt=nt -l=$sub -fe="${src%.c}.exe" "$src" winmm.lib
 done
 rm -f ./*.o
