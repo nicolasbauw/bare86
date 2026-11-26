@@ -86,7 +86,9 @@ difference is under the hood, and shows with demanding late-90s games.
   (nearest neighbour) and draws true colors on the 8 bit screen (the system
   palette was wrong and the nearest color was searched in 20 entries; a 64k
   intro that stayed black now shows its picture). Modal dialog boxes (options,
-  “full screen?”) no longer stop on a stub box. Programs of the late 1990s also
+  “full screen?”) no longer stop on a stub box, and a small `MSVFW32.DLL` (the
+  DrawDib functions of Video for Windows, which HX does not have) is added: a
+  demo that loaded it no longer jumps to address 0. Programs of the late 1990s also
   expect Microsoft's Visual C++ 6.0
   runtime (`MSVCRT.DLL`, `MSVCP60.DLL`, `MFC42.DLL`…), which HX does not have:
   Bare86 downloads Microsoft's `vc6redistsetup_enu.exe` once (SHA-256 checked;
@@ -960,7 +962,7 @@ license files; its embedded FM banks carry their own terms), and the Terminus
 font (SIL Open Font License 1.1) in `fonts/`.
 
 When needed, Bare86 downloads third-party software that it does not include:
-HX DOS Extender (freeware, with a fork of four of its files) and DOS/32A. This product uses DOS/32 Advanced DOS
+HX DOS Extender (freeware, with a fork of four of its files and one more) and DOS/32A. This product uses DOS/32 Advanced DOS
 Extender technology.
 
 Bare86 is by Nicolas BAUW, developed with [Claude Code](https://claude.com/claude-code).

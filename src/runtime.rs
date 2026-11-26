@@ -56,9 +56,10 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `DPMILD32.EXE` garde l'en-tête de l'exécutable tel qu'il est dans le fichier (les programmes empaquetés avec
 /// Petite 2.3 le vérifient) ; `DGDI32.DLL` : `SetDIBits` copie `cScanLines` lignes, `RASTERCAPS` déclare
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
-/// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.7";
-const HX_FORK_FILES: [(&str, &str, &[&str]); 4] = [
+/// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
+/// vide) est installé s'il manque ; un échec n'est pas fatal.
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.8";
+const HX_FORK_FILES: [(&str, &str, &[&str]); 5] = [
     (
         "DPMILD32.EXE",
         "02a94dbbc79b05bd06f54845cb6d1b143337ecc7265a7c17bc1539c61c978ec3",
@@ -87,6 +88,12 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 4] = [
             "5e28a471df2a623c399e5d61a02dc2181e4ec233b0d3fb3f70bd15c0711d1e0a",
             "7f09774905555f067936d68577249dac71e1cbd1efe6864a58453f772d7659f8",
         ],
+    ),
+    // sans équivalent dans HX : installée si elle manque (liste de binaires officiels vide)
+    (
+        "MSVFW32.DLL",
+        "c97a7a5e0e1691d83e9873eaa41ca1c1168eaf8dc5202b2a1799ec1578253f7c",
+        &[],
     ),
 ];
 
@@ -120,8 +127,11 @@ fn patch_hx(dir: &Path) -> Result<(), String> {
 fn ensure_fork_files(hx: &Path) {
     for (name, fork_sha, official) in HX_FORK_FILES {
         let path = hx.join("BIN").join(name);
-        let Ok(current) = std::fs::read(&path) else { continue };
-        if !official.contains(&format!("{:x}", Sha256::digest(&current)).as_str()) {
+        let replace = match std::fs::read(&path) {
+            Ok(current) => official.contains(&format!("{:x}", Sha256::digest(&current)).as_str()),
+            Err(_) => official.is_empty(), // absent : seulement pour un fichier que HX n'a pas
+        };
+        if !replace {
             continue;
         }
         let url = format!("{HX_FORK_RELEASE}/{name}");
