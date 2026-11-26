@@ -797,3 +797,12 @@ Ordre suggéré : Petite (50) ≫ exceptions DKRNL32 (26) ≫ DialogBoxParam (13
 - Outil utile : le débogueur de Bare86 (`--debug`, commandes `x` puis `dv ADRESSE N` : mémoire post-mortem ; `BARE86_HWBP`, points d'arrêt matériels) ; stdin doit rester ouvert (`x` attend la fin du programme).
 - Pistes, du moins au plus invasif : (1) essai jetable : à la fin de `LoadPEModule`, restaurer l'en-tête d'origine (octets lus du fichier avant sa fermeture, stockés dans la page libre après SizeOfHeaders) et voir si le contrôle passe sur NoExit (confirme ou infirme l'hypothèse, sans viser la robustesse) ;
   (2) si confirmé : conserver nos champs hors de l'en-tête (ex. bloc à base − 0x1000 ou après SizeOfHeaders) et ne plus supposer base + 0x40 ; (3) sinon : suivre le décompresseur pas à pas (HWBP au point d'entrée 0x5400CE, dump de la pile).
+
+### Essai jetable Petite (2026-11-26) : HYPOTHÈSE CONFIRMÉE
+- `tools/hx-build/experiment-restore-header.patch` (sur `PELOAD.ASM` de HX 2.23, jetable, NON robuste) : avant la fermeture du fichier, lit ses 0x400 premiers octets à base+0x800 ; juste avant le lancement de l'application,
+  les recopie sur l'en-tête SAUF 0x20–0x3B (champs du chargeur). Le PE d'origine (0x11C) et la chaîne Petite sont donc de retour. Construction : `build-dpmild32.sh` après avoir appliqué le patch dans le clone (`HX/Src/DPMILDR`), essai avec `XDG_DATA_HOME` pointant sur une copie de `HX/`.
+- **Résultat sur `NoExit.exe` (Petite 2.3)** : la boîte « This file has been tampered with… VIRUS » DISPARAÎT (comparée à la même commande avec le DPMILD32 d'origine, captures à 4 s et 8 s). Le contrôle porte donc bien sur l'en-tête.
+  L'octet 0x20–0x3B n'entre pas dans le calcul (ou reste compatible : zéros d'origine contre nos champs ; à ne pas considérer comme prouvé pour les autres versions).
+- Ensuite : écran noir (bureau HX et curseur), 4,7 millions de sorties vers le port 20h en 25 s (boucle ? ou l'effet du saccage du nom du module et du tas du chargeur par la recopie, qui couvre 0x3C–0x3FF) : NON élucidé. C'est l'étape suivante.
+- Plan robuste : (a) déplacer le nom du module et le tas du chargeur après SizeOfHeaders (si SectionAlignment ≥ 0x1000) ; (b) ne plus supposer les structures NT à base+0x40 (ou garder une copie à 0x40 uniquement si l'en-tête d'origine n'y met rien d'utile : la chaîne Petite et le PE sont au-dessus de 0x80) ;
+  (c) mesurer sur les 50 programmes « tampered » et sur les démos qui marchent déjà (aucune régression).
