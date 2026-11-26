@@ -21,6 +21,8 @@ rm -f ./*.o
 export INCLUDE="$WATCOM/h:$WATCOM/h/nt"
 cd win32
 for src in *.c; do
-    wcl386 -q -bt=nt -l=nt_win -fe="${src%.c}.exe" "$src"
+    # sous-système : « cible : console » dans le source, sinon fenêtre (nt_win)
+    if grep -q "wcl386 -bt=nt -l=nt)" "$src"; then sub=nt; else sub=nt_win; fi
+    wcl386 -q -bt=nt -l=$sub -fe="${src%.c}.exe" "$src"
 done
 rm -f ./*.o
