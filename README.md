@@ -76,7 +76,10 @@ difference is under the hood, and shows with demanding late-90s games.
   DirectSound and GDI. HX is taken from the game's `PATH` or `C:\HX`; if there
   is none, Bare86 downloads the official HXRT and HXGUI 2.23 archives once
   (with `curl`, SHA-256 checked) into `~/.local/share/bare86/HX` and shows it
-  as drive Z:. Programs of the late 1990s also expect Microsoft's Visual C++ 6.0
+  as drive Z:. It then replaces HX's PE loader (`DPMILD32.EXE`) with the one of
+  [a fork of HX](https://github.com/nicolasbauw/HX) (same download rules), which
+  maps the executable's own header: without it, programs packed with Petite 2.3
+  stop with “This file has been tampered with”. Programs of the late 1990s also expect Microsoft's Visual C++ 6.0
   runtime (`MSVCRT.DLL`, `MSVCP60.DLL`, `MFC42.DLL`…), which HX does not have:
   Bare86 downloads Microsoft's `vc6redistsetup_enu.exe` once (SHA-256 checked;
   Microsoft's own address is gone, so from the Wayback Machine's copy), takes
@@ -949,7 +952,7 @@ license files; its embedded FM banks carry their own terms), and the Terminus
 font (SIL Open Font License 1.1) in `fonts/`.
 
 When needed, Bare86 downloads third-party software that it does not include:
-HX DOS Extender (freeware) and DOS/32A. This product uses DOS/32 Advanced DOS
+HX DOS Extender (freeware, with a one-file fork of its loader) and DOS/32A. This product uses DOS/32 Advanced DOS
 Extender technology.
 
 Bare86 is by Nicolas BAUW, developed with [Claude Code](https://claude.com/claude-code).

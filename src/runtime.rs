@@ -51,6 +51,13 @@ pub fn hx_dir() -> Option<PathBuf> {
     dir.join("BIN").join("DPMILD32.EXE").is_file().then_some(dir)
 }
 
+/// Chargeur PE de HX du fork de Bare86 (https://github.com/nicolasbauw/HX) : il garde l'en-tête de l'exécutable tel qu'il
+/// est dans le fichier (les programmes empaquetés avec Petite 2.3 le vérifient). Remplace `BIN/DPMILD32.EXE` d'HX 2.23,
+/// seulement si ce dernier est le binaire officiel (`HX_OFFICIAL_LOADER_SHA256`) ; un échec de téléchargement n'est pas fatal.
+const HX_FORK_LOADER_URL: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.1/DPMILD32.EXE";
+const HX_FORK_LOADER_SHA256: &str = "02a94dbbc79b05bd06f54845cb6d1b143337ecc7265a7c17bc1539c61c978ec3";
+const HX_OFFICIAL_LOADER_SHA256: &str = "3a460e8158bbde0e147a9ac1ae110c0603a8883aeed598a9279dc1efaf6fa8d4";
+
 /// Corrections ponctuelles des binaires de HX 2.23 : fichier, décalage,
 /// octets d'origine, octets corrigés. Appliquées seulement si les octets
 /// d'origine sont trouvés à leur place (idempotent ; sans effet sur une
@@ -77,10 +84,43 @@ fn patch_hx(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Remplace le chargeur officiel de HX par celui du fork (voir `HX_FORK_LOADER_URL`).
+fn ensure_fork_loader(hx: &Path) {
+    let path = hx.join("BIN/DPMILD32.EXE");
+    let Ok(current) = std::fs::read(&path) else { return };
+    if format!("{:x}", Sha256::digest(&current)) != HX_OFFICIAL_LOADER_SHA256 {
+        return;
+    }
+    eprintln!("[win32] downloading the DPMILD32.EXE of Bare86's HX fork from {HX_FORK_LOADER_URL}");
+    let tmp = hx.join(format!("BIN/DPMILD32.tmp{}", std::process::id()));
+    let result = (|| {
+        let status = std::process::Command::new("curl")
+            .args(["-fsSL", "--retry", "2", "-o"])
+            .arg(&tmp)
+            .arg(HX_FORK_LOADER_URL)
+            .status()
+            .map_err(|e| format!("curl: {e}"))?;
+        if !status.success() {
+            return Err(format!("download failed ({status})"));
+        }
+        let data = std::fs::read(&tmp).map_err(|e| e.to_string())?;
+        let got = format!("{:x}", Sha256::digest(&data));
+        if got != HX_FORK_LOADER_SHA256 {
+            return Err(format!("unexpected SHA-256 {got}"));
+        }
+        std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+    })();
+    if let Err(e) = result {
+        eprintln!("[win32] DPMILD32.EXE of the fork not installed ({e}); keeping HX's own loader (Petite 2.3 programs will not start)");
+    }
+    let _ = std::fs::remove_file(&tmp);
+}
+
 /// Répertoire de HX, téléchargé et installé s'il manque.
 pub fn hx_dir_or_install() -> Result<PathBuf, String> {
     if let Some(d) = hx_dir() {
         patch_hx(&d)?;
+        ensure_fork_loader(&d);
         ensure_ms_runtime(&d);
         return Ok(d);
     }
@@ -88,6 +128,7 @@ pub fn hx_dir_or_install() -> Result<PathBuf, String> {
     eprintln!("[win32] downloading HX DOS Extender {HX_VERSION} (Japheth, freeware) from {HX_RELEASE} into {}", base.join("HX").display());
     install_hx(&base)?;
     let dir = hx_dir().ok_or_else(|| "HX: DPMILD32.EXE missing after installation".to_string())?;
+    ensure_fork_loader(&dir);
     ensure_ms_runtime(&dir);
     Ok(dir)
 }

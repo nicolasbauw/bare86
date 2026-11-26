@@ -817,3 +817,9 @@ Ordre suggéré : Petite (50) ≫ exceptions DKRNL32 (26) ≫ DialogBoxParam (13
 - **Ce qui vient ensuite pour ces 50** : nouvelles familles visibles (échantillon de 45 captures) : `DialogBoxParam called` (7), « Fullscreen? / Run in fullscreen » (3), `joySetThresh` absent de WINMM (3), `unsupported bits per pixel` (2), `GetClipCursor` absent de USER32 (NoExit),
   DirectDraw call failed (evolution), exception DKRNL32 (hwpf), « abnormal program termination » (superstar), reste : images sans texte à regarder à l'œil.
 - **Distribution (à décider avec l'utilisateur)** : Bare86 télécharge HX 2.23 (SHA-256) ; un DPMILD32 modifié change cela : PR amont chez Japheth, fork de HX, ou patch binaire/construction locale avec JWasm+JWlink (chaîne validée, mais l'utilisateur final n'a pas ces outils).
+
+### Fork de HX publié (2026-11-26)
+- Fork : https://github.com/nicolasbauw/HX (`master` = HX v2.24 + commit `1fe03c0` : en-tête fidèle, `build-linux/build-dpmild32.sh`, README). Remotes locales de `~/Dev/HX` : `origin` = fork, `upstream` = Japheth.
+- Release `v2.24-bare86.1` : `DPMILD32.EXE`, SHA-256 `02a94dbb…978ec3`. `src/runtime.rs` (`ensure_fork_loader`) le télécharge (SHA-256 vérifié) à la place du chargeur officiel de 2.23 ;
+  seulement si le fichier présent est l'officiel (`3a460e81…`) ; échec = avertissement, HX officiel gardé. Vérifié sur une copie : téléchargement, puis NoExit passe le contrôle Petite.
+- À faire plus tard : message à Japheth (proposer le patch ? non envoyé, à valider par l'utilisateur) ; les corrections suivantes de HX (DialogBoxParam, USER32 manquantes) iront dans le même fork.
