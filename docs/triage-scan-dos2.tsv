@@ -1,0 +1,220 @@
+id	exe	scenes	status	classe	action	texte_ecran
+pcteam_cd27_WIR97_4K__PARTYVER.COM	PARTYVER.COM	65	exit	bon		
+pcteam_cd27_WIR97_4K__NO_FEAR_.COM	NO_FEAR!.COM	64	exit	bon		
+pcteam_cd27_WIR97_4K__GREEN.COM	GREEN.COM	8	exit	bon		
+pcteam_cd27_WIR97_4K__REALTIME.EXE	REALTIME.EXE	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd28_ASM97_DEMO_EXC_SPLD__SPTRO.EXE	SPTRO.EXE	39	ok	bon		
+pcteam_cd27_WIR97_4K__DEAF.EXE	DEAF.EXE	13	exit	bon		
+pcteam_cd27_WIR97_4K__POORGUY_.COM	POORGUY!.COM	15	exit	bon		
+pcteam_cd28_ASM97_IN64_M_MELONI__VNT.EXE	VNT.EXE	1	exit	pub	ignorer (publicité du distributeur)	If the other boards are just not | enough for uqu tuith their lou | ouality files afd stupid users. call | ith modulator-demodulator... | 358 - 80 - 808 = Ble6 
+pcteam_cd27_WIR97_GAME100K_8__NIBBLES.COM	NIBBLES.COM	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd28_ASM97_IN64_RCN-GRBL__GREBLE.EXE	GREBLE.EXE	123	exit	bon		
+pcteam_cd29_ANTIQ297_1KO_AA_WATER.ZIP__water.com	water.com	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd29_ANTIQ297_1KO_AA_1KINT.ZIP__aa_1kint.com	aa_1kint.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd29_ANTIQ297_1KO_ARC-1K.ZIP__szarbump.com	szarbump.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd29_ANTIQ297_1KO_CN_15SEC.ZIP__15_sec_.com	15_sec!!.com	9	exit	bon		
+pcteam_cd29_ANTIQ297_1KO_CARDRIVE.ZIP__pitrlz_.exe	#pitrlz#.exe	42	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_1KO_DPH_HIGH.ZIP__digital.com	digital.com	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd29_ANTIQ297_1KO_CN_GSS2.ZIP__cn-gss2.com	cn-gss2.com	96	ok	bon		
+pcteam_cd29_ANTIQ297_1KO_CTP-OXEN.ZIP__oxel.com	oxel.com	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd29_ANTIQ297_1KO_IMAGE_.ZIP__pitrlz_.exe	#pitrlz#.exe	100	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_1KO_IMAGE_.ZIP__partyver.com	partyver.com	25	exit	bon		
+pcteam_cd29_ANTIQ297_1KO_DA_MONKY.ZIP__da_monky.com	da_monky.com	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd28_EUS97_IN4K_CLMINTRO__ZMEP5.EXE	ZMEP5.EXE	899	timeout	pub	ignorer (publicité du distributeur)	
+pcteam_cd28_EUS97_IN4K_PIEINTRO__ZMEP5.EXE	ZMEP5.EXE	899	timeout	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_4KO_ARC-4K.ZIP__szar4k.com	szar4k.com	48	ok	bon		
+pcteam_cd29_ANTIQ297_4KO_ABCERR01.ZIP__error01.com	error01.com	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd29_ANTIQ297_1KO_SB_HOFTU.ZIP__hoftu.com	hoftu.com	30	ok	bon		
+pcteam_cd29_ANTIQ297_4KO_CHR-SHAP.ZIP__shape.com	shape.com	33	exit	bon		
+pcteam_cd29_ANTIQ297_1KO_DPH_HIGH.ZIP__pitrlz_.exe	#pitrlz#.exe	130	timeout	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_1KO_TMBE.ZIP__pitrlz_.exe	#pitrlz#.exe	101	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_64KO_EXH_OFF.ZIP__pitrlz_.exe	#pitrlz#.exe	72	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_64KO_CD-SZNDL.ZIP__pitrlz_.exe	#pitrlz#.exe	85	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_64KO_MCP_SPLA.ZIP__pitrlz_.exe	#pitrlz#.exe	103	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_64KO_HULALA.ZIP__pitrlz_.exe	#pitrlz#.exe	140	timeout	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_DEMOS_AI_SPICE.ZIP__pitrlz_.exe	#pitrlz#.exe	111	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_ANTIQ297_4KO_GRC-TYPH.ZIP__pitrlz_.exe	#pitrlz#.exe	116	ok	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_BIZ97_IN64_IMG_DEVO.ZIP__devotion.exe	devotion.exe	89	exit	bon		
+pcteam_cd29_ANTIQ297_DEMOS_CN_G.ZIP__pitrlz_.exe	#pitrlz#.exe	154	timeout	pub	ignorer (publicité du distributeur)	
+pcteam_cd29_CONTRIBS_NOCOMPLX__P.EXE	P.EXE	0	exit	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	
+pcteam_cd29_CRS97_MISC_256.ZIP__scooter.com	scooter.com	9	ok	bon		
+pcteam_cd29_CRS97_MISC_256.ZIP__lameland.com	lameland.com	7	exit	bon		
+pcteam_cd29_CRS97_MISC_256.ZIP__sputnik.com	sputnik.com	7	ok	bon		
+pcteam_cd29_CRS97_MISC_256.ZIP__chaos.com	chaos.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd29_NETZONE_64KO_ONC.ZIP__gato8.com	gato8.com	3	ok	peu	2–4 scènes : vérifier	
+pcteam_cd29_NETZONE_DEMOS_3_ARISE.ZIP__first.exe	first.exe	35	exit	bon		
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__water.exe	water.exe	2	exit	peu	2–4 scènes : vérifier	
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__zoom.exe	zoom.exe	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__play.exe	play.exe	32	exit	bon		
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__bump.exe	bump.exe	6	exit	bon		
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__place.exe	place.exe	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	7 = Sei z : a wi
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__man_jul2.exe	man_jul2.exe	7	exit	bon		
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__mip.exe	mip.exe	7	exit	bon		
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__end.exe	end.exe	11	exit	bon		
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__tundbl01.com	tundbl01.com	2	exit	peu	2–4 scènes : vérifier	
+pcteam_cd29_BIZ97_IN64_FL-DOP2.ZIP__izxcppkm.com	izxcppkm.com	896	timeout	bon		
+pcteam_cd29_PLACE2BE_DEMOS_ISAY.ZIP__temp_isay_s3vbe20.exe	temp/isay/s3vbe20.exe	0	exit	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	
+pcteam_cd29_BIZ97_IN64_INF-FRM.ZIP__uicliznd.com	uicliznd.com	896	timeout	bon		
+pcteam_cd29_PLACE2BE_DEMOS_A_20NE_1.ZIP__a_new_world_newworld_x_nw.exe	a new world/newworld_x/nw.exe	108	ok	bon		
+pcteam_cd30_DST97_DEMO_SBM_NDIG.ZIP__demovt.exe	demovt.exe	16	ok	bon		
+pcteam_cd30_DST97_IN4K_FADE2.ZIP__fade2_95.com	fade2_95.com	33	exit	bon		
+pcteam_cd31_MAGS_PAIN0697.ZIP__techpcx_x_pcx.exe	techpcx_x/pcx.exe	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd31_MAGS_PAIN0697.ZIP__techpcx_x_restore.com	techpcx_x/restore.com	0	exit	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	
+pcteam_cd31_MAGS_PAIN0897.ZIP__win00.exe	win00.exe	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0597.ZIP__plasma.exe	plasma.exe	66	ok	bon		
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_dax_win00.com	win00_x/dax/win00.com	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_mirekcze_mirekcze.com	win00_x/mirekcze/mirekcze.com	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_bastel_bastel.com	win00_x/bastel/bastel.com	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_unique_unqwin00.com	win00_x/unique/unqwin00.com	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_moixa_moixa.com	win00_x/moixa/moixa.com	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_daemon_daemon.com	win00_x/daemon/daemon.com	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_arathorn_arathorn.com	win00_x/arathorn/arathorn.com	1	ok	remplace	relancé dans un balayage plus récent	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_fairway_fairway.com	win00_x/fairway/fairway.com	1	ok	a-relancer	fonction BIOS ajoutée depuis : relancer	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_pdoom_pdoom.com	win00_x/pdoom/pdoom.com	1	ok	a-relancer	fonction BIOS ajoutée depuis : relancer	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_dake_dake.com	win00_x/dake/dake.com	1	ok	a-relancer	fonction BIOS ajoutée depuis : relancer	
+pcteam_cd31_MAGS_PAIN0997.ZIP__win00_x_scabby_scabwin.com	win00_x/scabby/scabwin.com	1	ok	a-relancer	fonction BIOS ajoutée depuis : relancer	
+pcteam_cd32_ASSEMB_1_64K_BW-DISL.ZIP__retr.com	retr.com	47	exit	bon		
+pcteam_cd32_ASSEMB_1_64K_BLACK.ARJ__COMPO_BLACK.EXE	COMPO/BLACK.EXE	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	PMODE/W DOS Extender v1.24 | Copyright (C) 1994-1996, Charles Scheffald and Thomas Pute | © BLACK SILK | Analogue 1997 | code: Hugo music: Wave | 320x200x24b | 
+pcteam_cd32_ASSEMB_1_64K_M_MELONI.ZIP__vnt.exe	vnt.exe	1	exit	pub	ignorer (publicité du distributeur)	If the other boards are just not | enough for uqu tuith their lou | ouality files afd stupid users. call | ith modulator-demodulator... | 358 - 80 - 808 = Ble6 
+pcteam_cd32_ASTROS_1_DEMOS_FSE_MEMO.ZIP__look.com	look.com	51	ok	bon		
+pcteam_cd32_ASSEMB_1_64K_RCN-GRBL.ZIP__greble.exe	greble.exe	123	exit	bon		
+pcteam_cd32_ASTROS_1_IN4K_HLC_SUT.ZIP__sut640.com	sut640.com	72	exit	bon		
+pcteam_cd32_ASTROS_1_IN4K_HLC_SUT.ZIP__sut.com	sut.com	72	exit	bon		
+pcteam_cd32_COMPUS_1_INTRO_TRANS.ZIP__intro.exe	intro.exe	68	exit	bon		
+pcteam_cd32_NEITHE_1_NN97_64K.ZIP__insomnia.exe	insomnia.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	a | tHE :
+pcteam_cd32_NEITHE_1_NN97_64K.ZIP__2_victims.exe	#2/victims.exe	166	error	bon		
+pcteam_cd33_NETZON_1_FAST_GAMES_2_PACILA.ZIP__prophecy.exe	prophecy.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd36_am98_in4k.zip__zwe_x_zwem2.exe	zwe_x/zwem2.exe	10	exit	bon		
+pcteam_cd29_BIZ97_IN64_IMG_DEVO.ZIP__bentlhyu.com	bentlhyu.com	898	timeout	bon		
+pcteam_cd36_am98_in4k.zip__tri_x_trivia.exe	tri_x/!trivia.exe	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	<Daemos> Sorry! No trivia allowed right now!
+pcteam_cd36_ms98_32kgame.zip__game_x_game32k.exe	game_x/game32k.exe	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd36_ms98_32kgame.zip__spla_x_splat32k.exe	spla_x/splat32k.exe	3	ok	peu	2–4 scènes : vérifier	
+pcteam_cd36_ms98_32kgame.zip__net_x_net32kb.exe	net_x/net32kb.exe	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd36_ms98_32kgame.zip__spla_x_digital.com	spla_x/digital.com	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd36_ms98_demo.zip__luc_x_luckyd.exe	luc_x/luckyd.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd31_MAGS_SHINE1.ZIP__paxnvmpe.com	paxnvmpe.com	896	timeout	bon		
+pcteam_cd36_ms98_demo.zip__scd_x_scdreams.exe	scd_x/scdreams.exe	249	exit	bon		
+pcteam_cd36_ms98_demo.zip__dre_x_scdreams.exe	dre_x/scdreams.exe	248	exit	bon		
+pcteam_cd36_ms98_demo.zip__rum_x_rumba.exe	rum_x/rumba.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Current Configuration | Sound Card: Gravis UltraSound | Sound quality: Medium | Output mode: 16-bit stereo
+pcteam_cd36_ms98_demo.zip__anc_x_ancera.exe	anc_x/ancera.exe	114	exit	bon		
+pcteam_cd36_ms98_demo.zip__her_x_heresy.exe	her_x/heresy.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	calculating scenes...stand by
+pcteam_cd36_ms98_demo.zip__str_x_strato.exe	str_x/strato.exe	112	exit	bon		
+pcteam_cd32_TMDC2_TMDC2INV.ZIP__aojpptci.com	aojpptci.com	898	timeout	bon		
+pcteam_cd36_ms98_demo.zip__2df_x_2dfx.exe	2df_x/2dfx.exe	178	exit	bon		
+pcteam_cd36_ms98_demo.zip__sus_x_check.exe	sus_x/check.exe	1	ok	setup	bloqué sur un menu : trouver les touches	Select Sound Card | Pro Audic Spectrum | Pro Audio Spectrum plus | Pro Audio Spectrum 16 | Windows Sound System (Crystal/Analog CODEC) | Sound Blaster 1.8 or cl
+pcteam_cd36_ms98_in4k.zip__tsq_x_tsq_chik.com	tsq_x/tsq_chik.com	8	exit	bon		
+pcteam_cd36_ms98_demo.zip__ful_x_fulcrum.exe	ful_x/fulcrum.exe	335	exit	bon		
+pcteam_cd36_ms98_in4k.zip__fei_x_feind.com	fei_x/feind.com	25	ok	bon		
+pcteam_cd36_ms98_demo.zip__cdx_x_wdky.exe	cdx_x/wdky.exe	148	exit	bon		
+pcteam_cd36_ms98_demo.zip__fam_x_family.exe	fam_x/family.exe	433	error	bon		
+pcteam_cd36_ms98_in64k.zip__e9_x_d4z_suen.exe	e9_x/d4z_suen.exe	88	exit	bon		
+pcteam_cd36_ms98_in64k.zip__eic_x_tsq_meg.exe	eic_x/tsq_meg.exe	105	exit	bon		
+pcteam_cd36_ms98_in64k.zip__bou_x_boutique.exe	bou_x/boutique.exe	71	exit	bon		
+pcteam_cd36_tg98_demo.zip__prx_x_prx_life.exe	prx_x/prx_life.exe	2	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd36_ms98_in64k.zip__tsq_x_tsq_meg.exe	tsq_x/tsq_meg.exe	106	exit	bon		
+pcteam_cd36_tg98_demo.zip__kv_x_kv_stres.exe	kv_x/kv_stres.exe	8	exit	bon		
+pcteam_cd36_tg98_demo.zip__ewo_x_ewox_dem.exe	ewo_x/ewox_dem.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd36_ms98_in64k.zip__lic_x_licht.exe	lic_x/licht.exe	76	exit	bon		
+pcteam_cd36_tg98_demo.zip__tls_x_ii.exe	tls_x/ii.exe	2	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd36_tg98_demo.zip__8ho_x_ehours.exe	8ho_x/ehours.exe	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	ATTENTION | All the code, gfx, music and ideas were | done here at the gathering just 8 hours | before deadline, so the demo might not | be the best we could ha
+pcteam_cd36_tg98_demo.zip__ast_x_astro.exe	ast_x/astro.exe	2	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd36_tg98_demo.zip__rc_x_finalmix.exe	rc_x/finalmix.exe	48	exit	bon		
+pcteam_cd36_tg98_demo.zip__out_x_zanies.exe	out_x/zanies.exe	47	exit	bon		
+pcteam_cd36_tg98_demo.zip__noc_x_goatique.exe	noc_x/goatique.exe	109	exit	bon		
+pcteam_cd36_tg98_demo.zip__urk_x_urknall.exe	urk_x/urknall.exe	0	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd36_tg98_in4k.zip__sch_x_schmeck.com	sch_x/schmeck.com	18	exit	bon		
+pcteam_cd36_tg98_demo.zip__pmp_x_pmp-drm.exe	pmp_x/pmp-drm.exe	73	exit	bon		
+pcteam_cd36_tg98_in4k.zip__rct_x_yo.exe	rct_x/yo.exe	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Mig / j;
+pcteam_cd36_tg98_in4k.zip__kol_x_kolakola.exe	kol_x/kolakola.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd36_tg98_demo.zip__bab_x_babyboom.exe	bab_x/babyboom.exe	60	exit	bon		
+pcteam_cd36_tg98_3dfx.zip__forfun_x_testapp.exe	forfun_x/testapp.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd36_tg98_3dfx.zip__cornball_x_planet.exe	cornball_x/planet.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd36_tg98_in4k.zip__mac_x_snake.com	mac_x/snake.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd36_tg98_in64.zip__d32_x_sinx.exe	d32_x/sinx.exe	1	ok	setup	bloqué sur un menu : trouver les touches	Useless Sound System v1.16 setup | Select sound output | futodetect best device | AMD Interuave | » Gravis Ultrasound | | Sound Blaster v1.8 or clone | Sound Bl
+pcteam_cd36_tg98_in4k.zip__dig_x_digielem.com	dig_x/digielem.com	75	exit	bon		
+pcteam_cd36_tg98_in64.zip__rct_x_tur3.exe	rct_x/tur3.exe	11	exit	bon		
+pcteam_cd36_tg98_in64.zip__rco_x_acrack.exe	rco_x/acrack.exe	41	exit	bon		
+pcteam_cd36_tg98_in64.zip__nam_x_nameless.exe	nam_x/nameless.exe	50	exit	bon		
+pcteam_cd37_takeover98_demo_immort.zip__rtm.exe	rtm.exe	0	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd38_WIR98_DEMO_REHASH.ZIP__rtm.exe	rtm.exe	0	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd36_tg98_in64.zip__d3_x_sinx.exe	d3_x/sinx.exe	104	exit	bon		
+pcteam_cd43_TheParty98_Demos_b_stateofmind.zip__wmind.exe	wmind.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd43_TheParty98_Demos_moai.zip__moai32.exe	moai32.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd46_Volcanic99_demo_past.zip__past32.exe	past32.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd46_Volcanic99_demo_jumpy.zip__jumpywin.exe	jumpywin.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd36_tg98_in64.zip__bmb_x_commie.exe	bmb_x/commie.exe	66	exit	bon		
+pcteam_cd42_DreamHack98_demo_voice_by.zip__final_x_temp_pc_main.exe	final_x/temp/pc/main.exe	53	exit	bon		
+pcteam_cd36_ms98_in4k.zip__blo_x_blobs.com	blo_x/blobs.com	854	timeout	bon		
+pcteam_cd46_Volcanic99_demo_m-evo.zip__popsy.com	popsy.com	128	ok	bon		
+pcteam_cd49_TKOVER99_IN64_POLE.ZIP__pole.exe	pole.exe	77	exit	bon		
+pcteam_cd50_ASSEMB_1_IN4K_FILEIDDI.ZIP__entry_file_id.exe	entry/file_id.exe	7	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd49_TKOVER99_IN64_BK.ZIP__bk.exe	bk.exe	111	exit	bon		
+pcteam_cd50_ASSEMB_1_IN4K_FILEIDDI.ZIP__release_file_id.exe	release/file_id.exe	7	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd50_ASSEMB_1_IN4K_NATURE_B.ZIP__compo.com	compo.com	23	exit	bon		
+pcteam_cd50_ASSEMB_1_IN4K_PHYGO_BY.ZIP__compo.com	compo.com	11	exit	bon		
+pcteam_cd49_TKOVER99_IN64_RUBICON.ZIP__rubicon.exe	rubicon.exe	81	exit	bon		
+pcteam_cd50_ASSEMB_1_IN4K_PHYGO_BY.ZIP__phygosrc_x_demo.com	phygosrc_x/demo.com	11	exit	bon		
+pcteam_cd50_ASSEMB_1_IN4K_SAVE_WOR.ZIP__swkilpa.com	swkilpa.com	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	Pellasta muailma | jos visttit
+pcteam_cd50_ASSEMB_1_IN4K_PASTEL_4.ZIP__compo.com	compo.com	57	exit	bon		
+pcteam_cd50_ASSEMB_1_IN4K_PASTEL_4.ZIP__compo_compo.com	compo/compo.com	57	exit	bon		
+pcteam_cd50_ASSEMB_1_IN64_PUHEAIKA.ZIP__dos32.exe	dos32.exe	0	exit	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	
+pcteam_cd50_ASSEMB_1_IN4K_THE_ANSW.ZIP__compo_answer_c.com	compo/answer_c.com	23	exit	bon		
+pcteam_cd54_norvegia99_demo_bevegels.zip__bevew.exe	bevew.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd50_ASSEMB_1_IN4K_RADIANT_.ZIP__radiantc.com	radiantc.com	39	exit	bon		
+pcteam_cd53_dreamhack99_in64_rpl_clen.zip__clean.exe	clean.exe	76	exit	bon		
+pcteam_cd50_ASSEMB_1_IN4K_WAND_OF_.ZIP__compwand.com	compwand.com	77	exit	bon		
+pcteam_cd57_demobit2K_demos_ebobr.zip__quijotte.exe	quijotte.exe	97	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_demos_ebobr.zip__jplattic.exe	jplattic.exe	99	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_demos_ebobr.zip__jpdrop.exe	jpdrop.exe	101	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_demos_ebobr.zip__rainbows.exe	rainbows.exe	100	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_demos_ebobr.zip__jpsnail.exe	jpsnail.exe	99	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_demos_ebobr.zip__jptile.exe	jptile.exe	99	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_demos_ebobr.zip__magcross.exe	magcross.exe	100	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_in64_pbpt.zip__pbpt_pv.exe	pbpt_pv.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd57_demobit2K_demos_ebobr.zip__jpdance.exe	jpdance.exe	100	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd58_Thegathering2k_in64_scratch2.zip__mouse.exe	mouse.exe	0	exit	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	
+pcteam_cd58_escape2k_matura97.zip__m2.exe	m2.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd59_Mekka_symposium_2000_32kgame_chess32k.zip__source_x_2304_CHESS32K.EXE	source_x/2304/CHESS32K.EXE	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	> 1 Spieler + | 2 Spieler | Optionen | Regeln | Info | Ende
+pcteam_cd59_Mekka_symposium_2000_in4k_dma_glmr.zip__glamour.exe	glamour.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd57_demobit2K_demos_ebobr.zip__cuwave.exe	cuwave.exe	98	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd57_demobit2K_demos_ebobr.zip__jpstar.exe	jpstar.exe	100	exit	remplace	relancé dans un balayage plus récent	
+pcteam_cd59_Mekka_symposium_2000_in4k_sq.zip__sq_opl2.com	sq_opl2.com	66	exit	bon		
+pcteam_cd59_Mekka_symposium_2000_in64_exd-h7p.zip__heaven7w.exe	heaven7w.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd59_Mekka_symposium_2000_in64_h7-final.zip__heaven7w.exe	heaven7w.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd59_Mekka_symposium_2000_in64_dest.zip__dest_gus.exe	dest_gus.exe	33	exit	bon		
+pcteam_cd59_Mekka_symposium_2000_in64_crn_falco.zip__sb_ver_falco_sb.exe	sb_ver/falco_sb.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd58_birdie2000_in64_trinity-funkstar.zip__gus.exe	gus.exe	109	exit	bon		
+pcteam_cd59_Millenium_2000_in4k_xfactor.zip__sources_z.com	sources/z.com	11	exit	bon		
+pcteam_cd59_Mekka_symposium_2000_in4k_sq.zip__sq.com	sq.com	66	exit	bon		
+pcteam_cd59_Mekka_symposium_2000_in64_matrix.zip__matrix_matrix.exe	matrix/matrix.exe	86	exit	bon		
+pcteam_cd63_Bcn2000_hatbcn_final-hansa.zip__hatbcn.com	hatbcn.com	109	exit	bon		
+pcteam_cd59_Millenium_2000_in4k_mozilla.zip__part2.com	part2.com	450	error	bon		
+pcteam_cd64_Dialogos_In4k_stoerfall_ost.zip__stoerfall_ost_party.com	stoerfall_ost_party.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd71_MekkaSymposium_IN4K_TS_MS2K1.ZIP__ts_ms2k1_uncompressed.exe	ts_ms2k1_uncompressed.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd64_Dialogos_In4k_stoerfall_ost_final.zip__stoerfall_ost_final.com	stoerfall_ost_final.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001.zip__all_versions_x_juggler_400.com	all versions_x/juggler_400.com	1	ok	setup	bloqué sur un menu : trouver les touches	GMIDI @ 3xBh?
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001.zip__juggler_240.com	juggler_240.com	44	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001.zip__all_versions_x_juggler_nomusic.com	all versions_x/juggler_nomusic.com	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001.zip__all_versions_x_juggler_240.com	all versions_x/juggler_240.com	44	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001.zip__all_versions_x_juggler_200.com	all versions_x/juggler_200.com	44	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_16bit_juggler_16_400.com	all versions_x/16bit/juggler_16_400.com	1	ok	setup	bloqué sur un menu : trouver les touches	GMIDI @ 3x@h? CESC for no music)
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_8bit_juggler_8bit.com	all versions_x/8bit/juggler_8bit.com	47	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_16bit_juggler_16_240.com	all versions_x/16bit/juggler_16_240.com	1	ok	setup	bloqué sur un menu : trouver les touches	GMIDI @ 3x@h? CESC for no music)
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_16bit_juggler_16_200.com	all versions_x/16bit/juggler_16_200.com	45	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_8bit_juggler_grayscale.com	all versions_x/8bit/juggler_grayscale.com	45	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_32bit_juggler_32_400.com	all versions_x/32bit/juggler_32_400.com	1	ok	setup	bloqué sur un menu : trouver les touches	GMIDI @ 3x@h? CESC for no music)
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_32bit_juggler_32_240.com	all versions_x/32bit/juggler_32_240.com	44	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__juggler_final.com	juggler_final.com	43	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_timedemo_juggler_timedemo1.com	all versions_x/timedemo/juggler_timedemo1.com	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_timedemo_juggler_timedemo2.com	all versions_x/timedemo/juggler_timedemo2.com	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_IN4K_varus_by_kolor.zip__varus_by_kolor_w2k.com	varus_by_kolor/w2k.com	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_IN4K_varus_by_kolor.zip__varus_by_kolor_compatible.exe	varus_by_kolor/compatible.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd71_MekkaSymposium_IN4K_varus_by_kolor.zip__varus_by_kolor_w98.com	varus_by_kolor/w98.com	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_fastintro_FAST_FO.ZIP__mnt_aweutil.com	mnt/aweutil.com	0	exit	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	
+pcteam_cd73_paradox2001_in64_nicht.zip__nicht.exe	nicht.exe	0	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd73_paradox2001_in64_nicht.zip__w_nicht.exe	w_nicht.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd73_paradox2001_in64_nicht_f.zip__dos_gus_nicht.exe	dos_gus/nicht.exe	0	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd73_paradox2001_in64_nicht_f.zip__win_w_nicht.exe	win/w_nicht.exe	0	win32	win32	relancer avec --win32	
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_32bit_juggler_32_200.com	all versions_x/32bit/juggler_32_200.com	45	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__juggler_party.com	juggler_party.com	44	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_illusion-prefinal.zip__illusion-compo.com	illusion-compo.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
