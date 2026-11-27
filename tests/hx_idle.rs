@@ -57,7 +57,10 @@ fn waiting_message_box_does_not_burn_a_core() {
     let _ = child.wait();
     let wall = started.elapsed().as_secs_f64();
     let cpu = children_cpu_seconds() - before;
+    // Le texte de la boîte est aussi écrit sur la sortie d'erreur de HX (hxstderr.log) : diagnostic des démos qui finissent dans une boîte.
+    let log = std::fs::read_to_string(dir.join("hxstderr.log")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(log.contains("[MessageBox] msgbox: waiting"), "hxstderr.log : {log:?}");
     assert!(wall > 6.0, "le programme s'est arrêté trop tôt ({wall:.1} s) : la boîte n'a pas attendu");
     assert!(cpu / wall < 0.35, "une boîte de message en attente occupe {:.2} cœur ({cpu:.1} s de CPU en {wall:.1} s)", cpu / wall);
 }

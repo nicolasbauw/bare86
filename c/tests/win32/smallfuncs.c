@@ -30,6 +30,8 @@ int main(void)
     DWORD (WINAPI *cbv)(void);
     BOOL (WINAPI *icce)(void *);
     BYTE dib[64];
+    HMODULE wi, c2;
+    int wininet_ok, imagelist_ok;
     int sbm, hatch, dibpat, rrgn, guid1, guid2, ps, cbvr, iccer;
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = wp; wc.hInstance = GetModuleHandle(NULL); wc.lpszClassName = "sf";
@@ -85,6 +87,11 @@ int main(void)
     cc = LoadLibrary("COMCTL32.DLL");
     icce = cc ? (BOOL (WINAPI *)(void *))GetProcAddress(cc, "InitCommonControlsEx") : NULL;
     iccer = icce ? icce(NULL) : -1;
+    wi = LoadLibrary("WININET.DLL");
+    wininet_ok = wi && GetProcAddress(wi, "InternetGetConnectedState") && GetProcAddress(wi, "FtpOpenFileA") && GetProcAddress(wi, "InternetSetFilePointer");
+    c2 = cc;
+    imagelist_ok = c2 && GetProcAddress(c2, "ImageList_Create") && GetProcAddress(c2, "ImageList_Draw");
+    fprintf(f, "more2=wininet:%d imagelist:%d\n", wininet_ok != 0, imagelist_ok != 0);
     fprintf(f, "more=stretch:%d hatch:%d dibpat:%d rrgn:%d ps:%d guid:%d,%d cbv:%x icce:%d\n", sbm, hatch, dibpat, rrgn, ps, guid1, guid2, cbvr, iccer);
     fclose(f);
     red = CreateSolidBrush(RGB(255, 0, 0));

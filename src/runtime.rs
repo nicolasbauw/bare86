@@ -58,8 +58,8 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
 /// vide) est installé s'il manque ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.11";
-const HX_FORK_FILES: [(&str, &str, &[&str]); 8] = [
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.12";
+const HX_FORK_FILES: [(&str, &str, &[&str]); 9] = [
     (
         "DPMILD32.EXE",
         "02a94dbbc79b05bd06f54845cb6d1b143337ecc7265a7c17bc1539c61c978ec3",
@@ -67,8 +67,9 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 8] = [
     ),
     (
         "DGDI32.DLL",
-        "fd10cb7497ad3605d573a5a9d0537e66fde205a7cfb743d370368f4768ee5d4b",
+        "f6312813bac8bf3402f179b7965ad01b8d2b81f629b8a290fcb127a5deacb4d6",
         &[
+            "fd10cb7497ad3605d573a5a9d0537e66fde205a7cfb743d370368f4768ee5d4b",
             "39ef30e57b498ea829eb10670d3164b11ecf805fc886e1a32fa3730733ec2a58",
             "d41ae9fcb7de5d693da0bf6b91649b889801ef3416e78ca12c2994c0c6e8c8c3",
             "19674b98e36ed5b87eac7fbed400179266a0687764ed4cd59631795706025af3",
@@ -85,8 +86,9 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 8] = [
     ),
     (
         "DUSER32.DLL",
-        "247c9b03ecc058ac8f5e9bf800a88e7f735e5c3b657735f1ca8c62e7a014f7ae",
+        "4e9b790223526a37f3f3ed539f8c11faad89e114f612325b61b33886516938e7",
         &[
+            "247c9b03ecc058ac8f5e9bf800a88e7f735e5c3b657735f1ca8c62e7a014f7ae",
             "9f8dd1357ae981d27ea564536977911cf8b830acbf915991ae68ef880f272082",
             "3cc6c4d516aa7723aa1aaa970d37356a53643c337271b3afb66c7e6848ec7cac",
             "5e28a471df2a623c399e5d61a02dc2181e4ec233b0d3fb3f70bd15c0711d1e0a",
@@ -104,13 +106,25 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 8] = [
     // OLE32 et COMCTL32 reconstruits (IsEqualGUID, CoBuildVersion ; InitCommonControlsEx)
     (
         "OLE32.DLL",
-        "6ad368dd773087a3e936668176d73afa4fca880f5a2402edf555c9b55e674b18",
-        &["26583ff37329eb4c792476df1acf87f66f5002ff5f7bf17edde9aba2ff14b4d8"],
+        "92d3cc2ef79cc8ab295866efd48f856628450f52b83302650de71abc23b1128a",
+        &[
+            "6ad368dd773087a3e936668176d73afa4fca880f5a2402edf555c9b55e674b18",
+            "26583ff37329eb4c792476df1acf87f66f5002ff5f7bf17edde9aba2ff14b4d8",
+        ],
     ),
     (
         "COMCTL32.DLL",
-        "3738907a38cd068780930452b10e86f759d559fcceff5dde519d253b1010f9f0",
-        &["969968782b79bab7c7c98074a815f5a5bfece24546466c47895da320e2108605"],
+        "940e46fd80ffe6eb1c9a390933f882bdbb898978712881d9b57f5044d0453734",
+        &[
+            "3738907a38cd068780930452b10e86f759d559fcceff5dde519d253b1010f9f0",
+            "969968782b79bab7c7c98074a815f5a5bfece24546466c47895da320e2108605",
+        ],
+    ),
+    // WININET.DLL : HX n'en a pas (accès Internet absent : les fonctions répondent « non connecté ») ; installée si elle manque
+    (
+        "WININET.DLL",
+        "9cd285fbd9804584386f9736982175ca46097ec920149454d9882ab27be76bf2",
+        &[],
     ),
     // sans équivalent dans HX : installée si elle manque (liste de binaires officiels vide)
     (
