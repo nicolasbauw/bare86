@@ -424,8 +424,9 @@ impl KvmVm {
                 dbg.arch.debugreg[7] |= 1 << (2 * i);
                 // BARE86_HWBP_W : surveillance des écritures de 4 octets
                 // (R/W = 01, LEN = 11) ; arrêt après l'instruction qui écrit.
-                if std::env::var_os("BARE86_HWBP_W").is_some() {
-                    dbg.arch.debugreg[7] |= 0b1101 << (16 + 4 * i);
+                // `BARE86_HWBP_W=rw` : lectures ET écritures (R/W = 11).
+                if let Some(w) = std::env::var_os("BARE86_HWBP_W") {
+                    dbg.arch.debugreg[7] |= if w == "rw" { 0b1111 } else { 0b1101 } << (16 + 4 * i);
                 }
             }
         }

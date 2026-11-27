@@ -123,7 +123,7 @@ const VBE_PM_LEN: u16 = 0x8A;
 /// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
 /// parcourent la liste et lisent les caractéristiques de chaque mode) : 32 bits
 /// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2), 320×240 et 320×200.
-const VBE_MODE_LIST: [(u16, usize, usize, usize); 36] = [
+const VBE_MODE_LIST: [(u16, usize, usize, usize); 41] = [
     (0x100, 640, 400, 8),
     (0x101, 640, 480, 8),
     (0x103, 800, 600, 8),
@@ -161,6 +161,12 @@ const VBE_MODE_LIST: [(u16, usize, usize, usize); 36] = [
     (0x130, 320, 400, 16),
     // 320×200 en 32 bits tel que SciTech Display Doctor 5.3 le numérote (X-398363 : « Linear frame buffer not found »).
     (0x146, 320, 200, 32),
+    // 400×300 (UniVBE) : « Lucky Day » (BugX, Mekka 98) le cherche en 16 bits (BugxModeCode(400,300,16)).
+    (0x137, 400, 300, 8),
+    (0x138, 400, 300, 15),
+    (0x139, 400, 300, 16),
+    (0x13A, 400, 300, 24),
+    (0x13B, 400, 300, 32),
     // 320×240 en 256 couleurs sous les numéros que Bazar (Smash Designs, Se98) essaie en premier (« VBE3 mode? »).
     (0x164, 320, 240, 8),
     (0x1F8, 320, 240, 8),
@@ -691,7 +697,13 @@ impl Bios {
     fn vbe(&mut self, cpu: &mut Cpu, mem: &GuestMem) -> Flow {
         let al = cpu.lo(AX);
         let es_di = lin(cpu.sreg(ES), cpu.w(DI));
-        let rom = |off: u16| (u32::from(ROM_SEG) << 16) | u32::from(off);
+        // Pointeurs du bloc d'information VBE : segment:décalage normalisés (décalage < 16). Le code de SciTech repris dans des
+        // démos (LFBPROF : ewox) calcule l'adresse linéaire en `(ptr >> 12) + (ptr & 0xFFFF)`, qui ajoute le quartet haut du
+        // décalage : avec F000:EA00 la liste des modes était lue 14 octets trop loin (les sept premiers modes sautés).
+        let rom = |off: u16| {
+            let lin = (ROM.start as u32) + u32::from(off);
+            ((lin >> 4) << 16) | (lin & 0xF)
+        };
         let ok = match al {
             // Information sur le contrôleur ; bloc VBE 2.0 de 512 octets si
             // l'appelant a écrit « VBE2 ».

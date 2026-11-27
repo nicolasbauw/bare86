@@ -581,6 +581,8 @@ pub struct Pc<B: Backend = KvmVm> {
     /// qui n'a rien pu exécuter (mode non éligible : code 16 bits…).
     jit_backoff: u32,
     trace_int: bool,
+    /// `--trace-int` : l'appel en cours est un AX=4F01h (VBE), dont on montre le bloc rendu.
+    trace_vbe_info: Option<()>,
     /// Services non gérés déjà signalés (vecteur, AH).
     unhandled: BTreeSet<(u8, u8)>,
     /// État de la porte A20 appliqué aux slots mémoire.
@@ -834,6 +836,7 @@ impl<B: Backend> Pc<B> {
             last_trim: Instant::now(),
             stop_at_breakpoint: false,
             trace_int: cfg.trace_int,
+            trace_vbe_info: None,
             interp: cfg.interp,
             jit: None,
             // BARE86_JIT (diagnostics) force le traducteur.
@@ -2031,13 +2034,15 @@ impl<B: Backend> Pc<B> {
             let sp = cpu.linear(2, cpu.gpr[4] & 0xFFFF) as usize;
             let (ip, cs) = (mem.read_u16(sp), mem.read_u16(sp + 2));
             eprintln!(
-                "[int] {vector:02X}h AX={:04X} BX={:04X} CX={:04X} DX={:04X} ES={:04X} from {cs:04X}:{ip:04X}",
+                "[int] {vector:02X}h AX={:04X} BX={:04X} CX={:04X} DX={:04X} ES={:04X} DI={:04X} from {cs:04X}:{ip:04X}",
                 cpu.gpr[0] & 0xFFFF,
                 cpu.gpr[3] & 0xFFFF,
                 cpu.gpr[1] & 0xFFFF,
                 cpu.gpr[2] & 0xFFFF,
-                cpu.seg[0].selector
+                cpu.seg[0].selector,
+                cpu.gpr[7] & 0xFFFF
             );
+            self.trace_vbe_info = (vector == 0x10 && (cpu.gpr[0] & 0xFFFF) == 0x4F01).then_some(());
             if vector == 0x06 {
                 // Opcode invalide : les octets de l'instruction fautive.
                 let at = (usize::from(cs) << 4) + usize::from(ip);
@@ -2172,6 +2177,12 @@ impl<B: Backend> Pc<B> {
                 cpu.seg[0].selector,
                 flags & 1
             );
+            // VBE : bloc d'information de mode rendu par AX=4F01h (ES:DI).
+            if vector == 0x10 && (cpu.gpr[0] & 0xFFFF) == 0x004F && self.trace_vbe_info.take().is_some() {
+                let at = ((cpu.seg[0].selector as usize) << 4) + (cpu.gpr[7] & 0xFFFF) as usize;
+                let b: Vec<String> = (0..0x32).map(|i| format!("{:02X}", mem.read_u8(at + i))).collect();
+                eprintln!("      mode info: {}", b.join(" "));
+            }
         }
         self.sync_a20()?;
         self.vm.set_state(&cpu)?;

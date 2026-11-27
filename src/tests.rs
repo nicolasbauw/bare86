@@ -501,3 +501,8 @@ fn int10_graphics_pixels_text_and_scroll() {
 fn bios_and_dos_completion_services() {
     assert_eq!(run(program!("biosmisc")).0, 0, "n° du contrôle en échec (voir asm/tests/biosmisc.S)");
 }
+
+#[test]
+fn vbe_info_pointers_are_normalised() {
+    assert_eq!(run(program!("vbeinfo")).0, 0, "n° du contrôle en échec (voir asm/tests/vbeinfo.S)");
+}
