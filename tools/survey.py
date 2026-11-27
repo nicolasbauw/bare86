@@ -417,9 +417,13 @@ def watch_run(command, cwd, shots, args, timeout):
             # Une scène à petits mouvements (sprite sur fond noir : bel_wazo, ELE, goatzill) change peu entre deux captures : une capture
             # est aussi gardée toutes les 30 s si l'écran a un peu bougé, et un écran qui bouge un peu n'est pas « figé » (pas d'arrêt idle).
             heartbeat = d is not None and d > 0.8 and now - last_keep > 30
-            if d is not None and d <= args.change and d > 0.3 and not heartbeat:
+            # Scène « monotone » (20 scènes gardées qui se ressemblent toutes : effet aléatoire, rayons de NEON, flammes) : on ne garde
+            # plus que les vrais changements (écart > 20) et le battement de 30 s, au lieu d'une capture par seconde de la même image.
+            monotone_now = len(kept_thumbs) >= 20 and all(thumb_diff(x, kept_thumbs[-1]) < 20 for x in kept_thumbs[-20:])
+            threshold = 20 if monotone_now else args.change
+            if d is not None and d <= threshold and d > 0.3 and not heartbeat:
                 last_new = now
-            if last_thumb is None or d > args.change or heartbeat:
+            if last_thumb is None or d > threshold or heartbeat:
                 last_keep = now
                 if not heartbeat:
                     last_scene = now
