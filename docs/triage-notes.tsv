@@ -32,3 +32,4 @@ cd46_Volcanic99_demo_past.zip	a-etudier	« video mode does not exist » (verdict
 cd38_WIR98_DEMO_REHASH.ZIP__rtm.exe	outil	RTM.EXE : extendeur DPMI de Borland (la démo est rehash.exe)
 cd37_takeover98_demo_immort.zip__rtm.exe	outil	RTM.EXE : extendeur DPMI de Borland (la démo est une autre exécutable de l'archive)
 cd73_paradox2001_in64_nicht	a-corriger	Zurenava DOS extender 0.42 : n'affiche rien et sort sans hôte DPMI ; OK avec --dpmi (HDPMI32 résident) : réessai automatique ajouté à survey.py
+cd73_paradox2001_in64_nicht.zip__nicht_sb.exe	variante	version Sound Blaster de nicht.exe : même démo, seule la carte son diffère (décision de l'utilisateur : inutile de s'acharner)

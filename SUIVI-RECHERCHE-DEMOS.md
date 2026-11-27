@@ -1009,3 +1009,7 @@ Les démos DOS sont majoritaires jusqu'à fin 1998 (tableau « Part des démos W
 ## Défaut de `survey.py` trouvé (2026-11-27) : les réessais EFFAÇAIENT de bonnes captures
 - Cas `hypno2.exe` (le mouton) : 138 scènes au premier essai, mais 0 au résultat. **Cause** : après un premier essai réussi, le programme qui rend la main en affichant un texte contenant « usage/parameter/dpmi/…» déclenchait des réessais (`param_candidates`, `--dpmi`, `--ems`) ; chaque réessai commence par EFFACER les captures du précédent, et le réessai (qui échoue en 2 s) écrasait le résultat. Probablement une cause de nombreux « exit à 0–1 scène » des anciens balayages (20 éléments de `scan-full` portent la trace d'un réessai avec ≤ 1 scène).
 - **Correctif** : plus aucun réessai dès que le premier essai garde ≥ 2 scènes ; `SURVEY_DEBUG=1` trace chaque `execute` et chaque capture vue.
+
+## Règle : variantes qui ne diffèrent que par la carte son (2026-11-27, décision de l'utilisateur)
+- Quand une archive contient plusieurs versions d'une même démo ne différant que par la carte son (`nicht.exe` / `nicht_sb.exe` / `dos_gus/nicht.exe`, `*_sb`, `*_gus`, `*_pas`…), une seule capture complète suffit : on ne s'acharne pas sur les autres. Classe `variante` dans `docs/triage-notes.tsv`.
+- `scan-def4` : `nicht.exe` 123 scènes et `dos_gus/nicht.exe` 120 (réessai automatique `--dpmi` pour l'extendeur Zurenava), `nicht_sb.exe` 1 (variante, laissée).
