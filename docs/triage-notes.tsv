@@ -21,3 +21,11 @@ DH97_MISC_STARDATE.ZIP	outil	stardate : affiche « Stardate is … » (blague)
 RAGE97_DEMOS_MOTFIX.ZIP	outil	motfix : correctif de fichier (PMODE/W puis retour au DOS)
 WIR97_GAME100K_1	a-etudier	GAME.EXE (Eclipse) : « IPX Driver not Found »
 WIR97_GAME100K_4	a-etudier	NFF.EXE : XMS corrigé (plafond 32 Mo) puis « Internal Error EIP=1 »
+cd37_takeover98_demo_soepkip3.zip	defectueux	archive incomplète : FRAME.EXE réclame 3TXT.PCX, absent de l'archive (« File not found: 3txt.pcx »)
+cd47_PROXY99_demo_milleniumfever.zip	defectueux	archive incomplète : MFEVER.EXE ouvre mfever.xm, absent de l'archive (« MIDAS error: File does not exist »)
+cd49_TKOVER99_IN64	a-etudier	dossier contenant des archives auto-extractibles Windows (AXIA_SW.EXE…) : à extraire autrement
+cd64_Lobotomia_Demos_korruptio_by_wamma.zip	a-etudier	PMODE/W (LE) : s'arrête juste après la bannière, sans capture (triple faute sous tryitem)
+cd66_demo_wamma_-_hei_lopeta_et_saa.zip	a-etudier	idem : PMODE/W (LE), aucune capture
+cd30_DST97_DEMO_ATMOZ2.ZIP	a-etudier	Credex PI-mode : après le choix de la carte, « INT 6Ch AH=00h not handled » puis arrêt
+cd67_MindSource_2001_demo_ride.zip	a-etudier	survey/tryitem ne trouvent pas d'exécutable (pick() rend None)
+cd46_Volcanic99_demo_past.zip	a-etudier	« video mode does not exist » (verdict utilisateur) ; past32.exe est la version Windows
