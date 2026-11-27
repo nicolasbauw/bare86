@@ -411,6 +411,8 @@ def watch_run(command, cwd, shots, args, timeout):
                 continue
             seen.add(f)
             t = thumb(path)
+            if os.environ.get("SURVEY_DEBUG"):
+                print(f"[watch] {f} diff={thumb_diff(t, last_thumb) if last_thumb is not None else None}", file=sys.stderr, flush=True)
             if last_thumb is None or thumb_diff(t, last_thumb) > args.change:
                 kept.append(f)
                 kept_thumbs.append(t)
@@ -655,6 +657,8 @@ def run_one(item, args, src, only=None):
             if args.full:
                 out, timed, kept, killed = watch_run(command, os.path.dirname(exe), shots, args, args.limit + 90)
                 res["kept"], res["idle_killed"] = kept, bool(killed)
+                if os.environ.get("SURVEY_DEBUG"):
+                    print(f"[execute] {' '.join(command[-6:])} kept={kept} killed={killed} dur={LAST.duration:.0f}", file=sys.stderr, flush=True)
                 res["duration"] = round(LAST.duration)
                 if LAST.loop:
                     res["loop"] = LAST.loop
@@ -669,6 +673,8 @@ def run_one(item, args, src, only=None):
 
         for attempt in range(3):
             out, timed = execute(cmd)
+            if (res.get("kept") or 0) >= 2:
+                break  # des scènes : pas de réessai (il effacerait ces captures)
             # Un gestionnaire de mémoire étendue présent est refusé (« KERNEL PANIC: EMM MANAGER DETECTED ») :
             # nouvel essai sans EMS.
             if not timed and re.search(r"emm manager|emm386|qemm|expanded memory manager|ems manager", out, re.I) and "--ems" not in cmd:
@@ -704,7 +710,9 @@ def run_one(item, args, src, only=None):
         # Rendu au DOS (ou plantage) sans paramètre, alors que le texte en annonce :
         # réessai avec un paramètre neutre, puis avec ceux que le texte propose
         # (Decapitation plante sur argv[1] nul sans paramètre).
-        if not extra and not timed and "time limit reached" not in out and (PARAM_HINT.search(out) or "SIGSEGV" in out):
+        # (Seulement si le premier essai n'a rien donné : chaque réessai EFFACE les captures du précédent ; un programme qui rend la main
+        # après de vraies scènes et affiche un texte de fin voyait ses captures détruites par un réessai à vide.)
+        if (res.get("kept") or 0) < 2 and not extra and not timed and "time limit reached" not in out and (PARAM_HINT.search(out) or "SIGSEGV" in out):
             for cand in param_candidates(out):
                 out2, timed2 = execute(cmd + [cand])
                 if "time limit reached" in out2:

@@ -1000,3 +1000,12 @@ Les démos DOS sont majoritaires jusqu'à fin 1998 (tableau « Part des démos W
 
 ## Périmètre : magazines sur disquette exclus (2026-11-27, décision de l'utilisateur)
 - Les « diskmags » (`MAGS/PAIN*`, `STG-*`/`TGD-*` (Technoguide), `RC-VOL01` (volvo), `PLSCENE*`, `SHINE*`…) ne nous intéressent pas : 2 à 4 captures de texte y sont normales, inutile de les paginer. Verdict manuel `magazine` dans `docs/triage-notes.tsv` (règle `MAGS_`, exceptions `SCENIAL4` et `TRIP5` qui restent à voir). À écarter des décomptes « < 5 scènes » par année.
+
+## Périmètre : dossiers `demo`/`demos` et `in64` seulement (2026-11-27, précisé par l'utilisateur)
+- Les CD sont organisés par demoparty ; **seuls les dossiers `demo` (ou `demos`) et `in64` nous intéressent** ; le reste (musiques, diskmags, intros 4K, images, jeux, utilitaires…) est ignoré. `tools/triage.py` : classe `hors-perimetre` (expression `SCOPE`) ; `64k`/`64ko`/`in64k` sont des variantes de nom de `in64` (CD 27 : `WIR97/64K`) : comptées dans le périmètre.
+- **Mesure sur `scan-full`** (687 éléments) : 350 dans `demo`/`demos`/`in64`, dont 43 à moins de 5 scènes (hors win32) ; par CD : 27 : 15, 28 : 37, 29 : 49, 30 : 27, 31 : 11, 32 : 23, 33 : 6, 34 : 7, 35 : 13, 37 : 10, 38 : 11, 39 : 18, 42 : 16 …
+- Conséquence : les intros 1K/4K (`1KO`, `4KO`, `IN4K`), `GAME100K`, `MISC`, `PICS`, `MAGS`, `GRTC`/`MMUL` (graphismes, musique) sortent des décomptes et des relances.
+
+## Défaut de `survey.py` trouvé (2026-11-27) : les réessais EFFAÇAIENT de bonnes captures
+- Cas `hypno2.exe` (le mouton) : 138 scènes au premier essai, mais 0 au résultat. **Cause** : après un premier essai réussi, le programme qui rend la main en affichant un texte contenant « usage/parameter/dpmi/…» déclenchait des réessais (`param_candidates`, `--dpmi`, `--ems`) ; chaque réessai commence par EFFACER les captures du précédent, et le réessai (qui échoue en 2 s) écrasait le résultat. Probablement une cause de nombreux « exit à 0–1 scène » des anciens balayages (20 éléments de `scan-full` portent la trace d'un réessai avec ≤ 1 scène).
+- **Correctif** : plus aucun réessai dès que le premier essai garde ≥ 2 scènes ; `SURVEY_DEBUG=1` trace chaque `execute` et chaque capture vue.

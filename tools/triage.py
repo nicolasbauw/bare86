@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tri des résultats d'un balayage d'exécutables (`scan-dos2`…) : pour chaque ligne, une CLASSE et l'ACTION à mener.
 
-Classes : magazine (diskmag : exclu du périmètre, verdict manuel), remplace (relancé plus tard), court (programme qui rend la main en moins de 12 s : trop peu de captures à 2 s d'intervalle), pub (exécutable publicitaire connu), doublon (mêmes captures qu'un autre élément : `dup-shots.py`), outil (pilote,
+Classes : hors-perimetre (ni demo/demos ni in64), magazine (diskmag : exclu du périmètre, verdict manuel), remplace (relancé plus tard), court (programme qui rend la main en moins de 12 s : trop peu de captures à 2 s d'intervalle), pub (exécutable publicitaire connu), doublon (mêmes captures qu'un autre élément : `dup-shots.py`), outil (pilote,
 utilitaire, lecteur), a-relancer (message « not handled » d'une fonction BIOS ajoutée depuis), setup (le texte lu à l'écran par OCR
 demande une carte son/une configuration/une touche), win32 (programme Windows, jamais lancé : relancer avec --win32), vide (0–1 capture
 sans texte lisible : à examiner), peu (2–4 scènes), bon (≥ 5 scènes).
@@ -20,6 +20,15 @@ PUB = re.compile(r"pitrlz|!art!|zmep5|(^|/)vnt\.exe$", re.I)
 TOOL = re.compile(r"aweutil|s3vbe|restore\.com|(^|/)mouse\.exe$|testapp|setup|install|config|(^|/)file_id\.exe$|(^|/)dos32\.exe$|(^|/)p\.exe$", re.I)
 SETUP = re.compile(r"sound ?card|select sound|sound output|setup|configuration|gmidi|esc for no music|press any key|choose|select", re.I)
 NOTHANDLED = re.compile(r"INT 10h AH=(0C|0D|1B|04|0B|14)h not handled|INT 1[47]h|INT 16h AH=(04|09|0A)h")
+
+
+# Périmètre (décision de l'utilisateur, 2026-11-27) : seuls comptent les dossiers `demo`/`demos` et `in64` des CD (le reste : musiques,
+# diskmags, intros 4K, images…). `64k`/`64ko`/`in64k` sont des variantes de nom de `in64` : comptées dans le périmètre, signalées.
+SCOPE = re.compile(r"(^|/)(demos?|in64|in64k|64k|64ko)(/|$)", re.I)
+
+
+def in_scope(item):
+    return bool(SCOPE.search(item))
 
 
 def notes(path):
@@ -72,7 +81,9 @@ def main():
                 text = ocr(os.path.join(shots, pics[-1]))
         verdict = next(((c, n) for key, c, n in manual if key in x["id"]), None)
         short = x["status"] == "exit" and (x.get("seconds") or 99) < 12
-        if verdict:
+        if not in_scope(x.get("item", "")) and not verdict:
+            cls, act = "hors-perimetre", "hors du périmètre (ni demo/demos ni in64)"
+        elif verdict:
             cls, act = verdict[0], verdict[1] or "verdict manuel"
         elif x["id"] in newer:
             cls, act = "remplace", "relancé dans un balayage plus récent"
