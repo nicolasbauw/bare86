@@ -58,8 +58,8 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
 /// vide) est installé s'il manque ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.10";
-const HX_FORK_FILES: [(&str, &str, &[&str]); 6] = [
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.11";
+const HX_FORK_FILES: [(&str, &str, &[&str]); 8] = [
     (
         "DPMILD32.EXE",
         "02a94dbbc79b05bd06f54845cb6d1b143337ecc7265a7c17bc1539c61c978ec3",
@@ -67,8 +67,9 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 6] = [
     ),
     (
         "DGDI32.DLL",
-        "39ef30e57b498ea829eb10670d3164b11ecf805fc886e1a32fa3730733ec2a58",
+        "fd10cb7497ad3605d573a5a9d0537e66fde205a7cfb743d370368f4768ee5d4b",
         &[
+            "39ef30e57b498ea829eb10670d3164b11ecf805fc886e1a32fa3730733ec2a58",
             "d41ae9fcb7de5d693da0bf6b91649b889801ef3416e78ca12c2994c0c6e8c8c3",
             "19674b98e36ed5b87eac7fbed400179266a0687764ed4cd59631795706025af3",
             "1e17bac09e2f38655d7a90310cae5bf7a30483bde592cc97d23dc02d51bba924",
@@ -94,8 +95,22 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 6] = [
     ),
     (
         "WINMM.DLL",
-        "feef20a07d4cff7201dc828a1e039e767756cb36a6cd6e16004785f316595b74",
-        &["569ecc69f6300dd646a14e28a920eb504e7a14ca0f8076693640ea913a9c6048"],
+        "9d56c7d5501d6e3a85b78f028b6272d03fb950e4ffd40cb85499d7f9f2dce800",
+        &[
+            "feef20a07d4cff7201dc828a1e039e767756cb36a6cd6e16004785f316595b74",
+            "569ecc69f6300dd646a14e28a920eb504e7a14ca0f8076693640ea913a9c6048",
+        ],
+    ),
+    // OLE32 et COMCTL32 reconstruits (IsEqualGUID, CoBuildVersion ; InitCommonControlsEx)
+    (
+        "OLE32.DLL",
+        "6ad368dd773087a3e936668176d73afa4fca880f5a2402edf555c9b55e674b18",
+        &["26583ff37329eb4c792476df1acf87f66f5002ff5f7bf17edde9aba2ff14b4d8"],
+    ),
+    (
+        "COMCTL32.DLL",
+        "3738907a38cd068780930452b10e86f759d559fcceff5dde519d253b1010f9f0",
+        &["969968782b79bab7c7c98074a815f5a5bfece24546466c47895da320e2108605"],
     ),
     // sans équivalent dans HX : installée si elle manque (liste de binaires officiels vide)
     (
