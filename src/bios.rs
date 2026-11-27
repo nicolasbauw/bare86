@@ -16,6 +16,13 @@ use crate::interp::Cpu;
 use crate::keyboard;
 use crate::mem::GuestMem;
 
+mod gfx;
+
+thread_local! {
+    /// La VGA de la machine, pour dessiner en mode graphique depuis `tty` (appelé aussi par le DOS, sans accès à la machine).
+    static GFX_VGA: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Segment de la ROM BIOS ; les stubs d'interruption sont en F000:n*16.
 pub const ROM_SEG: u16 = 0xF000;
 pub const ROM: Range<usize> = 0xF_0000..0x10_0000;
@@ -30,6 +37,8 @@ pub const DBCS_TABLE: u16 = 0xE700;
 const FONT_8X16: u16 = 0x1000;
 const FONT_8X14: u16 = 0x2000;
 const FONT_ALT_EMPTY: u16 = 0x2E00;
+/// Police 8×8 (256 caractères, 2 Ko), tirée de la 8×16 en réunissant deux lignes ; INT 43h des modes de 200 lignes.
+const FONT_8X8: u16 = 0x3000;
 /// Routine de conversion de casse des informations nationales (RETF).
 pub const CASE_MAP: u16 = 0xE710;
 
@@ -222,6 +231,8 @@ pub fn install_rom(mem: &GuestMem) {
     mem.write(ROM.start + usize::from(FONT_8X16), crate::font::BUILTIN);
     mem.write(ROM.start + usize::from(FONT_8X14), &crate::font::builtin_8x14());
     mem.write_u8(ROM.start + usize::from(FONT_ALT_EMPTY), 0);
+    let f8: Vec<u8> = crate::font::BUILTIN.chunks(16).flat_map(|g| (0..8).map(move |r| g[2 * r] | g[2 * r + 1])).collect();
+    mem.write(ROM.start + usize::from(FONT_8X8), &f8);
     let modes = ROM.start + usize::from(VBE_MODES);
     for (i, m) in VBE_MODE_LIST.iter().enumerate() {
         mem.write_u16(modes + 2 * i, m.0);
@@ -276,6 +287,7 @@ pub struct Bios {
 
 impl Bios {
     pub fn new(extended_kb: usize, vga: std::rc::Rc<std::cell::RefCell<crate::vga::Vga>>) -> Self {
+        GFX_VGA.with(|g| *g.borrow_mut() = Some(vga.clone()));
         Self { extended_kb, e0: false, warned_modes: BTreeSet::new(), mouse: crate::mouse::Mouse::new(), vbe2: true, vga, disks: Default::default(), host_memory: true }
     }
 
@@ -368,8 +380,12 @@ impl Bios {
             _ => 8,
         };
         mem.write_u8(bda::CHAR_HEIGHT, height);
-        if !text && height > 8 {
-            let font = if height == 14 { FONT_8X14 } else { FONT_8X16 };
+        if !text {
+            let font = match height {
+                14 => FONT_8X14,
+                16 => FONT_8X16,
+                _ => FONT_8X8,
+            };
             mem.write_u16(0x43 * 4, font);
             mem.write_u16(0x43 * 4 + 2, ROM_SEG);
         }
@@ -492,11 +508,38 @@ impl Bios {
                             mem.write_u8(at + pos * 2 + 1, cpu.lo(BX));
                         }
                     }
+                } else {
+                    // Mode graphique : BL = couleur (bit 7 : OU exclusif, sauf en mode 13h).
+                    let (row, col) = cursor(mem, page_bh);
+                    let bl = cpu.lo(BX);
+                    let xor = bl & 0x80 != 0 && mem.read_u8(bda::VIDEO_MODE) != 0x13;
+                    let color = if xor { bl & 0x7F } else { bl };
+                    for i in 0..usize::from(cpu.w(CX)) {
+                        let c = usize::from(col) + i;
+                        if c >= s.cols {
+                            break;
+                        }
+                        gfx::put_char(mem, al, usize::from(row), c, color, xor);
+                    }
                 }
             }
+            // Crayon optique : absent.
+            0x04 => cpu.set_hi(AX, 0),
+            // Couleur de fond/bordure (BH=0) ou palette CGA (BH=1) : mémorisées dans la BDA.
+            0x0B => {
+                let old = mem.read_u8(bda::PALETTE);
+                let new = if cpu.hi(BX) == 0 { (old & !0x1F) | (cpu.lo(BX) & 0x1F) } else { (old & !0x20) | (cpu.lo(BX) & 1) << 5 };
+                mem.write_u8(bda::PALETTE, new);
+            }
+            0x0C => gfx::write_pixel(mem, cpu.w(CX), cpu.w(DX), al),
+            0x0D => cpu.set_lo(AX, gfx::read_pixel(mem, cpu.w(CX), cpu.w(DX))),
+            // Affichage LCD / appareils sans objet.
+            0x14 => {}
             0x0E => {
                 let page = mem.read_u8(bda::PAGE);
-                tty(mem, out, page, al, None);
+                // Mode graphique : BL = couleur du caractère ; en mode texte l'attribut en place est conservé.
+                let color = (!Screen::of(mem).text).then_some(cpu.lo(BX));
+                tty(mem, out, page, al, color);
             }
             0x0F => {
                 cpu.set_lo(AX, mem.read_u8(bda::VIDEO_MODE));
@@ -525,6 +568,20 @@ impl Bios {
                     mem.write_u16(bda::CURSOR_SHAPE, 0x0607);
                 }
             }
+            // Police des modes graphiques : 21h = table utilisateur (ES:BP, hauteur CX), 22h–24h = polices en ROM.
+            0x11 if matches!(al, 0x21..=0x24) => {
+                let (seg, off, height) = match al {
+                    0x21 => (cpu.sreg(ES), cpu.w(BP), cpu.w(CX) as u8),
+                    0x22 => (ROM_SEG, FONT_8X14, 14),
+                    0x23 => (ROM_SEG, FONT_8X8, 8),
+                    _ => (ROM_SEG, FONT_8X16, 16),
+                };
+                mem.write_u16(0x43 * 4, off);
+                mem.write_u16(0x43 * 4 + 2, seg);
+                if height != 0 {
+                    mem.write_u8(bda::CHAR_HEIGHT, height);
+                }
+            }
             // Autres chargements de police (8×14, 8×16, 8×8 sans reprogrammation) : sans effet visible.
             0x11 if matches!(al, 0x00..=0x03 | 0x10..=0x11 | 0x20..=0x24) => {
                 if al == 0x11 {
@@ -544,6 +601,8 @@ impl Bios {
                     0x02 => (ROM_SEG, FONT_8X14),
                     0x06 => (ROM_SEG, FONT_8X16),
                     0x05 | 0x07 => (ROM_SEG, FONT_ALT_EMPTY),
+                    0x03 => (ROM_SEG, FONT_8X8),
+                    0x04 => (ROM_SEG, FONT_8X8 + 1024),
                     _ => (0, 0),
                 };
                 cpu.set_sreg(ES, seg);
@@ -556,7 +615,7 @@ impl Bios {
             }
             // Lignes de balayage, chargement de palette, adressage, vidéo,
             // sommation des gris, curseur : acceptés (réglages de l'étape 5).
-            0x12 if (0x30..=0x36).contains(&cpu.lo(BX)) => cpu.set_lo(AX, 0x12),
+            0x12 if (0x30..=0x36).contains(&cpu.lo(BX)) || matches!(cpu.lo(BX), 0x20 | 0x37 | 0x38) => cpu.set_lo(AX, 0x12),
             0x13 => write_string(cpu, mem, out),
             // Combinaison d'affichage : VGA couleur.
             0x1A if al == 0x00 => {
@@ -1036,6 +1095,7 @@ fn set_cursor(mem: &GuestMem, page: u8, row: u8, col: u8) {
 fn scroll(mem: &GuestMem, page: u8, n: u8, attr: u8, win: (u8, u8, u8, u8), up: bool) {
     let s = Screen::of(mem);
     if !s.text {
+        gfx::scroll(mem, n, attr, win, up);
         return;
     }
     let (top, left) = (usize::from(win.0), usize::from(win.1));
@@ -1094,6 +1154,8 @@ pub fn tty(mem: &GuestMem, out: &mut dyn TextSink, page: u8, ch: u8, attr: Optio
                 if let Some(a) = attr {
                     mem.write_u8(at + 1, a);
                 }
+            } else {
+                gfx::put_char(mem, ch, usize::from(row), usize::from(col), attr.unwrap_or(7), false);
             }
             col += 1;
             if usize::from(col) >= s.cols {

@@ -485,6 +485,22 @@ impl Vga {
         }
     }
 
+    // ---- Accès directs de l'hôte (BIOS vidéo : pixels, caractères en mode graphique) ----
+
+    /// Octet d'un plan (0–3) ou du tampon linéaire (`LINEAR`), sans passer par la logique d'écriture VGA.
+    pub fn raw_get(&self, region: usize, off: usize) -> u8 {
+        self.vram.get(region, off)
+    }
+
+    pub fn raw_set(&mut self, region: usize, off: usize, v: u8) {
+        self.vram.set(region, off, v);
+    }
+
+    /// Signale que la mémoire vidéo a changé hors des accès du programme (le rendu redessine).
+    pub fn touch(&mut self) {
+        self.epoch += 1;
+    }
+
     // ---- Mémoire (accès émulés) ----
 
     pub fn read(&mut self, off: usize) -> u8 {

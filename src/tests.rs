@@ -491,3 +491,8 @@ fn vram_bench() {
 fn int10_vga_functionality_info() {
     assert_eq!(run(program!("vgainfo")).0, 0, "n° du contrôle en échec (voir asm/tests/vgainfo.S)");
 }
+
+#[test]
+fn int10_graphics_pixels_text_and_scroll() {
+    assert_eq!(run(program!("gfxbios")).0, 0, "n° du contrôle en échec (voir asm/tests/gfxbios.S)");
+}
