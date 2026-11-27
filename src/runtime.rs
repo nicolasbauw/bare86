@@ -58,8 +58,8 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
 /// vide) est installé s'il manque ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.13";
-const HX_FORK_FILES: [(&str, &str, &[&str]); 9] = [
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.14";
+const HX_FORK_FILES: [(&str, &str, &[&str]); 10] = [
     (
         "DPMILD32.EXE",
         "5db83c24b9a39b0213eb440c2f6f091ade109c015fa70e4e1a07752f18fba643",
@@ -123,6 +123,12 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 9] = [
             "3738907a38cd068780930452b10e86f759d559fcceff5dde519d253b1010f9f0",
             "969968782b79bab7c7c98074a815f5a5bfece24546466c47895da320e2108605",
         ],
+    ),
+    // VERSION : VerQueryValueA/W (bouchons dans HX 2.23) ; exigée par la DllMain de ijl11.dll (JPEG d'Intel)
+    (
+        "VERSION.DLL",
+        "505ddfb11202c3af401e2b5f5d162737a83e6167843e86a2276c7e37f31af8c7",
+        &["50291e9ed91fffd3bdc6867d2a8edefaf30157258490d00d1974587f9e0e96ed"],
     ),
     // WININET.DLL : HX n'en a pas (accès Internet absent : les fonctions répondent « non connecté ») ; installée si elle manque
     (

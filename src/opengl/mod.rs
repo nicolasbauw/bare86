@@ -63,9 +63,11 @@ const GL_MAX_TEXTURES_SGIS: u32 = 0x835D;
 
 /// Extensions annoncées. Les points d'entrée des extensions sont servis par
 /// `wglGetProcAddress` de la DLL. Chaque nom est suivi d'une espace :
-/// GLQuake cherche « GL_SGIS_multitexture » avec l'espace.
+/// GLQuake cherche « GL_SGIS_multitexture » avec l'espace. `texture_env_combine` : `glTexEnv` passe tel quel à
+/// l'OpenGL hôte, qui connaît `GL_COMBINE` et ses paramètres (mêmes valeurs, cœur d'OpenGL 1.3) ; exigée par `blow_fnb`.
 const EXTENSIONS: &str = "GL_ARB_multitexture GL_SGIS_multitexture GL_EXT_abgr GL_EXT_bgra GL_EXT_compiled_vertex_array \
-GL_EXT_packed_pixels GL_EXT_point_parameters GL_EXT_texture_env_add WGL_EXT_swap_control ";
+GL_EXT_packed_pixels GL_EXT_point_parameters GL_EXT_texture_env_add GL_EXT_texture_env_combine GL_ARB_texture_env_combine \
+WGL_EXT_swap_control ";
 
 // Énumérations d'OpenGL utilisées ici.
 const GL_FRONT_LEFT: u32 = 0x400;

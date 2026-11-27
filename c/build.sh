@@ -23,6 +23,10 @@ cd win32
 for src in *.c; do
     # sous-système : « cible : console » dans le source, sinon fenêtre (nt_win)
     if grep -q "wcl386 -bt=nt -l=nt)" "$src"; then sub=nt; else sub=nt_win; fi
-    wcl386 -q -bt=nt -l=$sub -fe="${src%.c}.exe" "$src" winmm.lib
+    # ressources : NOM.rc à côté du source (ressource de version de version.c)
+    res=""
+    if [ -f "${src%.c}.rc" ]; then wrc -q -r -bt=nt "${src%.c}.rc" -fo="${src%.c}.res"; res="${src%.c}.res"; fi
+    wcl386 -q -bt=nt -l=$sub -fe="${src%.c}.exe" "$src" $res winmm.lib version.lib
 done
+rm -f ./*.res
 rm -f ./*.o
