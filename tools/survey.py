@@ -546,6 +546,11 @@ def run_prep(prep, root, args):
                 for f in files:
                     if f.lower() == name.lower():
                         os.remove(os.path.join(dirpath, f))
+        for c in step.get("copy", []):  # {"from": chemin absolu, "to": nom} : fichier de l'hôte copié dans le dossier de travail (ex. le vrai DOS4GW.EXE)
+            shutil.copy(c["from"], os.path.join(root, c["to"]))
+        for w in step.get("write", []):  # {"file": nom, "hex": octets} : fichier créé dans le dossier de travail (ex. EASY.COM = MOV AX,4C00h / INT 21h)
+            with open(os.path.join(root, w["file"]), "wb") as fh:
+                fh.write(bytes.fromhex(w["hex"]))
         for sub in step.get("sub", []):  # {"file", "pattern", "repl"} : ligne de config d'auteur à corriger
             for dirpath, _, files in os.walk(root):
                 for f in files:
@@ -631,7 +636,12 @@ def run_one(item, args, src, only=None):
         extra = bat_args(exe)
         script = bat_script(exe)
         forced = (args.profile_data.get(pkey) or {}).get("run")  # profil : commande à lancer (BAT écrit par un SETUP…)
-        if forced:
+        forced_cmd = (args.profile_data.get(pkey) or {}).get("cmd")  # profil : programme + paramètres tels quels (ex. ["dos4gw.exe", "kahn.exe"])
+        if forced_cmd:
+            cmd += forced_cmd
+            res["args"] = forced_cmd
+            extra = []
+        elif forced:
             cmd.append(forced)
             res["bat"] = forced
             extra = []
@@ -673,7 +683,10 @@ def run_one(item, args, src, only=None):
 
         def execute(command):
             if args.full:
-                out, timed, kept, killed = watch_run(command, os.path.dirname(exe), shots, args, args.limit + 90)
+                wargs = args
+                if profile and profile.get("idle"):  # profil : délai d'arrêt « écran figé » propre à cet élément (démo à longs passages sombres)
+                    wargs = argparse.Namespace(**{**vars(args), "idle": profile["idle"]})
+                out, timed, kept, killed = watch_run(command, os.path.dirname(exe), shots, wargs, args.limit + 90)
                 res["kept"], res["idle_killed"] = kept, bool(killed)
                 if os.environ.get("SURVEY_DEBUG"):
                     print(f"[execute] {' '.join(command[-6:])} kept={kept} killed={killed} dur={LAST.duration:.0f}", file=sys.stderr, flush=True)
