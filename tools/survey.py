@@ -613,7 +613,9 @@ def run_one(item, args, src, only=None):
             cmd.append(forced)
             res["bat"] = forced
             extra = []
-        elif script and (not extra or script[1] > 1):
+        elif script and not (only and script[1] > 2) and (not extra or script[1] > 1):
+            # (`only` : exécutable demandé précisément ; un .BAT qui enchaîne plus de deux programmes est une
+            # collection (RUNIT.BAT d'ebobr.zip : 11 démos) : le lancer rejouerait toute la série à chaque fois.)
             # Le .BAT lance plus que l'exécutable (LOGO.EXE avant, réglages…) ou ses lignes échappent
             # à `bat_args` (%1, redirections) : on le fait exécuter par le shell intégré.
             cmd.append(script[0])

@@ -563,6 +563,7 @@ impl Bios {
                 cpu.set_lo(AX, 0x1A);
                 cpu.set_w(BX, 0x0008);
             }
+            0x1B if cpu.w(BX) == 0 => vga_info(cpu, mem),
             0x1C => self.video_state(cpu, mem),
             0x4F => return self.vbe(cpu, mem),
             _ => return Flow::Unhandled(ah),
@@ -945,6 +946,52 @@ pub fn local_time() -> libc::tm {
 }
 
 // ---- Mode texte ----
+
+/// Table statique de fonctionnalités VGA (INT 10h AH=1Bh la désigne) : dans la ROM, hors des autres tables.
+const VGA_STATIC_TABLE: u16 = 0xE7C0;
+
+/// INT 10h AX=1B00h BX=0 : informations de fonctionnalité/état de la VGA, écrites en ES:DI (64 octets) ; AL = 1Bh.
+/// Des programmes compilés (Turbo Pascal, QuickBASIC…) s'en servent pour reconnaître une VGA : AL inchangé = « pas de VGA ».
+fn vga_info(cpu: &mut Cpu, mem: &GuestMem) {
+    let buf = lin(cpu.sreg(ES), cpu.w(DI));
+    let mode = mem.read_u8(bda::VIDEO_MODE);
+    let page = mem.read_u8(bda::PAGE);
+    let rows = mem.read_u8(bda::ROWS);
+    let mut b = [0u8; 64];
+    // Table statique : modes pris en charge (0–13h, bits 0–7 de chaque octet), lignes de balayage 200/350/400, blocs de caractères.
+    let table = [0xFFu8, 0xFF, 0x0F, 0, 0, 0, 0, 0x07, 0x02, 0x08, 0x08, 0xFF, 0, 0x0F, 0x00, 0x8F, 0, 0, 0, 0];
+    mem.write(0xF_0000 + usize::from(VGA_STATIC_TABLE), &table);
+    b[0..4].copy_from_slice(&((u32::from(ROM_SEG) << 16) | u32::from(VGA_STATIC_TABLE)).to_le_bytes());
+    b[4] = mode;
+    b[5..7].copy_from_slice(&mem.read_u16(bda::COLS).to_le_bytes());
+    b[7..9].copy_from_slice(&mem.read_u16(bda::PAGE_SIZE).to_le_bytes());
+    b[9..11].copy_from_slice(&mem.read_u16(bda::PAGE_START).to_le_bytes());
+    for p in 0..8 {
+        let c = mem.read_u16(bda::CURSOR + p * 2);
+        b[0x0B + p * 2..0x0D + p * 2].copy_from_slice(&c.to_le_bytes());
+    }
+    let shape = mem.read_u16(bda::CURSOR_SHAPE);
+    b[0x1B] = (shape & 0xFF) as u8; // fin
+    b[0x1C] = (shape >> 8) as u8; // début
+    b[0x1D] = page;
+    b[0x1E..0x20].copy_from_slice(&mem.read_u16(bda::CRTC).to_le_bytes());
+    b[0x20] = mem.read_u8(bda::MODE_CTRL);
+    b[0x21] = mem.read_u8(bda::PALETTE);
+    b[0x22] = if rows == 0 { 24 } else { rows };
+    b[0x23..0x25].copy_from_slice(&u16::from(mem.read_u8(bda::CHAR_HEIGHT)).to_le_bytes());
+    b[0x25] = 8; // affichage actif : VGA couleur
+    let colors: u16 = match mode {
+        0x11 | 0x06 => 2,
+        0x13 | 0x14..=0x7F => 256,
+        _ => 16,
+    };
+    b[0x27..0x29].copy_from_slice(&colors.to_le_bytes());
+    b[0x29] = if mode == 0x13 { 1 } else { 8 };
+    b[0x2A] = 3; // 400 lignes de balayage
+    b[0x31] = 3; // 256 Ko
+    mem.write(buf, &b);
+    cpu.set_lo(AX, 0x1B);
+}
 
 fn is_text(mode: u8) -> bool {
     mode <= 3 || mode == 7

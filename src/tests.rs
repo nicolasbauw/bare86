@@ -486,3 +486,8 @@ fn vram_bench() {
         println!("{:?}", pc.stats);
     }
 }
+
+#[test]
+fn int10_vga_functionality_info() {
+    assert_eq!(run(program!("vgainfo")).0, 0, "n° du contrôle en échec (voir asm/tests/vgainfo.S)");
+}
