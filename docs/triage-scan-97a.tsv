@@ -1,0 +1,84 @@
+id	exe	scenes	status	classe	action	texte_ecran
+pcteam_cd27_WIR97_4K	MC4K.COM	108	exit	bon		
+pcteam_cd27_WIR97_64K_3	JIZZ.EXE	150	exit	bon		
+pcteam_cd27_WIR97_64K_1	ARCOIRIS.EXE	146	exit	bon		
+pcteam_cd27_WIR97_64K_6	PHYSTIX.EXE	69	exit	bon		
+pcteam_cd27_WIR97_64K_5	LOW97INV.EXE	103	exit	bon		
+pcteam_cd27_WIR97_64K_7	NOATTIT.EXE	102	exit	bon		
+pcteam_cd27_WIR97_64K_2	WIPE_N64.EXE	370	ok	bon		
+pcteam_cd27_WIR97_DEMO_BAHO	DEMO.EXE	149	exit	bon		
+pcteam_cd27_WIR97_DEMO_FELLOW	FELLOW~.EXE	34	exit	bon		
+pcteam_cd27_WIR97_DEMO_COREDUMP	COREDUMP.EXE	191	exit	bon		
+pcteam_cd27_WIR97_DEMO_MAKE	3DS.EXE	121	ok	bon		
+pcteam_cd27_WIR97_DEMO_KMULTI	KMULTI.EXE	243	exit	bon		
+pcteam_cd27_WIR97_DEMO_PERNEK	PERNEK.EXE	150	exit	bon		
+pcteam_cd27_WIR97_DEMO_GMF	GENOCYD.EXE	293	exit	bon		
+pcteam_cd27_WIR97_DEMO_SPID_SPID_DATA	SPID.EXE	85	exit	bon		
+pcteam_cd27_WIR97_DEMO_TUROK	TUROK.EXE	53	exit	bon		
+pcteam_cd27_WIR97_DEMO_SMEGMA	SMEGMA.EXE	115	exit	bon		
+pcteam_cd27_WIR97_GAME100K_1	GAME.EXE	0	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd27_WIR97_GAME100K_3	TOMTRIS.EXE	16	ok	bon		
+pcteam_cd27_WIR97_GAME100K_4	NFF.EXE	0	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd27_WIR97_GAME100K_5_TRON04W.ZIP	tron.com	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd27_WIR97_GAME100K_5	TRON.COM	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd27_WIR97_DEMO_R_AREA	DEMO.EXE	201	ok	bon		
+pcteam_cd27_WIR97_GAME100K_8	NIBINTRO.EXE	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd27_WIR97_DEMO_U_PLSMU	U_PSLMU.EXE	185	exit	bon		
+pcteam_cd27_WIR97_INVIT	W97INV2.EXE	53	ok	bon		
+pcteam_cd27_X97_LEGOSYST_TARTOPOM	TARTOPOM.EXE	209	exit	bon		
+pcteam_cd28_ASM97_IN64_AMB_NOBL	AMB_NOBL.EXE	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Indoor Music System v6 SETUP fc) 94-97 Niklas Beisert / pasca. | > device: BRaViSqULtrescund NN | quiet | port: 240 AMD Interklave | port2 > Gravis Ultragound |
+pcteam_cd28_ASM97_DEMO_AGENTO	AGENT.EXE	202	exit	bon		
+pcteam_cd27_WIR97_GAME100K_6	FITUP.EXE	8	ok	bon		
+pcteam_cd28_COV97_DEMO_SD_COLF	SD_COL.EXE	7	error	bon		
+pcteam_cd29_ANTIQ297_1KO_IMAGE_.ZIP	image!.com	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	phate is i ee Poe a | es Pai
+pcteam_cd29_ANTIQ297_1KO_CARDRIVE.ZIP	cardrive.com	3	ok	peu	2–4 scènes : vérifier	
+pcteam_cd29_ANTIQ297_1KO_TMBE.ZIP	tmbe.com	5	exit	bon		
+pcteam_cd29_ANTIQ297_1KO_DPH_HIGH.ZIP	dph_high.com	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd29_BIZ97_IN4K_EFC_DEEP.ZIP	efc!deep.exe	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd29_CRS97_MISC_CHAOS.ZIP	chaos.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd29_ANTIQ297_DEMOS_IGYJARAS.ZIP	igyjaras.exe	15	exit	bon		
+pcteam_cd29_EVK97_IN4K_EVK-4K.ZIP	evoke.com	6	ok	bon		
+pcteam_cd29_GAR97_DEMO_BTMNSCKS.ZIP	btmnscks.exe	47	ok	bon		
+pcteam_cd29_BIZ97_DEMO_HYPNO2.ZIP	hypno2.exe	0	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd29_NETZONE_64KO_ONC.ZIP	birthd.exe	4	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd29_RAGE97_DEMOS_MOTFIX.ZIP	motfix.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd29_RTL97_DEMO_QUESTKHN.ZIP	kahn.exe	1	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	‘5 ‘Loading Data | loader Sigtacine tl | Botsatizing Silyaturs foots | transpareail sila | aye ik. Saas al
+pcteam_cd29_RAGE97_DEMOS_KMU_KANN.ZIP	kanna.exe	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd29_GRV97_DEMO_BALOOON.ZIP	balooon.exe	214	ok	bon		
+pcteam_cd29_RTL97_DEMOS_QUESTKHN.ZIP	kahn.exe	1	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	‘5 ‘Loading Data | loader Sigtacine tl | Botsatizing Silyaturs foots | transpareail sila | aye ik. Saas al
+pcteam_cd30_DML97_DEMO_HJB_NEON.ZIP	neon.exe	2	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd30_DST97_DEMO_ATMOZ2.ZIP	atmo(3)2.exe	1	ok	setup	bloqué sur un menu : trouver les touches	Credex Pl-mode V3.1415 (C0) 1996 All rights reservered | If soundcard is not detected, please write "DEMO -5" | Select Sound Card | @. Gravis Ultrasound | 7. So
+pcteam_cd30_DST97_IN4K_SYS4KX.ZIP	4k.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	SYSTEM-MMX FRSZ A4444444akk ETT TT | SYSTEM-MMK FX32 444444444kk! ELLY | SYSTEM-MMK FX32 444444444kk! ELLY | SYSTEM-MMK FX32 444444444kk! ELLY | SYSTEM-MMK FX32
+pcteam_cd31_DH97_MISC_ADDHELP.ZIP	addhelp.exe	0	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd31_DH97_MISC_FLR_HELP.ZIP	addhelp.exe	0	exit	doublon	même démo/écran qu'un autre élément : garder un seul résultat	
+pcteam_cd31_DH97_MISC_STARDATE.ZIP	stardate.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd27_WIR97_MULTICHA_5	RB(I)NFO.EXE	900	error	bon		
+pcteam_cd31_MAGS_PAIN0497.ZIP	pain0497.exe	3	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_DH97_MISC_USE.ZIP	use.exe	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd30_DST97_IN64_RC_HALL.ZIP	feit.exe	5	ok	bon		
+pcteam_cd31_MAGS_PAIN0597.ZIP	pain0597.exe	3	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_PAIN0697.ZIP	pain0697.exe	3	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_PAIN0797.ZIP	pain0797.exe	3	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_PAIN0897.ZIP	pain0897.exe	3	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_PAIN0997.ZIP	pain0997.exe	3	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_PLSCENE0.ZIP	plscene0.exe	6	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_PLSCENE1.ZIP	plscene1.exe	6	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_SCENIAL4.ZIP	scenial4.exe	3	ok	a-voir	démo BEANS rangée dans le dossier MAGS (« install UNIVBE »)	
+pcteam_cd31_MAGS_RC-VOL01.ZIP	volvo.exe	4	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_SHINE2.ZIP	shine#2.exe	2	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_STG-0697.ZIP	guide.exe	5	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_STG-0797.ZIP	guide.exe	5	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_STG-0897.ZIP	guide.exe	4	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd32_ASTROS_1_IN4K_INTRO.ZIP	intro.com	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd31_MAGS_TGD-0997.ZIP	guide.exe	4	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_TGD-1097.ZIP	guide.exe	7	ok	magazine	magazine sur disquette (texte, pages) : exclu	
+pcteam_cd31_MAGS_TRIP5.ZIP	load.exe	3	ok	a-voir	intro/mag TRiP : à vérifier	
+pcteam_cd32_NEITHE_1_NN97_FST.ZIP	insomnia.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	a | tHE | THE CHAOS ENGiNE BBS KiXX ASSES iN 1997
+pcteam_cd33_COMMAN_1_INTRO_XTC_PART.ZIP	demo.com	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd33_COMMAN_1_INTRO_XTC_ASS.ZIP	xtc_ass.com	2	exit	peu	2–4 scènes : vérifier	
+pcteam_cd33_NETZON_1_FAST_GAMES_1_ZOBMAN.ZIP	zobman.exe	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd32_NEITHE_1_NN97_MUL.ZIP	crypt.com	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd32_NEITHE_1_GRAPHICS_NN97_GFX.ZIP	insomnia.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	a | tHE | THE CHAOS ENGiNE BBS KiXX ASSES iN 1997
+pcteam_cd32_TP97_IN4_RT-SPACE.ZIP	rt-space.com	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd33_NETZON_1_FAST_GAMES_3_TOP.ZIP	top.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd33_NETZON_1_IN64K_ONC.ZIP	birthd.exe	4	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	

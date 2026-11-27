@@ -244,8 +244,10 @@ impl Xms {
             0x08 | 0x88 => {
                 let (largest, total) = self.free_kb();
                 if ah == 0x08 {
-                    cpu.set_w(AX, largest.min(0xFFFF) as u16);
-                    cpu.set_w(DX, total.min(0xFFFF) as u16);
+                    // Plafond de 32 767 Ko : des programmes (NFF, « Need For Fun », 1997) lisent ces mots comme des entiers SIGNÉS et
+                    // refusent une machine de 64 Mo (« XMS Memory Free : -1152 Kb »). AH=88h (32 bits) rend la valeur entière.
+                    cpu.set_w(AX, largest.min(0x7FFF) as u16);
+                    cpu.set_w(DX, total.min(0x7FFF) as u16);
                 } else {
                     cpu.gpr[AX] = largest as u32;
                     cpu.gpr[DX] = total as u32;

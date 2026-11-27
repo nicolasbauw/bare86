@@ -692,6 +692,15 @@ def run_one(item, args, src, only=None):
                 res["dpmi"] = True
                 continue
             break
+        # Carte GUS annoncée par défaut : certaines démos s'y accrochent (Hypnoman 2 : aucune image en 5 min) ; sans image ou avec
+        # une seule, un second essai sans GUS (`--no-gus` d'un profil fait la même chose d'office).
+        if args.full and (res.get("kept") or 0) <= 1 and "--gus" in cmd:
+            nogus = [a for a in cmd if a != "--gus"]
+            out2, timed2 = execute(nogus)
+            res["no_gus_retry"] = True
+            if (res.get("kept") or 0) >= 2:
+                cmd, out, timed = nogus, out2, timed2
+                res["no_gus"] = True
         # Rendu au DOS (ou plantage) sans paramètre, alors que le texte en annonce :
         # réessai avec un paramètre neutre, puis avec ceux que le texte propose
         # (Decapitation plante sur argv[1] nul sans paramètre).
