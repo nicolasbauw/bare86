@@ -1,0 +1,147 @@
+id	exe	scenes	status	classe	action	texte_ecran
+pcteam_cd37_takeover98_demo_flush.zip	flush!.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd37_takeover98_demo_soepkip3.zip	frame.exe	0	exit	defectueux	archive incomplète : FRAME.EXE réclame 3TXT.PCX, absent de l'archive (« File not found: 3txt.pcx »)	
+pcteam_cd42_DreamHack98_in64_goatzill.zip	goatzila.exe	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd47_PROXY99_demo_milleniumfever.zip	mfever.exe	0	exit	defectueux	archive incomplète : MFEVER.EXE ouvre mfever.xm, absent de l'archive (« MIDAS error: File does not exist »)	
+pcteam_cd42_DreamHack98_in64_bel_wazo.zip	bel_wazo.exe	4	ok	peu	2–4 scènes : vérifier	
+pcteam_cd46_Volcanic99_demo_past.zip	past.exe	1	ok	a-etudier	« video mode does not exist » (verdict utilisateur) ; past32.exe est la version Windows	HDPMIS2 now resident | D0S/32A -- DOS Extender version 9.1.2 | Copyright (C) 1996-2886 by Narech K | Past (c) OQJuice - February 1999 | Execute "PAST loop’ to l
+pcteam_cd46_Volcanic99_demo_dash.zip	dash.exe	82	exit	bon		
+pcteam_cd49_TKOVER99_DEMOS_MADNESS.ZIP	madness.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd49_TKOVER99_DEMOS_NOEXIT.ZIP	noexit.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd48_ICING99_demo_3ssheliumfinal.zip	helium.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Runtime Error! | Program: c:\helium.exe | abnormal program termination
+pcteam_cd49_TKOVER99_IN64	AXIA_SW.EXE	0	exit	a-etudier	dossier contenant des archives auto-extractibles Windows (AXIA_SW.EXE…) : à extraire autrement	
+pcteam_cd49_TKOVER99_IN64_ELE.ZIP	ele.exe	3	exit	a-etudier	dossier contenant des archives auto-extractibles Windows (AXIA_SW.EXE…) : à extraire autrement	
+pcteam_cd50_ASSEMB_1_DEMOS_ACCEL_DO_ZEN_B.ZIP	dozen.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd50_ASSEMB_1_DEMOS_ACCEL_PLAT-FIN.ZIP	platipus.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd48_ICING99_demo_obs_haet.zip	haetten.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd50_ASSEMB_1_DEMOS_ACCEL_VIRHE_BY.ZIP	virhe.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd50_ASSEMB_1_DEMOS_ACCEL_TRAUMATI.ZIP	trmtik.exe	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd49_TKOVER99_DEMOS_LTP3-S_1.ZIP	ltp3.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Ooh shit! Something went wrong with DDRAM!
+pcteam_cd50_ASSEMB_1_DEMOS_ACCEL_EVOLUTIO.ZIP	evolution.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	source\lazy\lazyddru. cpp(328): DirectDraw call failed - return FALSE ()
+pcteam_cd53_dreamhack99_demo_accel_backtoth.zip	back to the future.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd53_dreamhack99_demo_accel_ignore.zip	demo.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd53_dreamhack99_demo_accel_plastorama2000.zip	plastic-plastorama2000.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd50_ASSEMB_1_DEMOS_NO-ACCEL_TRANSCEN.ZIP	au_trans.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Do you want to run transcendental in fullscreen mode? | Yes No Cancel
+pcteam_cd50_ASSEMB_1_DEMOS_NO-ACCEL_VIPING_B.ZIP	viping.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd53_dreamhack99_demo_accel_al_castone.zip	demo/dh99/dreamhack99.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd53_dreamhack99_demo_no-accel_superstar.zip	superstar.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd53_dreamhack99_demo_no-accel_yxskaft.zip	yxskaft.exe	27	exit	bon		
+pcteam_cd53_dreamhack99_demo_no-accel_furious.zip	furious.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	could not set window hook
+pcteam_cd53_dreamhack99_demo_no-accel_rzr-mind.zip	mindstam.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd53_dreamhack99_demo_no-accel_smokesom.zip	dh_demo.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Assertion failed | Program: c:\dh_demo. exe | File: D:\sre\goacvs\goa\APP\Dh_demo\Theklegg.c | Line: 150 | Expression: tpoly->texturemap = jpeq_load2pixmap("blo
+pcteam_cd54_norvegia99_demo_n_brain.zip	offbrain.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd56_COVEN2000_demo	jx_exinf.exe	3	ok	peu	2–4 scènes : vérifier	
+pcteam_cd56_ELEVATOR2000_demo_3s-h3o.zip	h3o.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd53_dreamhack99_in64_blocc_final.zip	intro.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd54_norvegia99_demo_discoteque.zip	discoteque.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	The request reported an unknown error
+pcteam_cd53_dreamhack99_in64_noc_cryo.zip	cryogoat.exe	72	exit	bon		
+pcteam_cd56_ELEVATOR2000_demo_ssonic.zip	demo.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd56_ELEVATOR2000_demo_p.zip	p.exe	1	ok	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	DPMI loader v3.12 | Copyright 1993-2824 Japheth | Exception GE | EAK=B0000000 EBX=G000000F ECX=G0000005 EDX=BB120FFF ESI -0021C000 | EDI=BB126000 EBP=G021B0E0 E
+pcteam_cd56_ELEVATOR2000_demo_esko.zip	uusmedia.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Run the demo in FULLSCREEN mode ? | Yes No
+pcteam_cd57_demobit2K_demos_level2.zip	l2compo.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd57_Trax2K_demos_yearn.zip	yearning.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Unrecognized error: @48@2711b8
+pcteam_cd57_ambiance2K_demo_esanssi.zip	esanssi.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	unsupported bits per pixel
+pcteam_cd57_ambiance2K_demo_straight.zip	clock.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	unsupported bits per pixel
+pcteam_cd57_demobit2K_demos_mushca.zip	mushca.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd58_Thegathering2k_in64_glass.zip	glass.exe	7	exit	bon		
+pcteam_cd59_Mekka_symposium_2000_demo_2eme_hjb_mist.zip	mikrostrange/fscreen.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd59_Mekka_symposium_2000_demo_3eme_naturesuxx.zip	naturesuxx.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd59_Mekka_symposium_2000_demo_4eme_hjb_feel.zip	strange.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd58_Thegathering2k_in64_n_airf.zip	airscape_final.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Fullscreen? | yes No
+pcteam_cd58_Thegathering2k_in64_n_airf_ok.zip	airscape_final.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Fullscreen? | yes No
+pcteam_cd58_birdie2000_demo_houston.zip	houston.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd59_Ukonx_2000_demo_neveragain.zip	neveragain.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd59_Mekka_symposium_2000_in64_genesis.zip	genesis.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Do you want to force 16-bit rendering instead of 32-bit? | This is necessary for graphic-cards that don't support | harduare 32-bit rendering (e.g. Voodoo, Riva
+pcteam_cd60_dejavu00_demo_steam.zip	steam.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd60_horizon00_demo_preampli.zip	preampli.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd60_horizon00_in64_addlib.zip	i64lcc.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd60_remedy00_demo_cnf-style.zip	cnf-style.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd59_Mekka_symposium_2000_in64_rpl_book.zip	books.exe	60	exit	bon		
+pcteam_cd59_Ukonx_2000_demo_kiki_zefast.zip	kiki_demo/demo_fullscreen.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	HDPMI32 now resident | DPMI loader v3.12 | Copyright 1993-2824 Japheth | Microsoft Visual C++ Debug Library | Debug Error | Program: c:\demo_f”1. exe | abnormal
+pcteam_cd60_remedy00_in64_flt-r0x.zip	flt-r0x.exe	2	exit	peu	2–4 scènes : vérifier	
+pcteam_cd59_Ukonx_2000_demo_newgen_backthen.zip	backthen/backthen.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	HDPMI32 now resident | DPMI loader v3.12 | Copyright 1993-2824 Japheth
+pcteam_cd62_LTP4_demos_3_cocoon_rapsody.zip	cocoon - rapsody/rapsody.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd62_LTP4_demos_4_orion-prpl.zip	orion_purple.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd62_LTP4_demos_5_oror-faded.zip	faded.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd60_remedy00_demo_flt_vodka.zip	fltvodka.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd62_LTP4_in64_2_3s-money.zip	3s-money.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd64_Dialogos_In64_kfresnel.zip	kfresnel.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd64_Dialogos_In64_kfresnel_final.zip	kfresnel_final.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd60_remedy00_demo_rpl_ape.zip	ape.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Fullscreen? | yes No
+pcteam_cd64_Dialogos_In64_love.zip	love.exe	0	error	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd64_Lobotomia_Demos_korruptio_by_wamma.zip	demo.exe	0	error	a-etudier	PMODE/W (LE) : s'arrête juste après la bannière, sans capture (triple faute sous tryitem)	
+pcteam_cd65_Dreamhack_Demos_anal_probejection_by_lbt.zip	anal probejection/lbt.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd65_Dreamhack_Demos_flt_slavery.zip	slavery/flt_slv.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd62_LTP4_in64_1_hjb_funk.zip	funkkin/funkkin.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	HDPMI32 now resident | DPMI loader v3.12 | Copyright 1993-2824 Japheth
+pcteam_cd62_LTP4_demos_2_MP2_000827_.zip	mp2.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd65_Dreamhack_Demos_radiance.zip	radiance.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd65_Party2000_demos_mdl-entropy.zip	entropy.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd65_Party2000_demos_moments.zip	moments.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd65_Party2000_demos_polyethylene.zip	release/polyethylene.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd65_Party2000_demos_scoopex-avd.zip	avd/avd.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd66_demo_plaap_-_fosfaatti.zip	player.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd66_demo_unique_-_raised.zip	raised.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd66_demo_wamma_-_hei_lopeta_et_saa.zip	demo.exe	0	error	a-etudier	idem : PMODE/W (LE), aucune capture	
+pcteam_cd64_Lobotomia_Demos_ffwd_by_moppi.zip	pajaplayer.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd65_Dreamhack_Demos_parade.zip	parade.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	HDPMI32 now resident | DPMI loader v3.12 | Copyright 1993-2824 Japheth
+pcteam_cd65_Dreamhack_Demos_the_booze_mooses_by_tmb_and_ahnion.zip	the booze mooses/mooze.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd67_MindSource_2001_demo_dkaraoke.zip	demoscen.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	DPMI loader v3.12 | Copyright 1993-2824 Japheth | Exception GE | EAX=80004200 EBX=00120005 ECX=B0000000 EDX=00120000 ES1=00127106 | EDI=QB12E6F8 EBP=BG12715A ES
+pcteam_cd67_MindSource_2001_demo_aaeop.zip	powah.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	unsupported bits per pixel
+pcteam_cd67_Synthesis_2001_demo_prune_flower.zip	prune_flower/prune_flower.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd69_propellihatu_demos_06spacemess.zip	spacemess.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd67_MindSource_2001_demo_ride.zip	ride.exe	62	exit	a-etudier	survey/tryitem ne trouvent pas d'exécutable (pick() rend None)	
+pcteam_cd67_Synthesis_2001_demo_efr-madeby.zip	madeby.exe	23	ok	bon		
+pcteam_cd70_mekka_symposium_2001_Demos_mosaik.zip	mosaik/mosaik.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd70_mekka_symposium_2001_Demos_nsf_synergy-fix.zip	synergy.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd70_mekka_symposium_2001_Demos_species.zip	dist/species.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd70_mekka_symposium_2001_Demos_tsq_obs.zip	obs.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd69_theGathering2001_in64_tg01_64k_mx9kru_nocturnal_pc.zip	mx.9kru.exe	3	error	peu	2–4 scènes : vérifier	
+pcteam_cd67_MindSource_2001_demo_sadness.zip	sadness.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Would You Like To Run In Fullscreen Mode? | Yes No
+pcteam_cd71_MekkaSymposium_Demos_intoblack.zip	i n t o b l a c k.exe	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd70_mekka_symposium_2001_Demos_lunix-leitmotiv.zip	lunix - leitmotiv/leitmotiv.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd71_MekkaSymposium_Demos_232.ZIP	232.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Resolution / Bits | Textures
+pcteam_cd72_Assembly_2001_Demos_2_gerbera_by_moppi_productions.zip	gerbera_by_moppi_productions/pajaplayer.exe	0	error	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd72_Assembly_2001_Demos_3_recycled.zip	recycled/recycled/recycled.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Unable to load function: InternetGetConnectedState (WININET. dl1)
+pcteam_cd73_Abstract_2001_in64_lgr64.zip	update/lgr.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd73_Abstract_2001_in64_shapes.zip	shapes.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd73_Assembly_2001_Demos_4_pirtuaalitodellisuus_by_taat_2001.zip	pirtuaalitodellisuus_by_taat_2001/pirtual.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_Demos_funkysexy.zip	firststep.exe	244	ok	bon		
+pcteam_cd73_Xenox_demos_kvasigen_-_cleanup_2001_-_official_party_release.zip	cleanup.exe	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd73_paradox2001_demo_f_circ.zip	_flying_circus_.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd73_paradox2001_demo_reason.zip	reason.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd73_paradox2001_in64_love.zip	love.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd73_paradox2001_in64_trx-elec.zip	electric.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_Demos_kprincefinal.zip	le petit prince.exe	276	exit	bon		
+pcteam_cd74_demos_Dialogos_2001_tommy.zip	tommy - with sound/start.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd73_Xenox_demos_n_cv16380.zip	trip.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	unsupported bits per pixel
+pcteam_cd74_demos_Dialogos_2001_scwarzbild.zip	schwarzbild.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd75_coma3_Demos_demopunk.zip	demopunk.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd75_coma3_Demos_experience.zip	demo2.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd75_coma3_Demos_itsadot.zip	itsadot.exe	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd74_demos_TRSAC_2001_03_don_quijote.zip	03_don quijote/fwdmosys.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Unable to load function: InternetGetConnectedState (WININET. dl1)
+pcteam_cd79_The_Gathering_2k2_Demo_1_thermo_plastique_by_inf.zip	plastique.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd74_demos_TRSAC_2001_04_blakn.zip	04_blakn/blakn.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Unable to load function: InternetGetConnectedState (WININET. dl1)
+pcteam_cd79_The_Gathering_2k2_Demo_3_tatsu_by_fairlight.zip	tatsu.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_lobotomia02_demo_blow_fnb.zip	niggaz.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_lobotomia02_demo_flo_eska.zip	flo_eska/pako.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_lobotomia02_demo_jumalauta_-_your_daily_horoscope.zip	demo.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_lobotomia02_demo_kwlahcmc.zip	ahcmc.exe	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	
+pcteam_cd82_lobotomia02_demo_silents-wc_promo.zip	world.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_lobotomia02_in64_dtsborn.zip	dtsborn.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_lobotomia02_in64_jumalauta-palikkatesti.zip	jumalauta-palikkatesti.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_remedy2002_demo_kilometer_years_from_france-by-hypercube.zip	kyff.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_remedy2002_demo_only_kings_and_better-by-flt_n_tsl.zip	flttsl_final/kings.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd75_coma3_Demos_rzr-fn2-final.zip	fn2.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Unable to load function: InternetGetConnectedState (WININET. dl1)
+pcteam_cd82_remedy2002_demo_weediz-by-talismoon.zip	weediz.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_remedy2002_in64_dxm_chipgoa.zip	mojs.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_vip4_demo_01-mdr-07.zip	mdr-07-light.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_vip4_demo_05-dmz_alphab.zip	dmz_alphab/0    dmz_alphab.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_vip4_demo_07-6thjune.zip	6thjune/6thjune/6thjune.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd83_Cafe_2002_demo_pavit-paradisio.zip	pvt-paradisio.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd82_remedy2002_demo_trial_error-by-_.zip	trial_error.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Unable to load function: InternetGetConnectedState (WININET. dl1)
+pcteam_cd83_Evoke_2002_demo_epi-ra10.zip	runaway.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd79_The_Gathering_2k2_Demo_2_iv_-_racer_by_tls.zip	iv.exe	124	exit	bon		
+pcteam_cd83_Evoke_2002_demo_sdi_hurt.zip	sdi_hurt.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd83_Cafe_2002_demo_wireworld.zip	world.exe	1	ok	doublon	même démo/écran qu'un autre élément : garder un seul résultat	Unable to load function: InternetGetConnectedState (WININET. dl1)
+pcteam_cd83_Evoke_2002_demo_same_kassiopeia.zip	kassiopeia_preview.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	Unable to load ordinal: 7 (DSOUND. dl1)
+pcteam_cd72_Assembly_2001_Demos_1_lapsuus.lha	lapsuus/extra/extra-pc.exe	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	HDPMI32 now resident | DPMI loader v3.12 | Copyright 1993-2824 Japheth | we have plenty of b

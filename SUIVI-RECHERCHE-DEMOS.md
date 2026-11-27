@@ -1019,3 +1019,10 @@ Les démos DOS sont majoritaires jusqu'à fin 1998 (tableau « Part des démos W
 - `survey.py` : profils `idle`, `cmd`, étapes `prep` `copy` et `write`.
 - **korruptio / hei_lopeta (Wamma)** : voir `docs/triage-notes.tsv` : exception dans une boucle strcmp sur une table de pointeurs qui contient le texte de l'argument ; cause non élucidée.
 - Restent : ATMOZ2 (INT 6Ch), ride (exécutable introuvable), past (mode vidéo), TKOVER99/IN64 (auto-extractibles Windows), MOTFIX.
+
+## Bilan du périmètre (2026-11-27) — `scan-bilan1`
+- **1997 (CD 27–33), dossiers `demo`/`demos`/`in64`** : 196 éléments, **192 à ≥ 5 scènes** (meilleur résultat de tous les balayages). Restent : `ONC` (4 scènes, courte intro), `MOTFIX` (outil), `QUESTKHN/DEMO` (doublon de `DEMOS`, 347 scènes), `ATMOZ2` (« Can not unpack samples »).
+- **Tout le périmètre** : 558 éléments, 407 à ≥ 5 scènes, 151 en dessous (dont 4 en 1997). `scan-bilan1` a relancé les 146 éléments hors 1997 à < 5 scènes avec l'outil corrigé (DOS et Windows) : **10 seulement passent à ≥ 5** ; 136 restent < 5 : OCR/triage dans `docs/triage-scan-bilan1.tsv` : 70 « court » (sortie en < 12 s), 34 « vide », 16 « doublon », 8 « peu », 6 « à étudier ».
+- **Nature des 136** : presque tous des démos WINDOWS de 1999–2002 (CD ≥ 53 : 121 sur 136 ; messages : « DDRAM », « DirectDraw call failed », « could not set window hook », « Unable to load ordinal: 7 (DSOUND.dll) », « Do you want to run in fullscreen mode? Yes/No », « abnormal program termination »…) : relève du chantier Win32/HX (DirectX 7/8, contrôles standard, boîtes Oui/Non), pas de la fiabilisation DOS.
+- **Défaut de méthode corrigé** : `lapsuus.lha` (extra-pc.exe, vivant mais presque figé) bouclait : 3 essais de 11 min chacun (essai normal, sans GUS, `--dpmi`). Désormais les réessais ne se font qu'après un échec rapide (< 90 s).
+- **Veille** : les balayages lancés en tâche de fond déclarée n'avaient pas l'inhibition de veille ; à lancer avec `systemd-inhibit` (ou un inhibiteur lié au pid du balayage : `systemd-inhibit --what=sleep:idle tail --pid=PID -f /dev/null`).
