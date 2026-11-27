@@ -29,6 +29,7 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--bare86", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "bare86"))
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--dll-pack", default=None, help="dossier de DLL de Windows copiées à côté de l exécutable (démos Win32)")
     a = ap.parse_args()
     a.out = a.out or "/tmp/tryitem-" + os.path.basename(a.item.rstrip("/"))
     work = os.path.join(a.out, "work")
@@ -50,6 +51,11 @@ def main():
                 if f.lower().endswith((".exe", ".com", ".bat")):
                     print(" ", os.path.relpath(os.path.join(d, f), work))
         return
+    if a.dll_pack and os.path.isdir(a.dll_pack):
+        have = {f.lower() for f in os.listdir(os.path.dirname(exe))}
+        for f in os.listdir(a.dll_pack):
+            if f.lower() not in have:
+                shutil.copy(os.path.join(a.dll_pack, f), os.path.join(os.path.dirname(exe), f))
     shots = os.path.join(a.out, "shots")
     os.makedirs(shots)
     cmd = [a.bare86, "--no-realtime", "--limit", str(a.secs), "--shot", os.path.join(shots, "f.png"), "--shot-every", str(a.every),
