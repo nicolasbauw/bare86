@@ -397,7 +397,7 @@ def watch_run(command, cwd, shots, args, timeout):
     reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()), daemon=True)
     reader.start()
     kept, kept_thumbs, kept_t, last_thumb, seen = [], [], [], None, set()
-    t0 = last_new = time.time()
+    t0 = last_new = last_keep = last_scene = time.time()
     killed = timed = False
     LAST.loop = None
     cpu = CpuSampler(proc.pid)
@@ -413,7 +413,16 @@ def watch_run(command, cwd, shots, args, timeout):
             t = thumb(path)
             if os.environ.get("SURVEY_DEBUG"):
                 print(f"[watch] {f} diff={thumb_diff(t, last_thumb) if last_thumb is not None else None}", file=sys.stderr, flush=True)
-            if last_thumb is None or thumb_diff(t, last_thumb) > args.change:
+            d = thumb_diff(t, last_thumb) if last_thumb is not None else None
+            # Une scène à petits mouvements (sprite sur fond noir : bel_wazo, ELE, goatzill) change peu entre deux captures : une capture
+            # est aussi gardée toutes les 30 s si l'écran a un peu bougé, et un écran qui bouge un peu n'est pas « figé » (pas d'arrêt idle).
+            heartbeat = d is not None and d > 0.8 and now - last_keep > 30
+            if d is not None and d <= args.change and d > 0.3 and not heartbeat:
+                last_new = now
+            if last_thumb is None or d > args.change or heartbeat:
+                last_keep = now
+                if not heartbeat:
+                    last_scene = now
                 kept.append(f)
                 kept_thumbs.append(t)
                 kept_t.append(now - t0)
@@ -439,7 +448,7 @@ def watch_run(command, cwd, shots, args, timeout):
             killed = True
             break
         # Échéance : `timeout`, repoussée jusqu'à `--hard-limit` tant que de nouvelles scènes arrivent.
-        deadline = args.hard_limit if args.extend and now - last_new < 60 else timeout
+        deadline = args.hard_limit if args.extend and now - last_scene < 60 else timeout
         if now - t0 > deadline:
             proc.kill()
             timed = True
