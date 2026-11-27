@@ -1013,3 +1013,9 @@ Les démos DOS sont majoritaires jusqu'à fin 1998 (tableau « Part des démos W
 ## Règle : variantes qui ne diffèrent que par la carte son (2026-11-27, décision de l'utilisateur)
 - Quand une archive contient plusieurs versions d'une même démo ne différant que par la carte son (`nicht.exe` / `nicht_sb.exe` / `dos_gus/nicht.exe`, `*_sb`, `*_gus`, `*_pas`…), une seule capture complète suffit : on ne s'acharne pas sur les autres. Classe `variante` dans `docs/triage-notes.tsv`.
 - `scan-def4` : `nicht.exe` 123 scènes et `dos_gus/nicht.exe` 120 (réessai automatique `--dpmi` pour l'extendeur Zurenava), `nicht_sb.exe` 1 (variante, laissée).
+
+### Lot `scan-def7` et démos de Wamma (2026-11-27)
+- `scan-def7` : QUESTKHN 347 scènes (vrai DOS/4GW 1.97 copié par une étape `prep`/`copy` du profil + `cmd` = `dos4gw.exe kahn.exe`), mindctrl 188 et dist 116 (arrêt « figé » porté à 200 s par un profil `idle`), SD_COLF 1 (EASY.COM factice par `prep`/`write` : plus de triple faute mais écran noir, démo de développement : laissée).
+- `survey.py` : profils `idle`, `cmd`, étapes `prep` `copy` et `write`.
+- **korruptio / hei_lopeta (Wamma)** : voir `docs/triage-notes.tsv` : exception dans une boucle strcmp sur une table de pointeurs qui contient le texte de l'argument ; cause non élucidée.
+- Restent : ATMOZ2 (INT 6Ch), ride (exécutable introuvable), past (mode vidéo), TKOVER99/IN64 (auto-extractibles Windows), MOTFIX.
