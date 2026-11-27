@@ -731,7 +731,10 @@ def run_one(item, args, src, only=None):
             break
         # Carte GUS annoncée par défaut : certaines démos s'y accrochent (Hypnoman 2 : aucune image en 5 min) ; sans image ou avec
         # une seule, un second essai sans GUS (`--no-gus` d'un profil fait la même chose d'office).
-        if args.full and (res.get("kept") or 0) <= 1 and "--gus" in cmd:
+        # Les réessais ne valent que pour un programme qui s'arrête vite sans rien montrer : un programme encore vivant après 90 s (écran
+        # presque fixe, petit mouvement) n'est pas un échec de lancement, et chaque réessai durerait aussi longtemps (« lapsuus » : 3 × 11 min).
+        quick = (res.get("duration") or 0) < 90
+        if quick and args.full and (res.get("kept") or 0) <= 1 and "--gus" in cmd:
             nogus = [a for a in cmd if a != "--gus"]
             out2, timed2 = execute(nogus)
             res["no_gus_retry"] = True
@@ -740,7 +743,7 @@ def run_one(item, args, src, only=None):
                 res["no_gus"] = True
         # Extendeur exotique qui exige un hôte DPMI sans le dire (Zurenava 0.42 : « nicht.exe », rien d'affiché) : sans scène,
         # un dernier essai avec l'hôte DPMI de HX résident.
-        if args.full and (res.get("kept") or 0) < 2 and "--dpmi" not in cmd and not res.get("dpmi"):
+        if quick and args.full and (res.get("kept") or 0) < 2 and "--dpmi" not in cmd and not res.get("dpmi"):
             withdpmi = cmd[:1] + ["--dpmi"] + cmd[1:]
             out3, timed3 = execute(withdpmi)
             res["dpmi_retry"] = True
