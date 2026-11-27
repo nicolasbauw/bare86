@@ -206,6 +206,7 @@ fn main() -> ExitCode {
     let mut font: Option<std::path::PathBuf> = None;
     let mut keys = None;
     let mut program = None;
+    let mut mem_given = false;
     let mut mount: Option<std::path::PathBuf> = None;
     let mut tail = Vec::new();
     // Arguments du programme, un à un (traduction des chemins Linux).
@@ -300,7 +301,10 @@ fn main() -> ExitCode {
                 None => return ExitCode::from(2),
             },
             "--mem" => match value("--mem") {
-                Some(v) if v >= 2.0 => cfg.extended_kb = (v as usize - 1) * 1024,
+                Some(v) if v >= 2.0 => {
+                    cfg.extended_kb = (v as usize - 1) * 1024;
+                    mem_given = true;
+                }
                 _ => return ExitCode::from(2),
             },
             "--ems" => match value("--ems") {
@@ -508,6 +512,14 @@ fn main() -> ExitCode {
         }
     }
     cfg.opl = opl_choice.unwrap_or(card_opl);
+    // Un programme Windows (sous HX) charge toute son image en mémoire, BSS compris : certains en réservent des dizaines de
+    // Mo (madeby.exe : 32 Mo) et, à 64 Mo, finissent en triple faute dans HDPMI. Sans `--mem`, 256 Mo pour eux.
+    if !mem_given
+        && let Some(p) = &program
+        && std::fs::read(p).is_ok_and(|image| dos::win32::is_win32(&image))
+    {
+        cfg.extended_kb = 255 * 1024;
+    }
     // Arguments à traduire : ceux de la ligne de commande seulement.
     let program_args = if host_paths { Some(program_args) } else { None };
     let opts = RunOptions { cfg, program, mount, tail, program_args, debug, screen, shot, video, font, stats, boot, dpmi, shot_every };

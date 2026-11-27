@@ -19,7 +19,7 @@ mod process;
 mod lfn;
 mod shell;
 mod dos4g;
-mod win32;
+pub mod win32;
 /// Lecteur où Bare86 monte son HX (programmes Win32, `--dpmi`).
 pub use win32::HX_DRIVE;
 
