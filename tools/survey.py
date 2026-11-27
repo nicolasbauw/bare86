@@ -77,7 +77,7 @@ EXTENDERS = ("dos4gw", "dos32a", "dos4g", "pmodew")
 SKIP_NAMES = re.compile(r"(setup|install|config|cfg|unp|pkunzip|pkunpak|unzip|arj|lha|readme|view|info|nfo|dos4gw|cwsdpmi|pmode|uvconfig|sndsetup|catalog|vesa|univbe|uninst)", re.I)
 # Exécutables « publicitaires » d'un groupe (écran fixe ou animé identique d'une archive à l'autre) : jamais choisis comme exécutable
 # principal quand l'archive en contient d'autres (cas AMB98 : `exc-whq.exe`, « Future Dimension », choisi à la place de la démo).
-AD_NAMES = re.compile(r"^(exc[-_]?whq|cfxadv|#pitrlz#|!art!)$", re.I)
+AD_NAMES = re.compile(r"^(exc[-_]?whq|cfxadv|#pitrlz#|!art!|zmep5)$", re.I)
 DEFAULT_KEYS = "{wait:900000}"
 
 
