@@ -58,7 +58,7 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
 /// vide) est installé s'il manque ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.15";
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.16";
 const HX_FORK_FILES: [(&str, &str, &[&str]); 10] = [
     (
         "DPMILD32.EXE",
@@ -70,8 +70,9 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 10] = [
     ),
     (
         "DGDI32.DLL",
-        "f6312813bac8bf3402f179b7965ad01b8d2b81f629b8a290fcb127a5deacb4d6",
+        "1cdcc7785db46c93143912a6d47bb13a2efe94e1ddd5ca59ef7e13df459c7d62",
         &[
+            "f6312813bac8bf3402f179b7965ad01b8d2b81f629b8a290fcb127a5deacb4d6",
             "fd10cb7497ad3605d573a5a9d0537e66fde205a7cfb743d370368f4768ee5d4b",
             "39ef30e57b498ea829eb10670d3164b11ecf805fc886e1a32fa3730733ec2a58",
             "d41ae9fcb7de5d693da0bf6b91649b889801ef3416e78ca12c2994c0c6e8c8c3",
