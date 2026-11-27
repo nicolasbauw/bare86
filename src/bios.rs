@@ -333,6 +333,15 @@ impl Bios {
                 self.disks.int13(cpu, mem);
                 Flow::Continue
             }
+            // Port série : aucun (délai dépassé) ; imprimante : octets acceptés et perdus (AH = 90h : prête, sélectionnée).
+            0x14 => {
+                cpu.set_w(AX, 0x8000);
+                Flow::Continue
+            }
+            0x17 => {
+                cpu.set_hi(AX, 0x90);
+                Flow::Continue
+            }
             0x15 => self.int15(cpu, mem),
             0x16 => int16(cpu, mem),
             0x1A => self.int1a(cpu, mem),
@@ -886,6 +895,25 @@ impl Bios {
             }
             // Attente / fin d'attente de périphérique : rien à attendre.
             (0x90 | 0x91, _) => ok(cpu, 0),
+            // Ouverture/fermeture de périphérique, fin de programme, SysRq : rien à faire.
+            (0x80..=0x82 | 0x85, _) => ok(cpu, 0),
+            // Attente d'événement : AL=0 attend CX:DX µs puis met à 1 le bit 7 de l'octet ES:BX ; AL=1 l'annule.
+            (0x83, al) => {
+                let flag = lin(cpu.sreg(ES), cpu.w(BX));
+                if al == 0 {
+                    let us = (u64::from(cpu.w(CX)) << 16) | u64::from(cpu.w(DX));
+                    std::thread::sleep(std::time::Duration::from_micros(us));
+                    mem.write_u8(flag, mem.read_u8(flag) | 0x80);
+                } else {
+                    mem.write_u8(flag, mem.read_u8(flag) & 0x7F);
+                }
+                ok(cpu, 0);
+            }
+            // EBDA (C1h), souris PS/2 (C2h, servie par la machine sous un vrai DOS) et autres services d'un PS/2 : absents, sans message.
+            (0xC1..=0xC4 | 0x41 | 0x21 | 0x6F, _) => {
+                cpu.set_hi(AX, 0x86);
+                set_ret_flag(cpu, mem, CF, true);
+            }
             // Interception clavier (appelée par INT 09h) : touche à traiter.
             (0x4F, _) => set_ret_flag(cpu, mem, CF, true),
             // APM absente : « fonction non prise en charge ».
@@ -1386,7 +1414,10 @@ fn int16(cpu: &mut Cpu, mem: &GuestMem) -> Flow {
             }
         }
         // Répétition automatique : sans effet.
-        0x03 => {}
+        0x03 | 0x04 => {}
+        // Capacités du BIOS clavier (AH=09h : fonctions 10h–12h et réglage de cadence) et identification (AH=0Ah : AT 101/102 touches).
+        0x09 => cpu.set_lo(AX, 0x30),
+        0x0A => cpu.set_w(BX, 0xAB41),
         0x05 => {
             let full = !kb_push(mem, cpu.w(CX));
             cpu.set_lo(AX, u8::from(full));

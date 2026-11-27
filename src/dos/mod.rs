@@ -1158,6 +1158,37 @@ impl Dos {
                 }
                 Out::Keep
             }
+            // Entrée/sortie série (AUX) et imprimante (PRN) : pas de matériel, les octets sont perdus.
+            0x03 => {
+                cpu.set_lo(AX, 0);
+                Out::Keep
+            }
+            0x04 | 0x05 => Out::Keep,
+            // Informations d'allocation du lecteur (courant : 1Bh, DL : 1Ch) : AL = secteurs par unité, CX = octets par
+            // secteur, DX = unités ; DS:BX → octet de type de support (F8h, disque dur).
+            0x1B | 0x1C => {
+                let drive = if ah == 0x1B || cpu.lo(DX) == 0 { self.drives.current } else { cpu.lo(DX) - 1 };
+                if self.drives.is_mounted(drive) {
+                    mem.write_u8(0xF_E7F0, 0xF8);
+                    cpu.set_lo(AX, 32);
+                    cpu.set_w(CX, 512);
+                    cpu.set_w(DX, 0xFFFF);
+                    cpu.set_sreg(DS, 0xF000);
+                    cpu.set_w(BX, 0xE7F0);
+                } else {
+                    cpu.set_lo(AX, 0xFF);
+                }
+                Out::Keep
+            }
+            // Bloc de paramètres de disque (DPB) : non fourni (AL = FFh).
+            0x1F | 0x32 => {
+                cpu.set_lo(AX, 0xFF);
+                Out::Keep
+            }
+            // Verrouillage d'enregistrements : un seul programme, toujours accordé.
+            0x5C => Out::Ok,
+            // Réseau (5Eh, 5Fh) : fonction non valide.
+            0x5E | 0x5F => Out::Err(1),
             0x37 => {
                 if al == 0 {
                     cpu.set_lo(DX, b'/');

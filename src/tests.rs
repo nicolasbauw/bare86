@@ -496,3 +496,8 @@ fn int10_vga_functionality_info() {
 fn int10_graphics_pixels_text_and_scroll() {
     assert_eq!(run(program!("gfxbios")).0, 0, "n° du contrôle en échec (voir asm/tests/gfxbios.S)");
 }
+
+#[test]
+fn bios_and_dos_completion_services() {
+    assert_eq!(run(program!("biosmisc")).0, 0, "n° du contrôle en échec (voir asm/tests/biosmisc.S)");
+}
