@@ -122,8 +122,8 @@ const VBE_PM_LEN: u16 = 0x8A;
 /// Modes VBE : numéro, largeur, hauteur, bits par point. Numéros de VBE 1.2
 /// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
 /// parcourent la liste et lisent les caractéristiques de chaque mode) : 32 bits
-/// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2), 320×240 et 320×200.
-const VBE_MODE_LIST: [(u16, usize, usize, usize); 50] = [
+/// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2 ; 24 bits : Mind Stammer), 320×240 et 320×200.
+const VBE_MODE_LIST: [(u16, usize, usize, usize); 51] = [
     // Ordre : les modes courants d'abord. Certains programmes ne lisent que les 24 premiers de la liste (« Past » ne voit sinon pas le 512×256).
     (0x100, 640, 400, 8),
     (0x101, 640, 480, 8),
@@ -175,6 +175,7 @@ const VBE_MODE_LIST: [(u16, usize, usize, usize); 50] = [
     (0x144, 640, 400, 32),
     (0x164, 320, 240, 8),
     (0x1F8, 320, 240, 8),
+    (0x12F, 512, 384, 24),
 ];
 
 /// Mode VBE de la liste.

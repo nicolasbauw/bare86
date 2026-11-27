@@ -4,7 +4,10 @@
 //! `c/tests/win32/dialog.exe` ouvre cinq boîtes avec `DialogBoxIndirectParam` : fermée par IDOK (42), seulement par
 //! IDCANCEL (7), seulement par WM_CLOSE (9), jamais fermée (le résultat doit être 1 et le programme ne doit pas rester
 //! bloqué), et une boîte qui en ouvre une autre à l'initialisation, et une boîte qui envoie `WM_SETICON` à sa propre fenêtre
-//! et lit son rectangle (comme beaucoup de procédures : la boîte doit être une vraie fenêtre, sinon HX saute à l'adresse 0x13). Il écrit les résultats dans DIALOG.TXT.
+//! et lit son rectangle (comme beaucoup de procédures : la boîte doit être une vraie fenêtre, sinon HX saute à l'adresse 0x13).
+//! Puis une boîte dont le modèle a un bouton par défaut (1008, comme « Start » dans la boîte de réglages d'une démo) : il doit
+//! arriver avant IDOK, et les cases cochées à l'initialisation doivent se relire ; enfin une boîte non modale
+//! (`CreateDialogIndirectParam`) dont le bouton par défaut arrive par la file de messages. Il écrit les résultats dans DIALOG.TXT.
 //! Avec le DUSER32 de HX 2.23, la fonction n'affiche qu'une boîte « called » et attend. Ignoré sans KVM ni HX.
 
 use std::path::{Path, PathBuf};
@@ -42,5 +45,5 @@ fn modal_dialogs_run_to_the_end() {
         .expect("bare86");
     let text = std::fs::read_to_string(dir.join("DIALOG.TXT")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(text.trim(), "ok=42 flags=3 cancel=7 close=9 never=1 outer=5 inner=42 msg=3/1", "résultats des boîtes de dialogue");
+    assert_eq!(text.trim(), "ok=42 flags=3 cancel=7 close=9 never=1 outer=5 inner=42 msg=3/1 def=77 checks=011 modeless=1", "résultats des boîtes de dialogue");
 }
