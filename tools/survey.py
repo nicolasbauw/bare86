@@ -707,6 +707,15 @@ def run_one(item, args, src, only=None):
             if (res.get("kept") or 0) >= 2:
                 cmd, out, timed = nogus, out2, timed2
                 res["no_gus"] = True
+        # Extendeur exotique qui exige un hôte DPMI sans le dire (Zurenava 0.42 : « nicht.exe », rien d'affiché) : sans scène,
+        # un dernier essai avec l'hôte DPMI de HX résident.
+        if args.full and (res.get("kept") or 0) < 2 and "--dpmi" not in cmd and not res.get("dpmi"):
+            withdpmi = cmd[:1] + ["--dpmi"] + cmd[1:]
+            out3, timed3 = execute(withdpmi)
+            res["dpmi_retry"] = True
+            if (res.get("kept") or 0) >= 2:
+                cmd, out, timed = withdpmi, out3, timed3
+                res["dpmi"] = True
         # Rendu au DOS (ou plantage) sans paramètre, alors que le texte en annonce :
         # réessai avec un paramètre neutre, puis avec ceux que le texte propose
         # (Decapitation plante sur argv[1] nul sans paramètre).
