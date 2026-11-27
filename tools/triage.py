@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tri des résultats d'un balayage d'exécutables (`scan-dos2`…) : pour chaque ligne, une CLASSE et l'ACTION à mener.
 
-Classes : remplace (relancé plus tard), court (programme qui rend la main en moins de 12 s : trop peu de captures à 2 s d'intervalle), pub (exécutable publicitaire connu), doublon (mêmes captures qu'un autre élément : `dup-shots.py`), outil (pilote,
+Classes : magazine (diskmag : exclu du périmètre, verdict manuel), remplace (relancé plus tard), court (programme qui rend la main en moins de 12 s : trop peu de captures à 2 s d'intervalle), pub (exécutable publicitaire connu), doublon (mêmes captures qu'un autre élément : `dup-shots.py`), outil (pilote,
 utilitaire, lecteur), a-relancer (message « not handled » d'une fonction BIOS ajoutée depuis), setup (le texte lu à l'écran par OCR
 demande une carte son/une configuration/une touche), win32 (programme Windows, jamais lancé : relancer avec --win32), vide (0–1 capture
 sans texte lisible : à examiner), peu (2–4 scènes), bon (≥ 5 scènes).

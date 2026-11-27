@@ -997,3 +997,6 @@ Les démos DOS sont majoritaires jusqu'à fin 1998 (tableau « Part des démos W
 - Les deux démos tournent (scène 3D, logo THX). Test : `asm/tests/vbeinfo.S`.
 - **Autres trouvailles par OCR des éléments à 0–2 scènes de `scan-full`** (78) : `clinique.exe` (rpl_clin.zip, CD 48) : menu « select your video mode » → profil `2` (320×240, 16 bits), à relancer ; `scenial4.exe` (CD 31) : « Cannot initialize 64kb color mode / install UNIVBE » après des sondes `INT 10h AH=6Fh/5Fh` (détection de chipsets, jamais de VBE 4F00) → hors de portée pour l'instant.
 - **Relance groupée des profils nouveaux (2026-11-27)** : `scan-dos7` : clinique 1 → 51 scènes (touche `2`), luckyd 132 scènes ; `scan-dos8` : ewox_dem.exe 257 scènes (219 images distinctes), arrêtée par la limite après 2219 s (démo longue ; profil par exécutable `{wait:900000}` : Entrée à 3 s la faisait quitter).
+
+## Périmètre : magazines sur disquette exclus (2026-11-27, décision de l'utilisateur)
+- Les « diskmags » (`MAGS/PAIN*`, `STG-*`/`TGD-*` (Technoguide), `RC-VOL01` (volvo), `PLSCENE*`, `SHINE*`…) ne nous intéressent pas : 2 à 4 captures de texte y sont normales, inutile de les paginer. Verdict manuel `magazine` dans `docs/triage-notes.tsv` (règle `MAGS_`, exceptions `SCENIAL4` et `TRIP5` qui restent à voir). À écarter des décomptes « < 5 scènes » par année.
