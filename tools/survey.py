@@ -448,7 +448,10 @@ def watch_run(command, cwd, shots, args, timeout):
             killed = True
             break
         # Échéance : `timeout`, repoussée jusqu'à `--hard-limit` tant que de nouvelles scènes arrivent.
-        deadline = args.hard_limit if args.extend and now - last_scene < 60 else timeout
+        # Pas de prolongation pour une scène « monotone » : 20 scènes gardées qui se ressemblent toutes (effet aléatoire qui ne se répète
+        # jamais exactement : rayons de NEON, flammes, bruit) ne rapporteraient que des variations de la même image pendant 30 min.
+        monotone = len(kept_thumbs) >= 20 and all(thumb_diff(x, kept_thumbs[-1]) < 20 for x in kept_thumbs[-20:])
+        deadline = args.hard_limit if args.extend and now - last_scene < 60 and not monotone else timeout
         if now - t0 > deadline:
             proc.kill()
             timed = True
