@@ -7,7 +7,10 @@
 //! et lit son rectangle (comme beaucoup de procédures : la boîte doit être une vraie fenêtre, sinon HX saute à l'adresse 0x13).
 //! Puis une boîte dont le modèle a un bouton par défaut (1008, comme « Start » dans la boîte de réglages d'une démo) : il doit
 //! arriver avant IDOK, et les cases cochées à l'initialisation doivent se relire ; enfin une boîte non modale
-//! (`CreateDialogIndirectParam`) dont le bouton par défaut arrive par la file de messages. Il écrit les résultats dans DIALOG.TXT.
+//! (`CreateDialogIndirectParam`) dont le bouton par défaut arrive par la file de messages. Les éléments du modèle doivent être
+//! des fenêtres (`GetDlgItem`, texte, combo box : chaînes, sélection, données : ce que lisent les fonctions DDX de MFC).
+//! Enfin un crochet `WH_CBT` doit être appelé par `CreateWindowEx` (`HCBT_CREATEWND`) et pouvoir sous-classer la fenêtre
+//! avant `WM_CREATE` (MFC : sinon `CWnd::CreateEx` échoue), et ne plus l'être une fois décroché. Il écrit les résultats dans DIALOG.TXT.
 //! Avec le DUSER32 de HX 2.23, la fonction n'affiche qu'une boîte « called » et attend. Ignoré sans KVM ni HX.
 
 use std::path::{Path, PathBuf};
@@ -45,5 +48,5 @@ fn modal_dialogs_run_to_the_end() {
         .expect("bare86");
     let text = std::fs::read_to_string(dir.join("DIALOG.TXT")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(text.trim(), "ok=42 flags=3 cancel=7 close=9 never=1 outer=5 inner=42 msg=3/1 def=77 checks=011 modeless=1", "résultats des boîtes de dialogue");
+    assert_eq!(text.trim(), "ok=42 flags=3 cancel=7 close=9 never=1 outer=5 inner=42 msg=3/1 def=77 checks=011 modeless=1 ctl=1/Q/2/1/800x600/55 cbt=1/11/1/1", "résultats des boîtes de dialogue");
 }

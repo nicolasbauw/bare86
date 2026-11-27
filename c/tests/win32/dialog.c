@@ -3,9 +3,12 @@
    puis IDCANCEL, puis WM_CLOSE, jusqu'à EndDialog ; la boîte est une vraie fenêtre (SendMessage, GetWindowRect). Avec un modèle
    qui a un bouton par défaut (BS_DEFPUSHBUTTON, comme « Start » ou « Run » dans la boîte de réglages d'une démo), WM_COMMAND
    porte d'abord l'identifiant de ce bouton ; les cases cochées par la procédure se relisent ; une boîte non modale
-   (CreateDialogIndirectParam) reçoit le clic de son bouton par défaut par la file de messages. Résultats dans DIALOG.TXT. */
+   (CreateDialogIndirectParam) reçoit le clic de son bouton par défaut par la file de messages. Les éléments du modèle sont
+   des fenêtres enfants (GetDlgItem, texte, combo box : chaînes, sélection, données). Enfin un crochet WH_CBT est appelé par
+   CreateWindowEx (HCBT_CREATEWND) avant WM_CREATE et peut sous-classer la fenêtre, comme le fait MFC. Résultats dans DIALOG.TXT. */
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 
 static int flags;
 
@@ -79,25 +82,40 @@ static LPCDLGTEMPLATE deftpl(void)
 {
     WORD *p = (WORD *)dbuf;
     *(DWORD *)p = DS_SETFONT | WS_POPUP; p += 2; *(DWORD *)p = 0; p += 2;
-    *p++ = 2; *p++ = 0; *p++ = 0; *p++ = 100; *p++ = 50;
+    *p++ = 3; *p++ = 0; *p++ = 0; *p++ = 100; *p++ = 50;
     *p++ = 0; *p++ = 0; *p++ = 'T'; *p++ = 0;   /* menu, classe, titre */
     *p++ = 8; *p++ = 'A'; *p++ = 0;              /* police */
     p = item(p, WS_CHILD | BS_PUSHBUTTON, 1009, 'Q');
-    item(p, WS_CHILD | BS_DEFPUSHBUTTON, 1008, 'S');
+    p = item(p, WS_CHILD | BS_DEFPUSHBUTTON, 1008, 'S');
+    p = item(p, WS_CHILD | CBS_DROPDOWNLIST, 1010, 'C');
+    p[-4] = 0x85;                                /* classe COMBOBOX */
     return (LPCDLGTEMPLATE)dbuf;
 }
 
-/* boîte de réglages : coche ses valeurs par défaut, les relit sur « Start » (1008) et se ferme avec 77 */
+/* boîte de réglages : coche ses valeurs par défaut, remplit sa combo box, relit tout sur « Start » (1008) et se ferme avec 77 */
 static int checks;
+static char ctl[64];
 static BOOL CALLBACK dp_def(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_INITDIALOG) {
         CheckDlgButton(h, 1003, BST_CHECKED);
         CheckRadioButton(h, 1004, 1006, 1006);
+        SendDlgItemMessage(h, 1010, CB_ADDSTRING, 0, (LPARAM)"640x480");
+        SendDlgItemMessage(h, 1010, CB_ADDSTRING, 0, (LPARAM)"800x600");
+        SendDlgItemMessage(h, 1010, CB_SETITEMDATA, 1, 55);
+        SendDlgItemMessage(h, 1010, CB_SETCURSEL, 1, 0);
         return TRUE;
     }
     if (m == WM_COMMAND && LOWORD(w) == 1008) {
+        HWND c = GetDlgItem(h, 1010);
+        char q[8] = "", s[16] = "";
+        int sel;
         checks = IsDlgButtonChecked(h, 1004) * 100 + IsDlgButtonChecked(h, 1003) * 10 + (int)SendDlgItemMessage(h, 1006, BM_GETCHECK, 0, 0);
+        GetDlgItemText(h, 1009, q, sizeof q);
+        sel = (int)SendMessage(c, CB_GETCURSEL, 0, 0);
+        SendMessage(c, CB_GETLBTEXT, sel, (LPARAM)s);
+        sprintf(ctl, "%d/%s/%d/%d/%s/%d", c && GetDlgCtrlID(c) == 1010, q, (int)SendMessage(c, CB_GETCOUNT, 0, 0), sel, s,
+                (int)SendMessage(c, CB_GETITEMDATA, sel, 0));
         EndDialog(h, 77);
         return TRUE;
     }
@@ -111,6 +129,44 @@ static BOOL CALLBACK dp_modeless(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_COMMAND && LOWORD(w) == 1008) { modeless_hit = 1; DestroyWindow(h); PostQuitMessage(0); return TRUE; }
     return FALSE;
+}
+
+/* crochet WH_CBT : appelé avec HCBT_CREATEWND (fenêtre, CREATESTRUCT) avant WM_CREATE ; sous-classe la fenêtre */
+static int cbt_hits, cbt_ok, created_a, created_b;
+static HHOOK hook;
+static LRESULT CALLBACK wp_a(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_CREATE) created_a++;
+    return DefWindowProc(h, m, w, l);
+}
+static LRESULT CALLBACK wp_b(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_CREATE) created_b++;
+    return DefWindowProc(h, m, w, l);
+}
+static LRESULT CALLBACK cbt(int code, WPARAM w, LPARAM l)
+{
+    if (code == HCBT_CREATEWND) {
+        LPCREATESTRUCT cs = ((LPCBT_CREATEWND)l)->lpcs;
+        cbt_hits++;
+        cbt_ok = IsWindow((HWND)w) && cs && cs->lpszName && !strcmp(cs->lpszName, "hooked");
+        SetWindowLong((HWND)w, GWL_WNDPROC, (LONG)wp_b);
+    }
+    return CallNextHookEx(hook, code, w, l);
+}
+
+static void cbt_test(void)
+{
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = wp_a;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "cbtclass";
+    RegisterClass(&wc);
+    hook = SetWindowsHookEx(WH_CBT, cbt, NULL, GetCurrentThreadId());
+    CreateWindow("cbtclass", "hooked", WS_POPUP, 0, 0, 10, 10, NULL, NULL, wc.hInstance, NULL);
+    UnhookWindowsHookEx(hook);
+    CreateWindow("cbtclass", "plain", WS_POPUP, 0, 0, 10, 10, NULL, NULL, wc.hInstance, NULL);
 }
 
 int main(void)
@@ -132,8 +188,10 @@ int main(void)
         while (GetMessage(&msg, NULL, 0, 0) > 0) {
             if (!IsDialogMessage(hm, &msg)) { TranslateMessage(&msg); DispatchMessage(&msg); }
         }
+    cbt_test();
     f = fopen("DIALOG.TXT", "w");
-    fprintf(f, "ok=%d flags=%d cancel=%d close=%d never=%d outer=%d inner=%d msg=%d/%d def=%d checks=%03d modeless=%d\n", r1, flags, r2, r3, r4, r5, nested_inner, r6, msg_ok, r7, checks, modeless_hit);
+    fprintf(f, "ok=%d flags=%d cancel=%d close=%d never=%d outer=%d inner=%d msg=%d/%d def=%d checks=%03d modeless=%d ctl=%s cbt=%d/%d/%d/%d\n", r1, flags, r2, r3, r4, r5, nested_inner, r6, msg_ok, r7, checks,
+            modeless_hit, ctl, hook != NULL, cbt_hits * 10 + cbt_ok, created_a, created_b);
     fclose(f);
     return 0;
 }
