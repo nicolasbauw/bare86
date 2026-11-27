@@ -447,14 +447,16 @@ def watch_run(command, cwd, shots, args, timeout):
                 os.remove(path)
         if killed:
             break
-        if args.idle and now - last_new > args.idle and now - t0 > 30:
+        monotone = len(kept_thumbs) >= 20 and all(thumb_diff(x, kept_thumbs[-1]) < 20 for x in kept_thumbs[-20:])
+        # Arrêt « figé » : plus rien depuis --idle s ; pour une scène monotone (effet aléatoire qui bouge sans cesse), plus aucun vrai
+        # changement de scène depuis --idle s suffit.
+        if args.idle and (now - last_new > args.idle or (monotone and now - last_scene > args.idle)) and now - t0 > 30:
             proc.terminate()
             killed = True
             break
         # Échéance : `timeout`, repoussée jusqu'à `--hard-limit` tant que de nouvelles scènes arrivent.
         # Pas de prolongation pour une scène « monotone » : 20 scènes gardées qui se ressemblent toutes (effet aléatoire qui ne se répète
         # jamais exactement : rayons de NEON, flammes, bruit) ne rapporteraient que des variations de la même image pendant 30 min.
-        monotone = len(kept_thumbs) >= 20 and all(thumb_diff(x, kept_thumbs[-1]) < 20 for x in kept_thumbs[-20:])
         deadline = args.hard_limit if args.extend and now - last_scene < 60 and not monotone else timeout
         if now - t0 > deadline:
             proc.kill()
