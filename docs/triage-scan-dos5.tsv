@@ -1,0 +1,16 @@
+id	exe	scenes	status	classe	action	texte_ecran
+pcteam_cd43_TheParty98_Demos_moai.zip__moai32.exe	moai32.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd36_tg98_3dfx.zip__forfun_x_testapp.exe	forfun_x/testapp.exe	0	exit	outil	pas une démo (pilote/utilitaire) : écarter ou vérifier	
+pcteam_cd46_Volcanic99_demo_past.zip__past32.exe	past32.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd46_Volcanic99_demo_jumpy.zip__jumpywin.exe	jumpywin.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd54_norvegia99_demo_bevegels.zip__bevew.exe	bevew.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd36_tg98_3dfx.zip__cornball_x_planet.exe	cornball_x/planet.exe	3	ok	peu	2–4 scènes : vérifier	
+pcteam_cd59_Mekka_symposium_2000_in4k_dma_glmr.zip__glamour.exe	glamour.exe	1	ok	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	HDPMI32 now resident | DPMI loader v3.12 | Copyright 1993-2824 Japheth
+pcteam_cd43_TheParty98_Demos_b_stateofmind.zip__wmind.exe	wmind.exe	2	ok	peu	2–4 scènes : vérifier	
+pcteam_cd59_Mekka_symposium_2000_in64_crn_falco.zip__sb_ver_falco_sb.exe	sb_ver/falco_sb.exe	0	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd71_MekkaSymposium_IN4K_TS_MS2K1.ZIP__ts_ms2k1_uncompressed.exe	ts_ms2k1_uncompressed.exe	1	exit	vide	0–1 capture : examiner (sortie immédiate, écran noir…)	HDPMI32 now resident | DPMI loader v3.12 | Copyright 1993-2824 Japheth
+pcteam_cd73_paradox2001_in64_nicht.zip__w_nicht.exe	w_nicht.exe	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd59_Mekka_symposium_2000_in64_exd-h7p.zip__heaven7w.exe	heaven7w.exe	76	exit	bon		
+pcteam_cd73_paradox2001_in64_nicht_f.zip__win_w_nicht.exe	win/w_nicht.exe	7	exit	bon		
+pcteam_cd59_Mekka_symposium_2000_in64_h7-final.zip__heaven7w.exe	heaven7w.exe	73	exit	bon		
+pcteam_cd71_MekkaSymposium_IN4K_varus_by_kolor.zip__varus_by_kolor_compatible.exe	varus_by_kolor/compatible.exe	204	exit	bon		

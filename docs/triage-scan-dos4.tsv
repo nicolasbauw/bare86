@@ -1,0 +1,21 @@
+id	exe	scenes	status	classe	action	texte_ecran
+pcteam_cd29_ANTIQ297_1KO_CTP-OXEN.ZIP__oxel.com	oxel.com	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd29_ANTIQ297_1KO_DA_MONKY.ZIP__da_monky.com	da_monky.com	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd31_MAGS_PAIN0697.ZIP__techpcx_x_pcx.exe	techpcx_x/pcx.exe	1	exit	court	se termine en moins de 12 s (captures toutes les 2 s) : relancer avec --every 0.5	
+pcteam_cd33_NETZON_1_FAST_GAMES_2_PACILA.ZIP__prophecy.exe	prophecy.exe	0	exit	pub	publicité du BBS Prophecy (Toulouse), logo ANSI puis retour au DOS	
+pcteam_cd36_am98_in4k.zip__tri_x_trivia.exe	tri_x/!trivia.exe	1	exit	outil	texte seul « <Daemos> Sorry! No trivia allowed right now! » (blague/message d'une intro 4K)	
+pcteam_cd36_ms98_32kgame.zip__net_x_net32kb.exe	net_x/net32kb.exe	2	exit	peu	2–4 scènes : vérifier	
+pcteam_cd29_PLACE2BE_DEMOS_WEG.ZIP__place.exe	place.exe	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd36_ms98_32kgame.zip__spla_x_digital.com	spla_x/digital.com	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd36_ms98_demo.zip__luc_x_luckyd.exe	luc_x/luckyd.exe	0	exit	a-etudier	DOS/4GW « Error: Mode not found » ; sonde tous les modes VBE 100h–1F8h (4F01 répond OK à chacun) sans en trouver un qui lui convient	
+pcteam_cd36_tg98_demo.zip__ewo_x_ewox_dem.exe	ewo_x/ewox_dem.exe	1	exit	a-etudier	lancé par `dos4gw ewox_dem.exe` (runme.bat) : « Valid video mode not found » ; sonde les modes VBE 110h… avant d'abandonner	DOS/4GW Protected Mode Run-time Version 1.97 | Copyright (c) Rational Systems, Inc, 1998-1994 | Jona nna nanan nnn nn nnn nnn nnn nn nnn nnn nnn nnn nnn nant | 
+pcteam_cd36_tg98_in4k.zip__kol_x_kolakola.exe	kol_x/kolakola.exe	0	exit	a-etudier	info : « Run under WIN95 !!!! » ; affiche « 32323rssfsd » et rend la main : dépend de Windows 95	
+pcteam_cd57_demobit2K_in64_pbpt.zip__pbpt_pv.exe	pbpt_pv.exe	0	exit	outil	affiche « needs windows » (lanceur) ; la démo est la version Windows	
+pcteam_cd58_escape2k_matura97.zip__m2.exe	m2.exe	0	exit	outil	texte seul : « watch the demo by calling MATURA97.EXE » (aide du megademo EXTERN)	
+pcteam_cd36_tg98_demo.zip__8ho_x_ehours.exe	8ho_x/ehours.exe	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd50_ASSEMB_1_IN4K_SAVE_WOR.ZIP__swkilpa.com	swkilpa.com	3	exit	peu	2–4 scènes : vérifier	
+pcteam_cd71_MekkaSymposium_IN4K_varus_by_kolor.zip__varus_by_kolor_w2k.com	varus_by_kolor/w2k.com	0	exit	outil	lanceur DOS d'une démo Windows (OpenGL/GeForce) ; la démo : compatible.exe (--win32, 204 scènes)	
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_timedemo_juggler_timedemo1.com	all versions_x/timedemo/juggler_timedemo1.com	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001_final.zip__all_versions_x_timedemo_juggler_timedemo2.com	all versions_x/timedemo/juggler_timedemo2.com	4	exit	peu	2–4 scènes : vérifier	
+pcteam_cd71_MekkaSymposium_IN4K_varus_by_kolor.zip__varus_by_kolor_w98.com	varus_by_kolor/w98.com	0	exit	outil	idem	
+pcteam_cd71_MekkaSymposium_IN4K_juggler_2001.zip__all_versions_x_juggler_nomusic.com	all versions_x/juggler_nomusic.com	3	exit	peu	2–4 scènes : vérifier	

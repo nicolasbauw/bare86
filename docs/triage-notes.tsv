@@ -1,0 +1,11 @@
+# Verdicts manuels du tri (tools/triage.py) : sous-chaîne de l'identifiant <TAB> classe <TAB> remarque
+NETZON_1_FAST_GAMES_2_PACILA.ZIP__prophecy.exe	pub	publicité du BBS Prophecy (Toulouse), logo ANSI puis retour au DOS
+demobit2K_in64_pbpt.zip__pbpt_pv.exe	outil	affiche « needs windows » (lanceur) ; la démo est la version Windows
+escape2k_matura97.zip__m2.exe	outil	texte seul : « watch the demo by calling MATURA97.EXE » (aide du megademo EXTERN)
+varus_by_kolor.zip__varus_by_kolor_w2k.com	outil	lanceur DOS d'une démo Windows (OpenGL/GeForce) ; la démo : compatible.exe (--win32, 204 scènes)
+varus_by_kolor.zip__varus_by_kolor_w98.com	outil	idem
+varus_by_kolor.zip__varus_by_kolor_wme.com	outil	idem
+tg98_demo.zip__ewo_x_ewox_dem.exe	a-etudier	lancé par `dos4gw ewox_dem.exe` (runme.bat) : « Valid video mode not found » ; sonde les modes VBE 110h… avant d'abandonner
+ms98_demo.zip__luc_x_luckyd.exe	a-etudier	DOS/4GW « Error: Mode not found » ; sonde tous les modes VBE 100h–1F8h (4F01 répond OK à chacun) sans en trouver un qui lui convient
+tg98_in4k.zip__kol_x_kolakola.exe	a-etudier	info : « Run under WIN95 !!!! » ; affiche « 32323rssfsd » et rend la main : dépend de Windows 95
+am98_in4k.zip__tri_x_trivia.exe	outil	texte seul « <Daemos> Sorry! No trivia allowed right now! » (blague/message d'une intro 4K)

@@ -547,6 +547,8 @@ def run_one(item, args, src, only=None):
     rel = os.path.relpath(item, src)
     iid = ident(rel) + (("__" + ident(only)) if only else "")
     res = {"id": iid, "item": rel, "status": None}
+    # Profil d'un exécutable précis d'une archive à plusieurs exécutables : clé « élément|exécutable » ; sinon celle de l'élément.
+    pkey = f"{rel}|{only}" if only and f"{rel}|{only}" in args.profile_data else rel
     if only:
         res["only"] = only
     work = os.path.join(args.out, "work", iid)
@@ -556,7 +558,7 @@ def run_one(item, args, src, only=None):
     os.makedirs(shots)
     t0 = time.time()
     try:
-        prep = (args.profile_data.get(rel) or {}).get("prep")
+        prep = (args.profile_data.get(pkey) or {}).get("prep")
         if os.path.isdir(item) and prep:
             # Préparation demandée par le profil : sur une copie, jamais dans la collection.
             shutil.copytree(item, work)
@@ -608,7 +610,7 @@ def run_one(item, args, src, only=None):
         # (le premier mot est alors le programme à lancer).
         extra = bat_args(exe)
         script = bat_script(exe)
-        forced = (args.profile_data.get(rel) or {}).get("run")  # profil : commande à lancer (BAT écrit par un SETUP…)
+        forced = (args.profile_data.get(pkey) or {}).get("run")  # profil : commande à lancer (BAT écrit par un SETUP…)
         if forced:
             cmd.append(forced)
             res["bat"] = forced
@@ -629,11 +631,11 @@ def run_one(item, args, src, only=None):
         if extra:
             res["args"] = extra
         # Profil de l'élément (clavier, options) : mémorisé, ou sondé (--probe).
-        profile = args.profile_data.get(rel)
+        profile = args.profile_data.get(pkey)
         if profile is None and args.probe:
             best, scores = probe_keys(cmd, os.path.dirname(exe), shots, args)
             profile = {"keys": best, "probe": scores}
-            save_profile(args.profiles, rel, profile)
+            save_profile(args.profiles, f"{rel}|{only}" if only else rel, profile)
         if profile:
             cmd = with_option(cmd, "--keys", profile.get("keys", args.keys))
             opts = profile.get("opts", [])

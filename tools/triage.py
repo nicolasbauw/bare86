@@ -22,6 +22,18 @@ SETUP = re.compile(r"sound ?card|select sound|sound output|setup|configuration|g
 NOTHANDLED = re.compile(r"INT 10h AH=(0C|0D|1B|04|0B|14)h not handled|INT 1[47]h|INT 16h AH=(04|09|0A)h")
 
 
+def notes(path):
+    """Verdicts posés à la main (`docs/triage-notes.tsv` : sous-chaîne de l'identifiant, classe, remarque)."""
+    out = []
+    if os.path.exists(path):
+        for l in open(path):
+            if l.strip() and not l.startswith("#"):
+                p = l.rstrip("\n").split("\t")
+                if len(p) >= 2:
+                    out.append((p[0], p[1], p[2] if len(p) > 2 else ""))
+    return out
+
+
 def ocr(path):
     out = subprocess.run(["tesseract", path, "-", "--psm", "6"], capture_output=True, text=True).stdout
     return " | ".join(l.strip() for l in out.splitlines() if len(l.strip()) > 3)[:160]
@@ -49,6 +61,7 @@ def main():
     except OSError:
         pass
     out, count = [], collections.Counter()
+    manual = notes(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "triage-notes.tsv"))
     for x in rows:
         exe, k, msg = x.get("exe") or "", x.get("kept") or 0, x.get("message") or ""
         text = ""
@@ -57,8 +70,11 @@ def main():
             pics = sorted(f for f in os.listdir(shots) if f.endswith(".png") and f != "f.png")
             if pics:
                 text = ocr(os.path.join(shots, pics[-1]))
+        verdict = next(((c, n) for key, c, n in manual if key in x["id"]), None)
         short = x["status"] == "exit" and (x.get("seconds") or 99) < 12
-        if x["id"] in newer:
+        if verdict:
+            cls, act = verdict[0], verdict[1] or "verdict manuel"
+        elif x["id"] in newer:
             cls, act = "remplace", "relancé dans un balayage plus récent"
         elif PUB.search(exe):
             cls, act = "pub", "ignorer (publicité du distributeur)"
