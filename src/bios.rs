@@ -123,7 +123,8 @@ const VBE_PM_LEN: u16 = 0x8A;
 /// jusqu'à 11Bh ; au-delà, numéros propres (VBE 2.0 : les programmes
 /// parcourent la liste et lisent les caractéristiques de chaque mode) : 32 bits
 /// (OpenGL logiciel et SDL sous HX), 512×384 (`sw_mode 2` de Quake 2), 320×240 et 320×200.
-const VBE_MODE_LIST: [(u16, usize, usize, usize); 41] = [
+const VBE_MODE_LIST: [(u16, usize, usize, usize); 50] = [
+    // Ordre : les modes courants d'abord. Certains programmes ne lisent que les 24 premiers de la liste (« Past » ne voit sinon pas le 512×256).
     (0x100, 640, 400, 8),
     (0x101, 640, 480, 8),
     (0x103, 800, 600, 8),
@@ -140,34 +141,38 @@ const VBE_MODE_LIST: [(u16, usize, usize, usize); 41] = [
     (0x116, 1024, 768, 15),
     (0x117, 1024, 768, 16),
     (0x118, 1024, 768, 24),
+    (0x13D, 512, 256, 15),
+    (0x13E, 512, 256, 16),
+    (0x12A, 320, 240, 15),
+    (0x12B, 320, 240, 16),
+    (0x12C, 320, 240, 24),
+    (0x138, 400, 300, 15),
+    (0x139, 400, 300, 16),
+    (0x125, 512, 384, 15),
+    (0x126, 512, 384, 16),
     (0x120, 320, 200, 32),
     (0x121, 640, 480, 32),
     (0x122, 800, 600, 32),
     (0x123, 1024, 768, 32),
     (0x124, 512, 384, 8),
-    (0x125, 512, 384, 15),
-    (0x126, 512, 384, 16),
     (0x127, 512, 384, 32),
     (0x128, 320, 240, 8),
     (0x129, 320, 240, 32),
-    // 320×240 en couleur et 320×200 en 256 couleurs : modes que les démos
-    // cherchent dans la liste (cartes dont le BIOS les propose, UniVBE).
-    (0x12A, 320, 240, 15),
-    (0x12B, 320, 240, 16),
-    (0x12C, 320, 240, 24),
     (0x12D, 320, 200, 8),
     (0x136, 320, 240, 16),
     (0x12E, 320, 400, 8),
     (0x130, 320, 400, 16),
-    // 320×200 en 32 bits tel que SciTech Display Doctor 5.3 le numérote (X-398363 : « Linear frame buffer not found »).
     (0x146, 320, 200, 32),
-    // 400×300 (UniVBE) : « Lucky Day » (BugX, Mekka 98) le cherche en 16 bits (BugxModeCode(400,300,16)).
     (0x137, 400, 300, 8),
-    (0x138, 400, 300, 15),
-    (0x139, 400, 300, 16),
     (0x13A, 400, 300, 24),
     (0x13B, 400, 300, 32),
-    // 320×240 en 256 couleurs sous les numéros que Bazar (Smash Designs, Se98) essaie en premier (« VBE3 mode? »).
+    (0x13C, 512, 256, 8),
+    (0x13F, 512, 256, 24),
+    (0x140, 512, 256, 32),
+    (0x141, 640, 400, 15),
+    (0x142, 640, 400, 16),
+    (0x143, 640, 400, 24),
+    (0x144, 640, 400, 32),
     (0x164, 320, 240, 8),
     (0x1F8, 320, 240, 8),
 ];
