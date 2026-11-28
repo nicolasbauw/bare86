@@ -10,7 +10,11 @@
 //! (`CreateDialogIndirectParam`) dont le bouton par défaut arrive par la file de messages. Les éléments du modèle doivent être
 //! des fenêtres (`GetDlgItem`, texte, combo box : chaînes, sélection, données : ce que lisent les fonctions DDX de MFC).
 //! Enfin un crochet `WH_CBT` doit être appelé par `CreateWindowEx` (`HCBT_CREATEWND`) et pouvoir sous-classer la fenêtre
-//! avant `WM_CREATE` (MFC : sinon `CWnd::CreateEx` échoue), et ne plus l'être une fois décroché. Il écrit les résultats dans DIALOG.TXT.
+//! avant `WM_CREATE` (MFC : sinon `CWnd::CreateEx` échoue), et ne plus l'être une fois décroché. Puis une boîte sans bouton par
+//! défaut, active, qui ignore IDOK : son premier bouton-poussoir (1003, « Begin Wire » de `wireworld`) doit arriver avant
+//! IDCANCEL ; la fenêtre montrée ensuite doit recevoir `WM_ACTIVATEAPP` (la boîte est cachée par `EndDialog`), et
+//! `LoadIcon(NULL, IDI_APPLICATION)` comme `SetClassLong(GCL_HICON)` doivent rendre une icône non nulle (MFC : `CWnd::SetIcon`).
+//! Il écrit les résultats dans DIALOG.TXT.
 //! Avec le DUSER32 de HX 2.23, la fonction n'affiche qu'une boîte « called » et attend. Ignoré sans KVM ni HX.
 
 use std::path::{Path, PathBuf};
@@ -48,5 +52,5 @@ fn modal_dialogs_run_to_the_end() {
         .expect("bare86");
     let text = std::fs::read_to_string(dir.join("DIALOG.TXT")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(text.trim(), "ok=42 flags=3 cancel=7 close=9 never=1 outer=5 inner=42 msg=3/1 def=77 checks=011 modeless=1 ctl=1/Q/2/1/800x600/55 cbt=1/11/1/1", "résultats des boîtes de dialogue");
+    assert_eq!(text.trim(), "ok=42 flags=3 cancel=7 close=9 never=1 outer=5 inner=42 msg=3/1 def=77 checks=011 modeless=1 ctl=1/Q/2/1/800x600/55 cbt=1/11/1/1 first=33 icon=1 actapp=1", "résultats des boîtes de dialogue");
 }

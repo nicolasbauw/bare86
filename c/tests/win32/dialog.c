@@ -123,6 +123,51 @@ static BOOL CALLBACK dp_def(HWND h, UINT m, WPARAM w, LPARAM l)
     return FALSE;
 }
 
+/* boîte de réglages sans bouton par défaut (« Begin Wire », « Nah ») : IDOK est ignoré, le premier bouton-poussoir
+   (1003) doit arriver avant IDCANCEL (qui fait quitter la démo) */
+static DWORD fbuf[64];
+static LPCDLGTEMPLATE firsttpl(void)
+{
+    WORD *p = (WORD *)fbuf;
+    *(DWORD *)p = WS_POPUP; p += 2; *(DWORD *)p = 0; p += 2;
+    *p++ = 2; *p++ = 0; *p++ = 0; *p++ = 100; *p++ = 50;
+    *p++ = 0; *p++ = 0; *p++ = 'W'; *p++ = 0;   /* menu, classe, titre */
+    p = item(p, WS_CHILD | BS_PUSHBUTTON, 1003, 'B');
+    p = item(p, WS_CHILD | BS_PUSHBUTTON, 1004, 'N');
+    return (LPCDLGTEMPLATE)fbuf;
+}
+static BOOL CALLBACK dp_first(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_INITDIALOG) { ShowWindow(h, SW_SHOWNA); SetActiveWindow(h); return TRUE; }
+    if (m == WM_COMMAND && LOWORD(w) == 1003) { EndDialog(h, 33); return TRUE; }
+    if (m == WM_COMMAND && LOWORD(w) == IDCANCEL) { EndDialog(h, 2); return TRUE; }
+    return FALSE;
+}
+
+/* fenêtre principale montrée après la boîte : elle doit recevoir WM_ACTIVATEAPP (les démos ne dessinent qu'après) ;
+   l'icône de sa classe (LoadIcon(NULL, IDI_APPLICATION)) doit être non nulle, comme l'ancienne valeur rendue par
+   SetClassLong(GCL_HICON) (MFC : CWnd::SetIcon) */
+static int activateapp;
+static LRESULT CALLBACK wp_main(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_ACTIVATEAPP && w) activateapp++;
+    return DefWindowProc(h, m, w, l);
+}
+static int icon_test(HWND *ph)
+{
+    WNDCLASS wc;
+    HICON hi = LoadIcon(NULL, IDI_APPLICATION);
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = wp_main;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.hIcon = hi;
+    wc.lpszClassName = "mainclass";
+    RegisterClass(&wc);
+    *ph = CreateWindow("mainclass", "main", WS_POPUP, 0, 0, 10, 10, NULL, NULL, wc.hInstance, NULL);
+    ShowWindow(*ph, SW_SHOW);
+    return hi != NULL && SetClassLong(*ph, GCL_HICON, (LONG)hi) == (LONG)hi && GetClassLong(*ph, GCL_HICON) == (LONG)hi;
+}
+
 /* boîte non modale : « Start » posté dans la file, la boucle de messages s'arrête */
 static int modeless_hit;
 static BOOL CALLBACK dp_modeless(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -172,8 +217,8 @@ static void cbt_test(void)
 int main(void)
 {
     static DWORD tpl[8];
-    int r1, r2, r3, r4, r5, r6, r7;
-    HWND hm;
+    int r1, r2, r3, r4, r5, r6, r7, r8, icon;
+    HWND hm, hw;
     MSG msg;
     FILE *f;
     r1 = DialogBoxIndirectParam(NULL, (LPCDLGTEMPLATE)tpl, NULL, dp_ok, 1234);
@@ -189,9 +234,12 @@ int main(void)
             if (!IsDialogMessage(hm, &msg)) { TranslateMessage(&msg); DispatchMessage(&msg); }
         }
     cbt_test();
+    r8 = DialogBoxIndirectParam(NULL, firsttpl(), NULL, dp_first, 0);
+    icon = icon_test(&hw);
+    DestroyWindow(hw);
     f = fopen("DIALOG.TXT", "w");
-    fprintf(f, "ok=%d flags=%d cancel=%d close=%d never=%d outer=%d inner=%d msg=%d/%d def=%d checks=%03d modeless=%d ctl=%s cbt=%d/%d/%d/%d\n", r1, flags, r2, r3, r4, r5, nested_inner, r6, msg_ok, r7, checks,
-            modeless_hit, ctl, hook != NULL, cbt_hits * 10 + cbt_ok, created_a, created_b);
+    fprintf(f, "ok=%d flags=%d cancel=%d close=%d never=%d outer=%d inner=%d msg=%d/%d def=%d checks=%03d modeless=%d ctl=%s cbt=%d/%d/%d/%d first=%d icon=%d actapp=%d\n", r1, flags, r2, r3, r4, r5, nested_inner, r6, msg_ok, r7, checks,
+            modeless_hit, ctl, hook != NULL, cbt_hits * 10 + cbt_ok, created_a, created_b, r8, icon, activateapp);
     fclose(f);
     return 0;
 }

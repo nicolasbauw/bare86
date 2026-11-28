@@ -92,6 +92,14 @@ int main(void)
     c2 = cc;
     imagelist_ok = c2 && GetProcAddress(c2, "ImageList_Create") && GetProcAddress(c2, "ImageList_Draw");
     fprintf(f, "more2=wininet:%d imagelist:%d\n", wininet_ok != 0, imagelist_ok != 0);
+    {   /* PolyPolygon, RoundRect (GDI32 de trx-elec, intro 64k qui résout ses imports elle-même), loin du cadre testé */
+        HMODULE g = GetModuleHandle("GDI32.DLL");
+        BOOL (WINAPI *ppg)(HDC, const POINT *, const INT *, int) = (BOOL (WINAPI *)(HDC, const POINT *, const INT *, int))GetProcAddress(g, "PolyPolygon");
+        BOOL (WINAPI *rr)(HDC, int, int, int, int, int, int) = (BOOL (WINAPI *)(HDC, int, int, int, int, int, int))GetProcAddress(g, "RoundRect");
+        static POINT pts[7] = { {500, 400}, {540, 400}, {520, 440}, {600, 400}, {640, 400}, {640, 440}, {600, 440} };
+        static INT counts[2] = { 3, 4 };
+        fprintf(f, "poly=%d,%d\n", ppg ? ppg(hdc, pts, counts, 2) : -1, rr ? rr(hdc, 500, 460, 560, 500, 8, 8) : -1);
+    }
     fprintf(f, "more=stretch:%d hatch:%d dibpat:%d rrgn:%d ps:%d guid:%d,%d cbv:%x icce:%d\n", sbm, hatch, dibpat, rrgn, ps, guid1, guid2, cbvr, iccer);
     fclose(f);
     red = CreateSolidBrush(RGB(255, 0, 0));
