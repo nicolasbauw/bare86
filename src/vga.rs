@@ -30,7 +30,9 @@ pub const LINEAR: usize = 4;
 const STAGE: usize = 5;
 const REGIONS: usize = 6;
 /// Framebuffer SVGA, après les régions VGA (une banque = une région de 64 Ko).
-pub const FB_SIZE: usize = 4 << 20;
+/// 16 Mo, comme les cartes de 2000 : PTC ouvre en 1024×768×32 une surface primaire à trois pages (9,4 Mo) et
+/// DirectDraw (HX) la refuse (`DDERR_OUTOFMEMORY`) avec 4 Mo.
+pub const FB_SIZE: usize = 16 << 20;
 const FB_REGION: usize = REGIONS;
 const TOTAL: usize = REGIONS * PLANE + FB_SIZE;
 
