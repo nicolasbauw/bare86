@@ -58,8 +58,8 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
 /// vide) est installé s'il manque ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.17";
-const HX_FORK_FILES: [(&str, &str, &[&str]); 11] = [
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.18";
+const HX_FORK_FILES: [(&str, &str, &[&str]); 12] = [
     (
         "DPMILD32.EXE",
         "5db83c24b9a39b0213eb440c2f6f091ade109c015fa70e4e1a07752f18fba643",
@@ -70,8 +70,9 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 11] = [
     ),
     (
         "DGDI32.DLL",
-        "1cdcc7785db46c93143912a6d47bb13a2efe94e1ddd5ca59ef7e13df459c7d62",
+        "a5b4e8691d3aadaa34ba6956463fd8a57436fde786f4e4956a54a4ee4064d758",
         &[
+            "1cdcc7785db46c93143912a6d47bb13a2efe94e1ddd5ca59ef7e13df459c7d62",
             "f6312813bac8bf3402f179b7965ad01b8d2b81f629b8a290fcb127a5deacb4d6",
             "fd10cb7497ad3605d573a5a9d0537e66fde205a7cfb743d370368f4768ee5d4b",
             "39ef30e57b498ea829eb10670d3164b11ecf805fc886e1a32fa3730733ec2a58",
@@ -137,6 +138,12 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 11] = [
         "DDDRAW.DLL",
         "f42cd62883939d453b41bee69ab3a54f4571a4ac192ebac7143b8a35decbf2aa",
         &["76e72561ce4a3c51bdf13f2f723550ff4b1da5de4a267be670246ffbb0310ca5"],
+    ),
+    // DKRNL32 : MulDiv comme Windows (erreur de division dans HX 2.23)
+    (
+        "DKRNL32.DLL",
+        "21df5dcdb11bed38024a7a1b421a87a000f02d77caf96371aa015f640e63ac65",
+        &["e49cc88f16d44e486693c88950454f012335a271252a2e8c3f97b61809691251"],
     ),
     // WININET.DLL : HX n'en a pas (accès Internet absent : les fonctions répondent « non connecté ») ; installée si elle manque
     (
