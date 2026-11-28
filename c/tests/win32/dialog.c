@@ -126,6 +126,7 @@ static BOOL CALLBACK dp_def(HWND h, UINT m, WPARAM w, LPARAM l)
 /* boîte de réglages sans bouton par défaut (« Begin Wire », « Nah ») : IDOK est ignoré, le premier bouton-poussoir
    (1003) doit arriver avant IDCANCEL (qui fait quitter la démo) */
 static DWORD fbuf[64];
+static int first_lp;   /* lParam du clic = handle du bouton (preampli ignore WM_COMMAND sans lui) */
 static LPCDLGTEMPLATE firsttpl(void)
 {
     WORD *p = (WORD *)fbuf;
@@ -139,7 +140,7 @@ static LPCDLGTEMPLATE firsttpl(void)
 static BOOL CALLBACK dp_first(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_INITDIALOG) { ShowWindow(h, SW_SHOWNA); SetActiveWindow(h); return TRUE; }
-    if (m == WM_COMMAND && LOWORD(w) == 1003) { EndDialog(h, 33); return TRUE; }
+    if (m == WM_COMMAND && LOWORD(w) == 1003) { first_lp = l && (HWND)l == GetDlgItem(h, 1003); EndDialog(h, 33); return TRUE; }
     if (m == WM_COMMAND && LOWORD(w) == IDCANCEL) { EndDialog(h, 2); return TRUE; }
     return FALSE;
 }
@@ -238,8 +239,8 @@ int main(void)
     icon = icon_test(&hw);
     DestroyWindow(hw);
     f = fopen("DIALOG.TXT", "w");
-    fprintf(f, "ok=%d flags=%d cancel=%d close=%d never=%d outer=%d inner=%d msg=%d/%d def=%d checks=%03d modeless=%d ctl=%s cbt=%d/%d/%d/%d first=%d icon=%d actapp=%d\n", r1, flags, r2, r3, r4, r5, nested_inner, r6, msg_ok, r7, checks,
-            modeless_hit, ctl, hook != NULL, cbt_hits * 10 + cbt_ok, created_a, created_b, r8, icon, activateapp);
+    fprintf(f, "ok=%d flags=%d cancel=%d close=%d never=%d outer=%d inner=%d msg=%d/%d def=%d checks=%03d modeless=%d ctl=%s cbt=%d/%d/%d/%d first=%d lp=%d icon=%d actapp=%d\n", r1, flags, r2, r3, r4, r5, nested_inner, r6, msg_ok, r7, checks,
+            modeless_hit, ctl, hook != NULL, cbt_hits * 10 + cbt_ok, created_a, created_b, r8, first_lp, icon, activateapp);
     fclose(f);
     return 0;
 }

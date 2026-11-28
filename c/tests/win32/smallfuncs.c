@@ -116,7 +116,17 @@ int main(void)
         lf.lfHeight = -24;
         strcpy(lf.lfFaceName, "Arial Black");
         hf = CreateFontIndirect(&lf);
-        fprintf(f, "gdi2=bmi:%d h:%d size:%d font:%d\n", hb != NULL, (int)got.bmHeight, (int)(got.bmWidthBytes * got.bmHeight), hf != NULL);
+        {   /* GetRandomRgn (SYSRGN = 4) : sans elle, la DirectDraw de wine9x (winedd.dll) ne se charge pas */
+            int (WINAPI *grr)(HDC, HRGN, INT) = (int (WINAPI *)(HDC, HRGN, INT))GetProcAddress(GetModuleHandle("GDI32.DLL"), "GetRandomRgn");
+            HRGN r = CreateRectRgn(0, 0, 0, 0);
+            RECT rb;
+            int gr = grr ? grr(hdc, r, 4) : -1;
+            memset(&rb, 0, sizeof rb);
+            GetRgnBox(r, &rb);
+            fprintf(f, "gdi2=bmi:%d h:%d size:%d font:%d rgn:%d,%d\n", hb != NULL, (int)got.bmHeight, (int)(got.bmWidthBytes * got.bmHeight), hf != NULL,
+                    gr, rb.right > rb.left && rb.bottom > rb.top);
+            DeleteObject(r);
+        }
         if (hf) DeleteObject(hf);
         if (hb) DeleteObject(hb);
     }
