@@ -58,7 +58,7 @@ pub fn hx_dir() -> Option<PathBuf> {
 /// `StretchBlt` et `StretchDIBits`. On ne remplace un fichier que s'il est le binaire officiel (celui de
 /// `DGDI32.DLL` a deux empreintes : brut, ou corrigé par `HX_PATCHES`) ; un fichier que HX n'a pas (`MSVFW32.DLL`, liste
 /// vide) est installé s'il manque ; un échec n'est pas fatal.
-const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.21";
+const HX_FORK_RELEASE: &str = "https://github.com/nicolasbauw/HX/releases/download/v2.24-bare86.22";
 const HX_FORK_FILES: [(&str, &str, &[&str]); 12] = [
     (
         "DPMILD32.EXE",
@@ -70,8 +70,9 @@ const HX_FORK_FILES: [(&str, &str, &[&str]); 12] = [
     ),
     (
         "DGDI32.DLL",
-        "08a1c62160d177420ba9c74d3c2f20954d12d105e3e7509c4a8a4af8cdd8a2d3",
+        "834bbbb9ff2e01c5c04cd00b72fc7306b6b65730511524c2879bc87d67af4913",
         &[
+            "08a1c62160d177420ba9c74d3c2f20954d12d105e3e7509c4a8a4af8cdd8a2d3",
             "a5b4e8691d3aadaa34ba6956463fd8a57436fde786f4e4956a54a4ee4064d758",
             "1cdcc7785db46c93143912a6d47bb13a2efe94e1ddd5ca59ef7e13df459c7d62",
             "f6312813bac8bf3402f179b7965ad01b8d2b81f629b8a290fcb127a5deacb4d6",
@@ -249,11 +250,31 @@ pub fn hx_dir_or_install() -> Result<PathBuf, String> {
 fn ensure_ms_runtime(hx: &Path) {
     let bin = hx.join("BIN");
     if bin.join("MSVCRT.DLL").exists() || bin.join("msvcrt.dll").exists() {
+        ensure_crtdll(&bin);
         return;
     }
     eprintln!("[win32] downloading the Visual C++ 6.0 runtime (MSVCRT, MSVCP60, MFC42…, Microsoft) from {MSRT_URL}");
     if let Err(e) = install_ms_runtime(&bin) {
         eprintln!("[win32] Visual C++ runtime: {e} (programs that need MSVCRT.DLL will not start)");
+    }
+}
+
+/// `CRTDLL.DLL` fabriquée à partir de `MSVCRT.DLL` (voir `crtdll`) si elle manque ou si elle n'est qu'une copie de
+/// MSVCRT (installations antérieures : il lui manquait `_fmode_dll`, `__GetMainArgs`…).
+fn ensure_crtdll(bin: &Path) {
+    let Ok(msvcrt) = std::fs::read(bin.join("MSVCRT.DLL")) else { return };
+    let path = bin.join("CRTDLL.DLL");
+    match std::fs::read(&path) {
+        Ok(current) if current != msvcrt => return,
+        _ => {}
+    }
+    match crate::crtdll::from_msvcrt(&msvcrt) {
+        Ok(dll) => {
+            if let Err(e) = std::fs::write(&path, dll) {
+                eprintln!("[win32] CRTDLL.DLL: {e}");
+            }
+        }
+        Err(e) => eprintln!("[win32] CRTDLL.DLL: {e}"),
     }
 }
 
@@ -278,7 +299,7 @@ fn cab_file(cab_data: &[u8], name: &str) -> Result<Vec<u8>, String> {
 
 /// Télécharge `vc6redistsetup_enu.exe`, vérifie son empreinte, en extrait (deux cabinets imbriqués, compression LZX)
 /// les DLL de `MSRT_FILES` et les écrit dans `bin`, sans écraser un fichier existant. `CRTDLL.DLL` (la bibliothèque C
-/// de Windows 95, absente de HX) est une copie de `MSVCRT.DLL`, dont elle est un sous-ensemble.
+/// de Windows 95, absente de HX) est fabriquée à partir de `MSVCRT.DLL` (voir `crtdll`).
 fn install_ms_runtime(bin: &Path) -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("bare86-msrt{}.exe", std::process::id()));
     let status = std::process::Command::new("curl").args(["-fsSL", "--retry", "2", "-o"]).arg(&tmp).arg(MSRT_URL).status().map_err(|e| format!("curl: {e}"))?;
@@ -302,7 +323,7 @@ fn install_ms_runtime(bin: &Path) -> Result<(), String> {
             std::fs::write(&out, &content).map_err(|e| format!("{}: {e}", out.display()))?;
         }
         if name == "msvcrt.dll" && !bin.join("CRTDLL.DLL").exists() {
-            std::fs::write(bin.join("CRTDLL.DLL"), &content).map_err(|e| format!("CRTDLL.DLL: {e}"))?;
+            std::fs::write(bin.join("CRTDLL.DLL"), crate::crtdll::from_msvcrt(&content)?).map_err(|e| format!("CRTDLL.DLL: {e}"))?;
         }
     }
     Ok(())

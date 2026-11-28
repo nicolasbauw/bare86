@@ -100,6 +100,26 @@ int main(void)
         static INT counts[2] = { 3, 4 };
         fprintf(f, "poly=%d,%d\n", ppg ? ppg(hdc, pts, counts, 2) : -1, rr ? rr(hdc, 500, 460, 560, 500, 8, 8) : -1);
     }
+    {   /* addlib (intro 64k) : CreateBitmapIndirect, bmHeight positif (taille du tampon de GetObject), et une police
+           inconnue donne quand même une police (HX n'en a qu'une sous DOS) */
+        static BYTE bits[64 * 8];
+        BITMAP bm, got;
+        HBITMAP hb;
+        LOGFONT lf;
+        HFONT hf;
+        memset(&bm, 0, sizeof bm);
+        bm.bmWidth = 64; bm.bmHeight = 64; bm.bmWidthBytes = 8; bm.bmPlanes = 1; bm.bmBitsPixel = 1; bm.bmBits = bits;
+        hb = CreateBitmapIndirect(&bm);
+        memset(&got, 0, sizeof got);
+        if (hb) GetObject(hb, sizeof got, &got);
+        memset(&lf, 0, sizeof lf);
+        lf.lfHeight = -24;
+        strcpy(lf.lfFaceName, "Arial Black");
+        hf = CreateFontIndirect(&lf);
+        fprintf(f, "gdi2=bmi:%d h:%d size:%d font:%d\n", hb != NULL, (int)got.bmHeight, (int)(got.bmWidthBytes * got.bmHeight), hf != NULL);
+        if (hf) DeleteObject(hf);
+        if (hb) DeleteObject(hb);
+    }
     fprintf(f, "more=stretch:%d hatch:%d dibpat:%d rrgn:%d ps:%d guid:%d,%d cbv:%x icce:%d\n", sbm, hatch, dibpat, rrgn, ps, guid1, guid2, cbvr, iccer);
     fclose(f);
     red = CreateSolidBrush(RGB(255, 0, 0));

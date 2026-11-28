@@ -9,6 +9,7 @@ mod binfmt;
 mod bios;
 mod cdrom;
 mod config;
+mod crtdll;
 mod debug;
 mod disk;
 mod dma;

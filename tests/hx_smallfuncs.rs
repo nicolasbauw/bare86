@@ -97,7 +97,7 @@ fn small_functions_are_imported_and_work() {
     let (corner, top, left, right, bottom) = (px(100, 100), px(150, 100), px(100, 130), px(199, 130), px(150, 159));
     let (inside, above, outside) = (px(150, 130), px(150, 99), px(200, 130));
     let _ = std::fs::remove_dir_all(&dir);
-    let expected = "clip0=0,0,800,600\nclip1=10,20,300,200\nclip2=0,0,800,600\nbkmode=2,1\npen=1\nbrushorg=0,0\nscroll=0 caret_kl=1\njoy=6 wave=8 tgst=0 type=1\nmore2=wininet:1 imagelist:1\npoly=1,1\nmore=stretch:3 hatch:1 dibpat:1 rrgn:1 ps:1 guid:1,0 cbv:1702bc icce:1\n";
+    let expected = "clip0=0,0,800,600\nclip1=10,20,300,200\nclip2=0,0,800,600\nbkmode=2,1\npen=1\nbrushorg=0,0\nscroll=0 caret_kl=1\njoy=6 wave=8 tgst=0 type=1\nmore2=wininet:1 imagelist:1\npoly=1,1\ngdi2=bmi:1 h:64 size:512 font:1\nmore=stretch:3 hatch:1 dibpat:1 rrgn:1 ps:1 guid:1,0 cbv:1702bc icce:1\n";
     assert_eq!(text, expected, "résultats des fonctions (le programme n'a peut-être pas démarré : {log})");
     for (what, c) in [("coin", corner), ("bord haut", top), ("bord gauche", left), ("bord droit", right), ("bord bas", bottom)] {
         assert_eq!(c, [255, 0, 0], "le cadre de FrameRect devrait être rouge ({what}) : {c:?}");
